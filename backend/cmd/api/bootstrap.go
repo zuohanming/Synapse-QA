@@ -1,0 +1,288 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// app 保存启动期需要的共享依赖；业务请求已迁移到 internal 分层。
+type app struct {
+	db        *sql.DB
+	jwtSecret []byte
+}
+
+func env(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+// migrate 只负责数据库结构初始化，业务逻辑不写在这里。
+func (a *app) migrate(ctx context.Context) error {
+	statements := []string{
+		`create table if not exists roles (
+			id bigserial primary key,
+			name text not null unique,
+			code text not null unique,
+			description text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists users (
+			id bigserial primary key,
+			username text not null unique,
+			password_hash text not null,
+			display_name text not null,
+			email text not null default '',
+			status text not null default 'active',
+			mcp_api_key text not null default '',
+			last_login_ip text not null default '',
+			last_login_at timestamptz,
+			deleted_at timestamptz,
+			role_id bigint references roles(id),
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists system_menus (
+			id bigserial primary key,
+			parent_id bigint,
+			title text not null,
+			code text not null unique,
+			sort_order int not null default 0,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists dictionaries (
+			id bigserial primary key,
+			name text not null,
+			code text not null,
+			item_key text not null,
+			item_value text not null,
+			enabled boolean not null default true,
+			created_at timestamptz not null default now(),
+			unique(code, item_key)
+		)`,
+		`create table if not exists operation_logs (
+			id bigserial primary key,
+			actor text not null,
+			action text not null,
+			target text not null,
+			ip text not null default '',
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists ui_assets (
+			id bigserial primary key,
+			asset_type text not null,
+			name text not null,
+			category text not null default '',
+			method text not null default '',
+			locator text not null default '',
+			action text not null default '',
+			value text not null default '',
+			description text not null default '',
+			status text not null default 'active',
+			created_by text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists page_elements (
+			id bigserial primary key,
+			page_id bigint not null references ui_assets(id),
+			name text not null,
+			type1 text not null,
+			locator1 text not null,
+			index1 text not null default '',
+			type2 text not null default '',
+			locator2 text not null default '',
+			index2 text not null default '',
+			type3 text not null default '',
+			locator3 text not null default '',
+			index3 text not null default '',
+			ai_prompt text not null default '',
+			wait_time text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists projects (
+			id bigserial primary key,
+			name text not null unique,
+			status text not null default 'active',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists products (
+			id bigserial primary key,
+			project_id bigint not null references projects(id),
+			name text not null,
+			ui_type text not null default 'WEB',
+			api_type text not null default 'WEB',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now(),
+			unique(project_id, name)
+		)`,
+		`create table if not exists test_objects (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			env_name text not null,
+			target text not null,
+			deploy_env text not null default '生产环境',
+			auto_type text not null default '界面自动化',
+			owner text not null default '',
+			query_enabled boolean not null default true,
+			write_enabled boolean not null default false,
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now(),
+			unique(product_id, env_name)
+		)`,
+		`create table if not exists executors (
+			executor_id text primary key,
+			name text not null,
+			endpoint text not null default '',
+			status text not null default 'registered',
+			version text not null default '',
+			max_workers int not null default 1,
+			running_tasks int not null default 0,
+			queued_tasks int not null default 0,
+			supported_types text not null default '',
+			checks jsonb not null default '{}'::jsonb,
+			last_heartbeat_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists platform_settings (
+			key text primary key,
+			value text not null,
+			updated_at timestamptz not null default now(),
+			created_at timestamptz not null default now()
+		)`,
+		`alter table roles add column if not exists updated_at timestamptz not null default now()`,
+		`alter table roles add column if not exists deleted_at timestamptz`,
+		`alter table users add column if not exists mcp_api_key text not null default ''`,
+		`alter table users add column if not exists last_login_ip text not null default ''`,
+		`alter table users add column if not exists last_login_at timestamptz`,
+		`alter table users add column if not exists deleted_at timestamptz`,
+		`alter table ui_assets add column if not exists deleted_at timestamptz`,
+		`alter table page_elements add column if not exists deleted_at timestamptz`,
+		`alter table projects add column if not exists status text not null default 'active'`,
+		`alter table projects add column if not exists updated_at timestamptz not null default now()`,
+		`alter table projects add column if not exists deleted_at timestamptz`,
+		`alter table products add column if not exists ui_type text not null default 'WEB'`,
+		`alter table products add column if not exists api_type text not null default 'WEB'`,
+		`alter table products add column if not exists updated_at timestamptz not null default now()`,
+		`alter table products add column if not exists deleted_at timestamptz`,
+		`alter table test_objects add column if not exists deploy_env text not null default '生产环境'`,
+		`alter table test_objects add column if not exists auto_type text not null default '界面自动化'`,
+		`alter table test_objects add column if not exists owner text not null default ''`,
+		`alter table test_objects add column if not exists query_enabled boolean not null default true`,
+		`alter table test_objects add column if not exists write_enabled boolean not null default false`,
+		`alter table test_objects add column if not exists updated_at timestamptz not null default now()`,
+		`alter table test_objects add column if not exists deleted_at timestamptz`,
+	}
+	for _, statement := range statements {
+		if _, err := a.db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seed 保证本地开发环境具备默认账号和基础数据。
+func (a *app) seed(ctx context.Context) error {
+	var roleID int64
+	if err := a.db.QueryRowContext(ctx, `
+		insert into roles(name, code, description)
+		values('管理员', 'admin', '系统内置管理员')
+		on conflict(code) do update set name = excluded.name, description = excluded.description, deleted_at = null, updated_at = now()
+		returning id
+	`).Scan(&roleID); err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, `
+		insert into users(username, password_hash, display_name, email, status, role_id, mcp_api_key)
+		values('admin', $1, '系统管理员', 'admin@synapse.local', 'active', $2, $3)
+		on conflict(username) do update set display_name = excluded.display_name, status = 'active', role_id = excluded.role_id, mcp_api_key = coalesce(nullif(users.mcp_api_key, ''), excluded.mcp_api_key), deleted_at = null
+	`, hashPassword("admin123"), roleID, generateAPIKey("admin")); err != nil {
+		return err
+	}
+
+	roles := [][]string{
+		{"测试负责人", "qa_lead", "负责测试计划和质量门禁"},
+		{"自动化工程师", "automation_engineer", "维护自动化资产和执行任务"},
+		{"只读访客", "viewer", "查看报告和统计数据"},
+	}
+	for _, row := range roles {
+		if _, err := a.db.ExecContext(ctx, `insert into roles(name, code, description) values($1, $2, $3) on conflict(code) do update set name = excluded.name, description = excluded.description, deleted_at = null, updated_at = now()`, row[0], row[1], row[2]); err != nil {
+			return err
+		}
+	}
+
+	menus := []struct {
+		title string
+		code  string
+		sort  int
+	}{
+		{"首页", "home", 1},
+		{"界面自动化", "ui_automation", 2},
+		{"测试配置", "test_config", 3},
+		{"系统管理", "system", 4},
+	}
+	for _, menu := range menus {
+		if _, err := a.db.ExecContext(ctx, `insert into system_menus(title, code, sort_order) values($1, $2, $3) on conflict(code) do update set title = excluded.title, sort_order = excluded.sort_order`, menu.title, menu.code, menu.sort); err != nil {
+			return err
+		}
+	}
+
+	dicts := [][]any{
+		{"环境类型", "deploy_env", "prod", "生产环境", true},
+		{"环境类型", "deploy_env", "staging", "预发环境", true},
+		{"自动化类型", "auto_type", "ui", "界面自动化", true},
+		{"自动化类型", "auto_type", "api", "接口自动化", true},
+	}
+	for _, row := range dicts {
+		if _, err := a.db.ExecContext(ctx, `insert into dictionaries(name, code, item_key, item_value, enabled) values($1, $2, $3, $4, $5) on conflict(code, item_key) do update set name = excluded.name, item_value = excluded.item_value, enabled = excluded.enabled`, row...); err != nil {
+			return err
+		}
+	}
+
+	var projectID int64
+	if err := a.db.QueryRowContext(ctx, `insert into projects(name, status) values('Synapse QA', 'active') on conflict(name) do update set status = 'active', deleted_at = null, updated_at = now() returning id`).Scan(&projectID); err != nil {
+		return err
+	}
+	var productID int64
+	if err := a.db.QueryRowContext(ctx, `insert into products(project_id, name, ui_type, api_type) values($1, 'Web 管理端', 'WEB', 'WEB') on conflict(project_id, name) do update set ui_type = excluded.ui_type, api_type = excluded.api_type, deleted_at = null, updated_at = now() returning id`, projectID).Scan(&productID); err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) values($1, '生产环境', 'https://qa.example.com', '生产环境', '界面自动化', 'admin', true, false) on conflict(product_id, env_name) do update set target = excluded.target, deploy_env = excluded.deploy_env, auto_type = excluded.auto_type, owner = excluded.owner, deleted_at = null, updated_at = now()`, productID); err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, `
+		insert into platform_settings(key, value)
+		values('executor_shared_token', $1)
+		on conflict(key) do nothing
+	`, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func hashPassword(password string) string {
+	sum := sha256.Sum256([]byte("synapse:" + password))
+	return hex.EncodeToString(sum[:])
+}
+
+func generateAPIKey(seed string) string {
+	sum := sha256.Sum256([]byte(seed + ":" + strconv.FormatInt(time.Now().UnixNano(), 10)))
+	return "mango_" + hex.EncodeToString(sum[:])[:24]
+}
