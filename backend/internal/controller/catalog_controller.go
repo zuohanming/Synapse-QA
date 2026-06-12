@@ -195,6 +195,75 @@ func (ctl *CatalogController) DeleteProduct(c *gin.Context) {
 	ok(c, map[string]string{"message": "产品已删除"})
 }
 
+func (ctl *CatalogController) ListProductModules(c *gin.Context) {
+	productID, err := strconv.ParseInt(c.Query("productId"), 10, 64)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "产品ID无效")
+		return
+	}
+	page, pageSize := pageParams(c)
+	result, err := ctl.catalogService.ListProductModules(c.Request.Context(), productID, c.Query("level1"), c.Query("level2"), c.Query("name"), page, pageSize)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "查询产品模块失败")
+		return
+	}
+	ok(c, result)
+}
+
+func (ctl *CatalogController) CreateProductModule(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.ProductModuleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if err := ctl.catalogService.CreateProductModule(c.Request.Context(), claims.Username, req); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	created(c, map[string]string{"message": "产品模块已创建"})
+}
+
+func (ctl *CatalogController) UpdateProductModule(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	var req model.ProductModuleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if err := ctl.catalogService.UpdateProductModule(c.Request.Context(), claims.Username, id, req); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, map[string]string{"message": "产品模块已更新"})
+}
+
+func (ctl *CatalogController) DeleteProductModule(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	if err := ctl.catalogService.DeleteProductModule(c.Request.Context(), claims.Username, id); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, map[string]string{"message": "产品模块已删除"})
+}
+
 func pageParams(c *gin.Context) (int, int) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))

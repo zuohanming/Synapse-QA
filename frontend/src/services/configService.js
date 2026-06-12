@@ -12,6 +12,12 @@ function resource(path) {
 export const configService = {
   projects: resource("/config/projects"),
   products: resource("/config/products"),
+  productModules: {
+    list: (params = {}) => request(`/config/product-modules${toQuery(params)}`),
+    create: (body) => request("/config/product-modules", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => request(`/config/product-modules/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    remove: (id) => request(`/config/product-modules/${id}`, { method: "DELETE" })
+  },
   testObjects: resource("/config/test-objects"),
   executorToken: {
     get: () => request("/config/executor-token"),

@@ -131,6 +131,17 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			unique(project_id, name)
 		)`,
+		`create table if not exists product_modules (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			name text not null,
+			level1 text not null default '',
+			level2 text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now(),
+			unique(product_id, level1, level2, name)
+		)`,
 		`create table if not exists test_objects (
 			id bigserial primary key,
 			product_id bigint not null references products(id),
@@ -182,6 +193,10 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table products add column if not exists api_type text not null default 'WEB'`,
 		`alter table products add column if not exists updated_at timestamptz not null default now()`,
 		`alter table products add column if not exists deleted_at timestamptz`,
+		`alter table product_modules add column if not exists level1 text not null default ''`,
+		`alter table product_modules add column if not exists level2 text not null default ''`,
+		`alter table product_modules add column if not exists updated_at timestamptz not null default now()`,
+		`alter table product_modules add column if not exists deleted_at timestamptz`,
 		`alter table test_objects add column if not exists deploy_env text not null default '生产环境'`,
 		`alter table test_objects add column if not exists auto_type text not null default '界面自动化'`,
 		`alter table test_objects add column if not exists owner text not null default ''`,

@@ -203,6 +203,70 @@ func (r *CatalogRepository) DeleteProduct(ctx context.Context, id int64) (int64,
 	return result.RowsAffected()
 }
 
+func (r *CatalogRepository) ListProductModules(ctx context.Context, productID int64, level1, level2, name string, page, pageSize int) ([]model.ProductModule, int64, error) {
+	where := []string{"deleted_at is null", "product_id = $1"}
+	args := []any{productID}
+	if level1 != "" {
+		args = append(args, level1)
+		where = append(where, fmt.Sprintf("level1 = $%d", len(args)))
+	}
+	if level2 != "" {
+		args = append(args, level2)
+		where = append(where, fmt.Sprintf("level2 = $%d", len(args)))
+	}
+	if name != "" {
+		args = append(args, "%"+strings.ToLower(name)+"%")
+		where = append(where, fmt.Sprintf("lower(name) like $%d", len(args)))
+	}
+	whereSQL := strings.Join(where, " and ")
+	var total int64
+	if err := r.db.QueryRowContext(ctx, "select count(*) from product_modules where "+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
+	rows, err := r.db.QueryContext(ctx, `
+		select id, product_id, name, level1, level2, created_at, updated_at
+		from product_modules
+		where `+whereSQL+`
+		order by id desc
+		limit $`+strconv.Itoa(len(queryArgs)-1)+` offset $`+strconv.Itoa(len(queryArgs)), queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var items []model.ProductModule
+	for rows.Next() {
+		var item model.ProductModule
+		if err := rows.Scan(&item.ID, &item.ProductID, &item.Name, &item.Level1, &item.Level2, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	return items, total, rows.Err()
+}
+
+func (r *CatalogRepository) CreateProductModule(ctx context.Context, req model.ProductModuleRequest) error {
+	_, err := r.db.ExecContext(ctx, `insert into product_modules(product_id, name, level1, level2) values($1, $2, $3, $4)`, req.ProductID, req.Name, req.Level1, req.Level2)
+	return err
+}
+
+func (r *CatalogRepository) UpdateProductModule(ctx context.Context, id int64, req model.ProductModuleRequest) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `update product_modules set name = $1, level1 = $2, level2 = $3, updated_at = now() where id = $4 and product_id = $5 and deleted_at is null`, req.Name, req.Level1, req.Level2, id, req.ProductID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *CatalogRepository) DeleteProductModule(ctx context.Context, id int64) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `update product_modules set deleted_at = now(), updated_at = now() where id = $1 and deleted_at is null`, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (r *CatalogRepository) GetSetting(ctx context.Context, key string) (string, error) {
 	var value string
 	err := r.db.QueryRowContext(ctx, `select value from platform_settings where key = $1`, key).Scan(&value)

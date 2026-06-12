@@ -6,6 +6,7 @@ import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
 import { uiAutomationService } from "../services/uiAutomationService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
+import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
 
 const listSectionMap = {
   页面步骤: uiAutomationService.steps,
@@ -108,7 +109,7 @@ function PageStepsPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState(null);
-  const [workingStep, setWorkingStep] = useState(null);
+  const [workingStep, setWorkingStep] = useState(() => readPageState("ui.steps.workingStep", null));
 
   const { data, loading, error, reload } = useAsyncData(
     () =>
@@ -130,9 +131,27 @@ function PageStepsPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
 
-  const productOptions = useMemo(() => uniqueOptions(sourceRows, "category"), [sourceRows]);
-  const moduleOptions = useMemo(() => uniqueOptions(sourceRows, "method"), [sourceRows]);
-  const pageOptions = useMemo(() => uniqueOptions(sourceRows, "locator"), [sourceRows]);
+  const { data: productsData, loading: loadingProducts } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
+  const stepProductOptions = useMemo(
+    () =>
+      pageItems(productsData).map((item) => ({
+        label: `${item.projectName}/${item.name}`,
+        value: `${item.projectName}/${item.name}`,
+        productId: item.id
+      })),
+    [productsData]
+  );
+  const selectedFilterProduct = stepProductOptions.find((item) => item.value === form.product);
+  const { data: modulesData, loading: loadingModules } = useAsyncData(
+    () => (selectedFilterProduct?.productId ? configService.productModules.list({ productId: selectedFilterProduct.productId, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] })),
+    [selectedFilterProduct?.productId]
+  );
+  const moduleOptions = useMemo(() => uniqueOptions(pageItems(modulesData), "name"), [modulesData]);
+  const { data: pagesData, loading: loadingPages } = useAsyncData(
+    () => uiAutomationService.elements.list({ product: form.product, module: form.module, page: 1, pageSize: 200 }),
+    [form.product, form.module]
+  );
+  const pageOptions = useMemo(() => uniqueOptions(pageItems(pagesData), "name"), [pagesData]);
 
   function handleSearch(event) {
     event.preventDefault();
@@ -226,7 +245,15 @@ function PageStepsPage() {
   }
 
   if (workingStep) {
-    return <StepWorkbench step={workingStep} onBack={() => setWorkingStep(null)} />;
+    return (
+      <StepWorkbench
+        step={workingStep}
+        onBack={() => {
+          clearPageState("ui.steps.workingStep");
+          setWorkingStep(null);
+        }}
+      />
+    );
   }
 
   return (
@@ -249,19 +276,29 @@ function PageStepsPage() {
           </label>
           <label className="form-field">
             <span>项目/产品</span>
-            <select className="text-input" value={form.product} onChange={(event) => setForm({ ...form, product: event.target.value })}>
-              <option value="">请选择产品</option>
-              {productOptions.map((item) => (
-                <option key={item} value={item}>
-                  {item}
+            <select
+              className="text-input"
+              disabled={loadingProducts}
+              value={form.product}
+              onChange={(event) => setForm({ ...form, product: event.target.value, module: "", page: "" })}
+            >
+              <option value="">{loadingProducts ? "加载产品中" : "请选择产品"}</option>
+              {stepProductOptions.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
                 </option>
               ))}
             </select>
           </label>
           <label className="form-field">
             <span>模块名称</span>
-            <select className="text-input" value={form.module} onChange={(event) => setForm({ ...form, module: event.target.value })}>
-              <option value="">请选择产品</option>
+            <select
+              className="text-input"
+              disabled={!form.product || loadingModules}
+              value={form.module}
+              onChange={(event) => setForm({ ...form, module: event.target.value, page: "" })}
+            >
+              <option value="">{form.product ? (loadingModules ? "加载模块中" : "请选择模块") : "请先选择产品"}</option>
               {moduleOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -271,8 +308,8 @@ function PageStepsPage() {
           </label>
           <label className="form-field">
             <span>所属页面</span>
-            <select className="text-input" value={form.page} onChange={(event) => setForm({ ...form, page: event.target.value })}>
-              <option value="">请选择所属页面</option>
+            <select className="text-input" disabled={!form.product || !form.module || loadingPages} value={form.page} onChange={(event) => setForm({ ...form, page: event.target.value })}>
+              <option value="">{form.product && form.module ? (loadingPages ? "加载页面中" : "请选择所属页面") : "请先选择模块"}</option>
               {pageOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -356,7 +393,17 @@ function PageStepsPage() {
                             <button className="link-button" type="button">
                               调试
                             </button>
-                            <button className="link-button" onClick={() => setWorkingStep(row)} type="button">
+                            <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
+                              编辑
+                            </button>
+                            <button
+                              className="link-button"
+                              onClick={() => {
+                                persistPageState("ui.steps.workingStep", row);
+                                setWorkingStep(row);
+                              }}
+                              type="button"
+                            >
                               步骤
                             </button>
                             <details className="more-menu">
@@ -402,9 +449,6 @@ function PageStepsPage() {
         <StepModal
           busy={busy}
           modal={modal}
-          productOptions={productOptions}
-          moduleOptions={moduleOptions}
-          pageOptions={pageOptions}
           onClose={() => setModal(null)}
           onSubmit={async (payload, mode) => {
             setBusy(true);
@@ -431,7 +475,7 @@ function PageStepsPage() {
   );
 }
 
-function StepModal({ busy, modal, productOptions, moduleOptions, pageOptions, onClose, onSubmit }) {
+function StepModal({ busy, modal, onClose, onSubmit }) {
   const source = modal.row;
   const [form, setForm] = useState(
     source
@@ -446,6 +490,41 @@ function StepModal({ busy, modal, productOptions, moduleOptions, pageOptions, on
       : emptyStepForm
   );
   const [error, setError] = useState("");
+  const { data: productsData, loading: loadingProducts } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
+  const productOptions = useMemo(() => {
+    const options = pageItems(productsData).map((item) => ({
+      label: `${item.projectName}/${item.name}`,
+      value: `${item.projectName}/${item.name}`,
+      productId: item.id
+    }));
+    if (form.category && !options.some((item) => item.value === form.category)) {
+      return [{ label: form.category, value: form.category, productId: null }, ...options];
+    }
+    return options;
+  }, [form.category, productsData]);
+  const selectedProduct = productOptions.find((item) => item.value === form.category);
+  const { data: modulesData, loading: loadingModules } = useAsyncData(
+    () => (selectedProduct?.productId ? configService.productModules.list({ productId: selectedProduct.productId, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] })),
+    [selectedProduct?.productId]
+  );
+  const moduleOptions = useMemo(() => {
+    const options = uniqueOptions(pageItems(modulesData), "name");
+    if (form.method && !options.includes(form.method)) {
+      return [form.method, ...options];
+    }
+    return options;
+  }, [form.method, modulesData]);
+  const { data: pagesData, loading: loadingPages } = useAsyncData(
+    () => uiAutomationService.elements.list({ product: form.category, module: form.method, page: 1, pageSize: 200 }),
+    [form.category, form.method]
+  );
+  const pageOptions = useMemo(() => {
+    const options = uniqueOptions(pageItems(pagesData), "name");
+    if (form.locator && !options.includes(form.locator)) {
+      return [form.locator, ...options];
+    }
+    return options;
+  }, [form.locator, pagesData]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -481,20 +560,30 @@ function StepModal({ busy, modal, productOptions, moduleOptions, pageOptions, on
         <div className="modal-form">
           <label className="form-field form-field-inline required-field">
             <span>项目/产品</span>
-            <select className="text-input" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
-              <option value="">请选择项目名称</option>
-              {ensureOptions(productOptions, form.category).map((item) => (
-                <option key={item} value={item}>
-                  {item}
+            <select
+              className="text-input"
+              disabled={loadingProducts}
+              value={form.category}
+              onChange={(event) => setForm({ ...form, category: event.target.value, method: "", locator: "" })}
+            >
+              <option value="">{loadingProducts ? "加载项目中" : "请选择项目名称"}</option>
+              {productOptions.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
                 </option>
               ))}
             </select>
           </label>
           <label className="form-field form-field-inline required-field">
             <span>模块名称</span>
-            <select className="text-input" value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}>
-              <option value="">请选择测试模块</option>
-              {ensureOptions(moduleOptions, form.method).map((item) => (
+            <select
+              className="text-input"
+              disabled={!form.category || loadingModules}
+              value={form.method}
+              onChange={(event) => setForm({ ...form, method: event.target.value, locator: "" })}
+            >
+              <option value="">{form.category ? (loadingModules ? "加载模块中" : "请选择测试模块") : "请先选择项目名称"}</option>
+              {moduleOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
@@ -503,9 +592,9 @@ function StepModal({ busy, modal, productOptions, moduleOptions, pageOptions, on
           </label>
           <label className="form-field form-field-inline required-field">
             <span>所属页面</span>
-            <select className="text-input" value={form.locator} onChange={(event) => setForm({ ...form, locator: event.target.value })}>
-              <option value="">请选择步骤所属页面</option>
-              {ensureOptions(pageOptions, form.locator).map((item) => (
+            <select className="text-input" disabled={!form.category || !form.method || loadingPages} value={form.locator} onChange={(event) => setForm({ ...form, locator: event.target.value })}>
+              <option value="">{form.category && form.method ? (loadingPages ? "加载页面中" : "请选择步骤所属页面") : "请先选择模块"}</option>
+              {pageOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
@@ -547,8 +636,14 @@ function StepWorkbench({ step, onBack }) {
   const [nodeSeq, setNodeSeq] = useState(1);
   const [selectedNode, setSelectedNode] = useState(null);
   const [draggingItem, setDraggingItem] = useState(null);
+  const [draggingNode, setDraggingNode] = useState(null);
+  const [panningCanvas, setPanningCanvas] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const canvasRef = useRef(null);
+  const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
   const selected = selectedNode;
+  const canvasSize = { width: 1200, height: 720 };
   const palette = [
     ["元素操作", "#10b981"],
     ["断言操作", "#2548b8"],
@@ -566,13 +661,48 @@ function StepWorkbench({ step, onBack }) {
       color: item.color,
       title: item.label,
       locator: "拖入后配置节点定位",
-      x: Math.max(24, event.clientX - rect.left + event.currentTarget.scrollLeft - 48),
-      y: Math.max(24, event.clientY - rect.top + event.currentTarget.scrollTop - 24)
+      x: Math.max(24, (event.clientX - rect.left + event.currentTarget.scrollLeft) / zoomRef.current - 48),
+      y: Math.max(24, (event.clientY - rect.top + event.currentTarget.scrollTop) / zoomRef.current - 24)
     };
 
     setNodeSeq((value) => value + 1);
     setNodes((current) => [...current, nextNode]);
     setSelectedNode(nextNode);
+  };
+
+  const applyZoom = (nextZoom, anchor) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      setZoom(nextZoom);
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const offsetX = anchor?.x ?? rect.width / 2;
+    const offsetY = anchor?.y ?? rect.height / 2;
+    const currentZoom = zoomRef.current;
+    const logicalX = (canvas.scrollLeft + offsetX) / currentZoom;
+    const logicalY = (canvas.scrollTop + offsetY) / currentZoom;
+
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    requestAnimationFrame(() => {
+      canvas.scrollLeft = logicalX * nextZoom - offsetX;
+      canvas.scrollTop = logicalY * nextZoom - offsetY;
+    });
+  };
+
+  const changeZoom = (direction, anchor) => {
+    const nextZoom = Math.max(0.2, Math.min(3, Math.round((zoomRef.current + direction * 0.1) * 10) / 10));
+    if (nextZoom !== zoomRef.current) {
+      applyZoom(nextZoom, anchor);
+    }
+  };
+
+  const resetZoom = () => {
+    if (zoomRef.current !== 1) {
+      applyZoom(1);
+    }
   };
 
   const handleDragStart = (event, item) => {
@@ -591,9 +721,77 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const handleCanvasMouseUp = (event) => {
+    if (panningCanvas) {
+      setPanningCanvas(null);
+      return;
+    }
+    if (draggingNode) {
+      setDraggingNode(null);
+      return;
+    }
     if (!draggingItem || Date.now() - lastDropAt.current < 100) return;
     createNode(draggingItem, event);
     setDraggingItem(null);
+  };
+
+  const handleNodeMouseDown = (event, node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedNode(node);
+    setDraggingNode({
+      id: node.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: node.x,
+      startY: node.y
+    });
+  };
+
+  const handleCanvasMouseMove = (event) => {
+    if (panningCanvas) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      canvas.scrollLeft = panningCanvas.scrollLeft - (event.clientX - panningCanvas.clientX);
+      canvas.scrollTop = panningCanvas.scrollTop - (event.clientY - panningCanvas.clientY);
+      return;
+    }
+    if (!draggingNode) return;
+    const nextX = draggingNode.startX + (event.clientX - draggingNode.startClientX) / zoomRef.current;
+    const nextY = draggingNode.startY + (event.clientY - draggingNode.startClientY) / zoomRef.current;
+    setNodes((current) =>
+      current.map((node) =>
+        node.id === draggingNode.id
+          ? {
+              ...node,
+              x: Math.max(0, Math.min(canvasSize.width - 92, nextX)),
+              y: Math.max(0, Math.min(canvasSize.height - 44, nextY))
+            }
+          : node
+      )
+    );
+  };
+
+  const handleCanvasMouseDown = (event) => {
+    if (event.button !== 0 || draggingItem || event.target.closest(".flow-node") || event.target.closest(".zoom-indicator")) {
+      return;
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    setPanningCanvas({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollLeft: canvas.scrollLeft,
+      scrollTop: canvas.scrollTop
+    });
+  };
+
+  const handleWheel = (event) => {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    changeZoom(event.deltaY > 0 ? -1 : 1, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    });
   };
 
   return (
@@ -653,24 +851,51 @@ function StepWorkbench({ step, onBack }) {
               <span>步骤 {nodes.length}</span>
             </div>
           </div>
-          <div className={nodes.length ? "flow-canvas" : "flow-canvas empty"} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onMouseUp={handleCanvasMouseUp}>
+          <div
+            className={`${nodes.length ? "flow-canvas" : "flow-canvas empty"}${panningCanvas ? " is-panning" : ""}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleDrop}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseLeave={() => {
+              setDraggingNode(null);
+              setPanningCanvas(null);
+            }}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onWheel={handleWheel}
+            ref={canvasRef}
+          >
+            <div className="zoom-indicator">
+              <button aria-label="缩小画布" onClick={() => changeZoom(-1)} type="button">
+                -
+              </button>
+              <strong>{Math.round(zoom * 100)}%</strong>
+              <button aria-label="放大画布" onClick={() => changeZoom(1)} type="button">
+                +
+              </button>
+              <button onClick={resetZoom} type="button">
+                100%
+              </button>
+            </div>
             {nodes.length ? (
               <>
-                <div className="free-node-layer">
-                  {nodes.map((node) => (
-                    <button
-                      className={selected?.id === node.id ? "flow-node active" : "flow-node"}
-                      key={node.id}
-                      onClick={() => setSelectedNode(node)}
-                      style={{ borderLeftColor: node.color, left: node.x, top: node.y }}
-                      type="button"
-                    >
-                      <span>{node.type}</span>
-                      <strong>{node.title}</strong>
-                      <small>{node.locator}</small>
-                      <i />
-                    </button>
-                  ))}
+                <div className="canvas-content" style={{ height: canvasSize.height * zoom, width: canvasSize.width * zoom }}>
+                  <div className="free-node-layer" style={{ height: canvasSize.height, transform: `scale(${zoom})`, width: canvasSize.width }}>
+                    {nodes.map((node) => (
+                      <button
+                        className={selected?.id === node.id ? "flow-node active" : "flow-node"}
+                        key={node.id}
+                        onMouseDown={(event) => handleNodeMouseDown(event, node)}
+                        style={{ borderLeftColor: node.color, left: node.x, top: node.y }}
+                        type="button"
+                      >
+                        <span>{node.type}</span>
+                        <strong>{node.title}</strong>
+                        <small>{node.locator}</small>
+                        <i />
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="minimap" aria-hidden="true">
                   {nodes.map((node) => (
@@ -731,7 +956,7 @@ function PageElementsWorkspace() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [selectedPage, setSelectedPage] = useState(null);
+  const [selectedPage, setSelectedPage] = useState(() => readPageState("ui.elements.selectedPage", null));
   const [pageModal, setPageModal] = useState(null);
 
   const { data, loading, error, reload } = useAsyncData(
@@ -845,7 +1070,16 @@ function PageElementsWorkspace() {
   }
 
   if (selectedPage) {
-    return <PageElementPanel key={selectedPage.id} pageRow={selectedPage} onBack={() => setSelectedPage(null)} />;
+    return (
+      <PageElementPanel
+        key={selectedPage.id}
+        pageRow={selectedPage}
+        onBack={() => {
+          clearPageState("ui.elements.selectedPage");
+          setSelectedPage(null);
+        }}
+      />
+    );
   }
 
   return (
@@ -956,7 +1190,14 @@ function PageElementsWorkspace() {
                             <button className="link-button" onClick={() => setPageModal({ mode: "edit", row })} type="button">
                               编辑
                             </button>
-                            <button className="link-button" onClick={() => setSelectedPage(row)} type="button">
+                            <button
+                              className="link-button"
+                              onClick={() => {
+                                persistPageState("ui.elements.selectedPage", row);
+                                setSelectedPage(row);
+                              }}
+                              type="button"
+                            >
                               添加元素
                             </button>
                             <details className="more-menu">
@@ -1257,23 +1498,32 @@ function PageObjectModal({ busy, modal, pageRows, onClose, onSubmit }) {
     const options = items.map((item) => ({
       label: `${item.projectName}/${item.name}`,
       value: `${item.projectName}/${item.name}`,
+      productId: item.id,
       uiType: item.uiType || "WEB"
     }));
     if (form.category && !options.some((item) => item.value === form.category)) {
-      return [{ label: form.category, value: form.category, uiType: form.value || "WEB" }, ...options];
+      return [{ label: form.category, value: form.category, productId: null, uiType: form.value || "WEB" }, ...options];
     }
     return options;
   }, [form.category, form.value, productsData]);
+  const selectedProduct = productOptions.find((item) => item.value === form.category);
+  const { data: modulesData, loading: loadingModules } = useAsyncData(
+    () => (selectedProduct?.productId ? configService.productModules.list({ productId: selectedProduct.productId, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] })),
+    [selectedProduct?.productId]
+  );
   const moduleOptions = useMemo(() => {
-    const options = uniqueOptions(
-      (pageRows || []).filter((row) => !form.category || row.category === form.category),
-      "method"
-    );
+    const moduleRows = pageItems(modulesData);
+    const options = moduleRows.length
+      ? uniqueOptions(moduleRows, "name")
+      : uniqueOptions(
+          (pageRows || []).filter((row) => !form.category || row.category === form.category),
+          "method"
+        );
     if (form.method && !options.includes(form.method)) {
       return [form.method, ...options];
     }
     return options;
-  }, [form.category, form.method, pageRows]);
+  }, [form.category, form.method, modulesData, pageRows]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -1333,8 +1583,8 @@ function PageObjectModal({ busy, modal, pageRows, onClose, onSubmit }) {
           </label>
           <label className="form-field form-field-inline required-field">
             <span>模块名称</span>
-            <select className="text-input" value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}>
-              <option value="">{form.category ? "请选择测试模块" : "请先选择项目名称"}</option>
+            <select className="text-input" disabled={!form.category || loadingModules} value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}>
+              <option value="">{form.category ? (loadingModules ? "加载模块中" : "请选择测试模块") : "请先选择项目名称"}</option>
               {moduleOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -1531,11 +1781,4 @@ function PageElementModal({ busy, modal, pageRow, onClose, onSubmit }) {
 
 function uniqueOptions(rows, key) {
   return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
-}
-
-function ensureOptions(options, current) {
-  if (!current || options.includes(current)) {
-    return options;
-  }
-  return [current, ...options];
 }

@@ -6,6 +6,7 @@ import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
+import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
 
 export function ConfigPage({ activePath }) {
   const section = activePath[1];
@@ -355,6 +356,7 @@ function ProductConfigPage() {
   const [modal, setModal] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState(() => readPageState("config.product.selectedProduct", null));
 
   const { data, loading, error, reload } = useAsyncData(
     () => configService.products.list({ ...filters, page, pageSize }),
@@ -443,6 +445,18 @@ function ProductConfigPage() {
     }
   }
 
+  if (selectedProduct) {
+    return (
+      <ProductModulePage
+        product={selectedProduct}
+        onBack={() => {
+          clearPageState("config.product.selectedProduct");
+          setSelectedProduct(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="section-stack">
       <PageHeader title="项目产品" description="维护测试项目下的产品信息" />
@@ -524,6 +538,16 @@ function ProductConfigPage() {
                         <td>{formatTime(row.updatedAt)}</td>
                         <td>
                           <div className="action-links">
+                            <button
+                              className="link-button"
+                              onClick={() => {
+                                persistPageState("config.product.selectedProduct", row);
+                                setSelectedProduct(row);
+                              }}
+                              type="button"
+                            >
+                              模块
+                            </button>
                             <button className="link-button" onClick={() => { loadProjects(); setModal({ mode: "edit", row }); }} type="button">
                               编辑
                             </button>
@@ -676,6 +700,305 @@ function ProductModal({ busy, modal, projects, onClose, onSubmit }) {
       </form>
     </div>
   );
+}
+
+function ProductModulePage({ product, onBack }) {
+  const [form, setForm] = useState({ level1: "", level2: "", name: "" });
+  const [filters, setFilters] = useState({ level1: "", level2: "", name: "" });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [modal, setModal] = useState(null);
+
+  const { data, loading, error, reload } = useAsyncData(
+    () => configService.productModules.list({ productId: product.id, ...filters, page, pageSize }),
+    [product.id, filters.level1, filters.level2, filters.name, page, pageSize]
+  );
+
+  const rows = pageItems(data);
+  const total = data?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const allRows = pageItems(data);
+  const level1Options = uniqueValues(allRows, "level1");
+  const level2Options = uniqueValues(allRows, "level2");
+
+  function handleSearch(event) {
+    event.preventDefault();
+    setPage(1);
+    setFilters({ ...form });
+  }
+
+  function handleReset() {
+    setForm({ level1: "", level2: "", name: "" });
+    setFilters({ level1: "", level2: "", name: "" });
+    setPage(1);
+    setPageSize(20);
+    setNotice("");
+  }
+
+  async function handleDelete(row) {
+    if (!window.confirm(`确认删除模块“${row.name}”吗？`)) {
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      await configService.productModules.remove(row.id);
+      await reload();
+      setNotice("模块已删除。");
+    } catch (err) {
+      setNotice(err.message || "删除失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="section-stack">
+      <section className="resource-panel product-module-page">
+        <div className="page-config-header">
+          <div>
+            <h2>产品模块配置 / {product.id} / {product.name}</h2>
+            <p className="panel-subtitle">维护当前产品下的模块结构和模块名称</p>
+          </div>
+          <div className="action-row">
+            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
+              增加
+            </button>
+            <button className="icon-text-button compact-button" onClick={onBack} type="button">
+              返回
+            </button>
+          </div>
+        </div>
+
+        <div className="module-config-layout">
+          <aside className="module-nav-panel">
+            <div className="module-nav-title">
+              <strong>模块导航</strong>
+              <span>{total}</span>
+            </div>
+            <p>按层级快速定位模块</p>
+            <input className="text-input" placeholder="搜索模块" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+            <div className="module-chip-row">
+              <span>一级 {level1Options.length}</span>
+              <span>二级 {level2Options.length}</span>
+              <span>模块 {total}</span>
+            </div>
+            <div className="module-tree">
+              <button className="module-tree-item active" onClick={() => { setForm({ level1: "", level2: "", name: "" }); setFilters({ level1: "", level2: "", name: "" }); }} type="button">
+                全部模块 ({total})
+              </button>
+              <button className="module-tree-item" type="button">
+                未分组 ({rows.filter((row) => !row.level1 && !row.level2).length})
+              </button>
+            </div>
+          </aside>
+
+          <main className="module-table-panel">
+            <div className="module-panel-header">
+              <div>
+                <strong>全部模块</strong>
+                <p>筛选、编辑和删除当前产品下的模块</p>
+              </div>
+              <button className="icon-text-button compact-button" onClick={handleReset} type="button">
+                重置筛选
+              </button>
+            </div>
+
+            <form className="module-filter-grid" onSubmit={handleSearch}>
+              <label className="form-field">
+                <span>一级模块</span>
+                <select className="text-input" value={form.level1} onChange={(event) => setForm({ ...form, level1: event.target.value })}>
+                  <option value="">全部一级模块</option>
+                  {level1Options.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>二级模块</span>
+                <select className="text-input" value={form.level2} onChange={(event) => setForm({ ...form, level2: event.target.value })}>
+                  <option value="">全部二级模块</option>
+                  {level2Options.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>模块名称</span>
+                <input className="text-input" placeholder="搜索实际模块" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+              </label>
+              <div className="toolbar-row">
+                <button className="primary-button compact-button" type="submit">
+                  搜索
+                </button>
+              </div>
+            </form>
+
+            {notice ? <div className="inline-notice">{notice}</div> : null}
+
+            <StateBlock loading={loading} error={error}>
+              <TablePanel>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>序号</th>
+                        <th>三级模块（模块名称）</th>
+                        <th>一级模块</th>
+                        <th>二级模块</th>
+                        <th>创建时间</th>
+                        <th>更新时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.length ? (
+                        rows.map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.id}</td>
+                            <td>{row.name}</td>
+                            <td>{row.level1 || "-"}</td>
+                            <td>{row.level2 || "-"}</td>
+                            <td>{formatTime(row.createdAt)}</td>
+                            <td>{formatTime(row.updatedAt)}</td>
+                            <td>
+                              <div className="action-links">
+                                <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
+                                  编辑
+                                </button>
+                                <button className="link-button danger-link" disabled={busy} onClick={() => handleDelete(row)} type="button">
+                                  删除
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="7">暂无模块数据</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <PaginationBar
+                  page={page}
+                  pageSize={pageSize}
+                  total={total}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  onPageSizeChange={(value) => {
+                    setPage(1);
+                    setPageSize(value);
+                  }}
+                />
+              </TablePanel>
+            </StateBlock>
+          </main>
+        </div>
+      </section>
+
+      {modal ? (
+        <ProductModuleModal
+          busy={busy}
+          modal={modal}
+          onClose={() => setModal(null)}
+          onSubmit={async (payload, mode) => {
+            setBusy(true);
+            setNotice("");
+            try {
+              if (mode === "edit") {
+                await configService.productModules.update(modal.row.id, { ...payload, productId: product.id });
+                setNotice("模块已更新。");
+              } else {
+                await configService.productModules.create({ ...payload, productId: product.id });
+                setNotice("模块已创建。");
+              }
+              setModal(null);
+              await reload();
+            } catch (err) {
+              setNotice(err.message || "保存失败");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProductModuleModal({ busy, modal, onClose, onSubmit }) {
+  const source = modal.row;
+  const [form, setForm] = useState({
+    name: source?.name || "",
+    level1: source?.level1 || "",
+    level2: source?.level2 || ""
+  });
+  const [error, setError] = useState("");
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError("");
+    if (!form.name.trim()) {
+      setError("模块名称不能为空。");
+      return;
+    }
+    await onSubmit(
+      {
+        name: form.name.trim(),
+        level1: form.level1.trim(),
+        level2: form.level2.trim()
+      },
+      modal.mode
+    );
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <form className="modal-card modal-card-small" onSubmit={handleSubmit}>
+        <div className="modal-header">
+          <strong>{modal.mode === "edit" ? "编辑模块" : "新增模块"}</strong>
+          <button className="modal-close" onClick={onClose} type="button">
+            ×
+          </button>
+        </div>
+        <div className="modal-form">
+          <label className="form-field form-field-inline">
+            <span>一级模块</span>
+            <input className="text-input" placeholder="请输入一级模块" value={form.level1} onChange={(event) => setForm({ ...form, level1: event.target.value })} />
+          </label>
+          <label className="form-field form-field-inline">
+            <span>二级模块</span>
+            <input className="text-input" placeholder="请输入二级模块" value={form.level2} onChange={(event) => setForm({ ...form, level2: event.target.value })} />
+          </label>
+          <label className="form-field form-field-inline required-field">
+            <span>模块名称</span>
+            <input className="text-input" placeholder="请输入模块名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          </label>
+        </div>
+        {error ? <div className="form-error modal-error">{error}</div> : null}
+        <div className="modal-actions">
+          <button className="icon-text-button compact-button" onClick={onClose} type="button">
+            取消
+          </button>
+          <button className="primary-button compact-button" disabled={busy} type="submit">
+            {busy ? "提交中" : "提交"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function uniqueValues(rows, key) {
+  return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
 }
 
 function ExecutorConfigPage() {

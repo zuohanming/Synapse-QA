@@ -33,6 +33,23 @@ type ProductRequest struct {
 	APIType   string `json:"apiType"`
 }
 
+type ProductModule struct {
+	ID        int64     `json:"id"`
+	ProductID int64     `json:"productId"`
+	Name      string    `json:"name"`
+	Level1    string    `json:"level1"`
+	Level2    string    `json:"level2"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type ProductModuleRequest struct {
+	ProductID int64  `json:"productId"`
+	Name      string `json:"name"`
+	Level1    string `json:"level1"`
+	Level2    string `json:"level2"`
+}
+
 type TestObject struct {
 	ID           int64     `json:"id"`
 	ProductID    int64     `json:"productId"`

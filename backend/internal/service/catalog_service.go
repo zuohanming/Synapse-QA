@@ -149,6 +149,52 @@ func (s *CatalogService) DeleteProduct(ctx context.Context, actor string, id int
 	return nil
 }
 
+func (s *CatalogService) ListProductModules(ctx context.Context, productID int64, level1, level2, name string, page, pageSize int) (model.PageResult, error) {
+	page, pageSize = normalizePage(page, pageSize)
+	items, total, err := s.catalogRepo.ListProductModules(ctx, productID, strings.TrimSpace(level1), strings.TrimSpace(level2), strings.TrimSpace(name), page, pageSize)
+	return model.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, err
+}
+
+func (s *CatalogService) CreateProductModule(ctx context.Context, actor string, req model.ProductModuleRequest) error {
+	req, err := normalizeProductModule(req)
+	if err != nil {
+		return err
+	}
+	if err := s.catalogRepo.CreateProductModule(ctx, req); err != nil {
+		return errors.New("新增模块失败，模块名称可能已存在")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "新增产品模块", req.Name)
+	return nil
+}
+
+func (s *CatalogService) UpdateProductModule(ctx context.Context, actor string, id int64, req model.ProductModuleRequest) error {
+	req, err := normalizeProductModule(req)
+	if err != nil {
+		return err
+	}
+	rows, err := s.catalogRepo.UpdateProductModule(ctx, id, req)
+	if err != nil {
+		return errors.New("更新模块失败，模块名称可能已存在")
+	}
+	if rows == 0 {
+		return errors.New("模块不存在")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "编辑产品模块", fmt.Sprintf("%d:%s", id, req.Name))
+	return nil
+}
+
+func (s *CatalogService) DeleteProductModule(ctx context.Context, actor string, id int64) error {
+	rows, err := s.catalogRepo.DeleteProductModule(ctx, id)
+	if err != nil {
+		return errors.New("删除模块失败")
+	}
+	if rows == 0 {
+		return errors.New("模块不存在")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "删除产品模块", strconv.FormatInt(id, 10))
+	return nil
+}
+
 func normalizeProject(req model.ProjectRequest) (model.ProjectRequest, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Status = strings.TrimSpace(req.Status)
@@ -197,6 +243,19 @@ func normalizeProduct(req model.ProductRequest) (model.ProductRequest, error) {
 	}
 	if !validEndpointType(req.UIType) || !validEndpointType(req.APIType) {
 		return req, errors.New("产品端类型无效")
+	}
+	return req, nil
+}
+
+func normalizeProductModule(req model.ProductModuleRequest) (model.ProductModuleRequest, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Level1 = strings.TrimSpace(req.Level1)
+	req.Level2 = strings.TrimSpace(req.Level2)
+	if req.ProductID <= 0 {
+		return req, errors.New("产品不能为空")
+	}
+	if req.Name == "" {
+		return req, errors.New("模块名称不能为空")
 	}
 	return req, nil
 }
