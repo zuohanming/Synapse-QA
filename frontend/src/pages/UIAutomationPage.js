@@ -31,6 +31,33 @@ const initialStepFilters = {
   status: ""
 };
 
+const initialCaseFilters = {
+  id: "",
+  name: "",
+  productId: "",
+  moduleId: "",
+  pageId: "",
+  priority: "",
+  status: ""
+};
+
+const emptyCaseForm = {
+  productId: "",
+  moduleId: "",
+  pageId: "",
+  name: "",
+  caseType: "ui",
+  priority: "P2",
+  status: "draft",
+  owner: "",
+  tags: "",
+  description: "",
+  preconditions: "",
+  expectedResult: "",
+  dataEnabled: false,
+  stepIds: []
+};
+
 const emptyPageForm = {
   name: "",
   category: "",
@@ -65,6 +92,178 @@ const emptyElementForm = {
   waitTime: ""
 };
 
+const operationGroups = [
+  {
+    title: "WEB 浏览器操作",
+    color: "#2563eb",
+    items: [
+      { tag: "w_wait_for_timeout", name: "强制等待", params: ["_time"] },
+      { tag: "w_goto", name: "打开URL", params: ["url"] },
+      { tag: "w_screenshot", name: "整个页面截图", params: ["path"] },
+      { tag: "w_alert", name: "设置弹窗不予处理", params: [] },
+      { tag: "w_get_cookie", name: "获取cookie", params: [] },
+      { tag: "w_set_cookie", name: "设置cookie", params: ["storage_state"] },
+      { tag: "w_clear_cookies", name: "清除所有cookie", params: [] },
+      { tag: "w_clear_storage", name: "清除本地存储和会话存储", params: [] }
+    ]
+  },
+  {
+    title: "WEB 元素操作",
+    color: "#10b981",
+    items: [
+      { tag: "w_click", name: "元素单击", params: ["locating"] },
+      { tag: "w_dblclick", name: "元素双击", params: ["locating"] },
+      { tag: "w_force_click", name: "强制单击", params: ["locating"] },
+      { tag: "w_input", name: "元素输入", params: ["locating", "input_value"] },
+      { tag: "w_hover", name: "鼠标悬停", params: ["locating"] },
+      { tag: "w_get_text", name: "获取元素文本", params: ["locating", "set_cache_key"] },
+      { tag: "w_clear_input", name: "元素清空再输入", params: ["locating", "input_value"] },
+      { tag: "w_many_click", name: "多元素循环单击", params: ["locating"] },
+      { tag: "w_upload_files", name: "拖拽文件上传", params: ["locating", "file_path"] },
+      { tag: "w_click_upload_files", name: "点击并选择文件上传", params: ["locating", "file_path"] },
+      { tag: "w_download", name: "下载文件", params: ["locating", "file_key"] },
+      { tag: "w_element_wheel", name: "滚动到元素位置", params: ["locating"] },
+      { tag: "w_right_click", name: "元素右键点击", params: ["locating"] },
+      { tag: "w_time_click", name: "循环点击N秒", params: ["locating", "n"] },
+      { tag: "w_drag_up_pixel", name: "往上拖动N个像素", params: ["locating", "n"] },
+      { tag: "w_drag_down_pixel", name: "往下拖动N个像素", params: ["locating", "n"] },
+      { tag: "w_drag_left_pixel", name: "往左拖动N个像素", params: ["locating", "n"] },
+      { tag: "w_drag_right_pixel", name: "往右拖动N个像素", params: ["locating", "n"] },
+      { tag: "w_ele_screenshot", name: "元素截图", params: ["locating", "path"] },
+      { tag: "w_drag_to", name: "拖动A元素到达B", params: ["locating1", "locating2"] }
+    ]
+  },
+  {
+    title: "WEB 输入设备",
+    color: "#7c3aed",
+    items: [
+      { tag: "w_keys", name: "模拟按键", params: ["keyboard"] },
+      { tag: "w_wheel", name: "鼠标滚动", params: ["y"] },
+      { tag: "w_mouse_click", name: "鼠标点击坐标", params: ["x", "y"] },
+      { tag: "w_mouse_center", name: "鼠标移动到中间", params: [] },
+      { tag: "w_keyboard_type_text", name: "模拟人工输入文字", params: ["text"] },
+      { tag: "w_keyboard_insert_text", name: "直接输入文字", params: ["text"] },
+      { tag: "w_keyboard_delete_text", name: "删除光标左侧字符", params: ["count"] }
+    ]
+  },
+  {
+    title: "WEB 页面操作",
+    color: "#0f766e",
+    items: [
+      { tag: "w_switch_tabs", name: "切换页签", params: ["individual"] },
+      { tag: "w_close_current_tab", name: "关闭当前页签", params: [] },
+      { tag: "w_open_new_tab_and_switch", name: "点击并打开新页签", params: ["locating"] },
+      { tag: "w_refresh", name: "刷新页面", params: [] },
+      { tag: "w_go_back", name: "返回上一页", params: [] },
+      { tag: "w_go_forward", name: "前进到下一页", params: [] }
+    ]
+  },
+  {
+    title: "WEB 定制开发",
+    color: "#ea580c",
+    items: [
+      { tag: "w_demo", name: "项目自定义方法", params: ["locating", "input_value"] },
+      { tag: "w_is_click", name: "元素在页面则点击", params: ["locating"] }
+    ]
+  },
+  {
+    title: "安卓 应用操作",
+    color: "#16a34a",
+    items: [
+      { tag: "a_start_app", name: "启动应用", params: ["package_name"] },
+      { tag: "a_close_app", name: "关闭应用", params: ["package_name"] },
+      { tag: "a_clear_app", name: "清除app数据", params: ["package_name"] },
+      { tag: "a_app_stop_all", name: "停止所有app", params: [] },
+      { tag: "a_app_stop_appoint", name: "停止除指定app外所有app", params: ["package_name"] }
+    ]
+  },
+  {
+    title: "安卓 元素操作",
+    color: "#0891b2",
+    items: [
+      { tag: "a_click", name: "元素单击", params: ["locating"] },
+      { tag: "a_double_click", name: "元素双击", params: ["locating"] },
+      { tag: "a_input", name: "单击输入", params: ["locating", "text"] },
+      { tag: "a_set_text", name: "设置文本", params: ["locating", "text"] },
+      { tag: "a_click_coord", name: "坐标单击", params: ["locating", "x", "y"] },
+      { tag: "a_double_click_coord", name: "坐标双击", params: ["x", "y"] },
+      { tag: "a_long_click", name: "长按元素", params: ["locating", "time_"] },
+      { tag: "a_clear_text", name: "清空输入框", params: ["locating"] },
+      { tag: "a_get_text", name: "获取元素文本", params: ["locating", "set_cache_key"] },
+      { tag: "a_element_screenshot", name: "元素截图", params: ["locating", "file_name"] },
+      { tag: "a_pinch_in", name: "元素缩小", params: ["locating"] },
+      { tag: "a_pinch_out", name: "元素放大", params: ["locating"] },
+      { tag: "a_wait", name: "等待元素出现", params: ["locating", "time_"] },
+      { tag: "a_wait_gone", name: "等待元素消失", params: ["locating", "time_"] },
+      { tag: "a_drag_to_ele", name: "拖动A元素到达B元素上", params: ["locating", "locating2"] },
+      { tag: "a_drag_to_coord", name: "拖动元素到坐标上", params: ["locating", "x", "y"] },
+      { tag: "a_swipe_right", name: "元素内向右滑动", params: ["locating"] },
+      { tag: "a_swipe_left", name: "元素内向左滑动", params: ["locating"] },
+      { tag: "a_swipe_up", name: "元素内向上滑动", params: ["locating"] },
+      { tag: "a_swipe_ele", name: "元素内向下滑动", params: ["locating"] },
+      { tag: "a_get_center", name: "提取元素坐标", params: ["locating", "x_key", "y_key"] }
+    ]
+  },
+  {
+    title: "安卓 设备操作",
+    color: "#475569",
+    items: [
+      { tag: "a_sleep", name: "强制等待", params: ["_time"] },
+      { tag: "a_screen_on", name: "打开屏幕", params: [] },
+      { tag: "a_screen_off", name: "关闭屏幕", params: [] },
+      { tag: "a_get_window_size", name: "提取屏幕尺寸", params: [] },
+      { tag: "a_push", name: "推送文件到设备", params: ["file_path", "catalogue"] },
+      { tag: "a_pull", name: "提取文件", params: ["file_path", "catalogue"] },
+      { tag: "a_unlock", name: "解锁屏幕", params: [] },
+      { tag: "a_press_home", name: "按home键", params: [] },
+      { tag: "a_press_back", name: "按back键", params: [] },
+      { tag: "a_press_left", name: "按left键", params: [] },
+      { tag: "a_press_right", name: "按right键", params: [] },
+      { tag: "a_press_up", name: "按up键", params: [] },
+      { tag: "a_press_down", name: "按down键", params: [] },
+      { tag: "a_press_center", name: "按center键", params: [] },
+      { tag: "a_press_menu", name: "按menu键", params: [] },
+      { tag: "a_press_search", name: "按search键", params: [] },
+      { tag: "a_press_enter", name: "按enter键", params: [] },
+      { tag: "a_press_delete", name: "按delete键", params: [] },
+      { tag: "a_press_recent", name: "按recent键", params: [] },
+      { tag: "a_press_volume_up", name: "按volume_up键", params: [] },
+      { tag: "a_press_volume_down", name: "按volume_down键", params: [] },
+      { tag: "a_press_volume_mute", name: "按volume_mute键", params: [] },
+      { tag: "a_press_camera", name: "按camera键", params: [] },
+      { tag: "a_press_power", name: "按power键", params: [] }
+    ]
+  },
+  {
+    title: "安卓 页面操作",
+    color: "#db2777",
+    items: [
+      { tag: "a_swipe_down", name: "下滑", params: [] },
+      { tag: "a_swipe", name: "坐标滑动", params: ["sx", "sy", "ex", "ey"] },
+      { tag: "a_drag", name: "坐标拖动", params: ["sx", "sy", "ex", "ey"] },
+      { tag: "a_open_quick_settings", name: "打开快速通知", params: [] },
+      { tag: "a_screenshot", name: "屏幕截图", params: ["file_name"] },
+      { tag: "a_set_orientation_natural", name: "设置为natural", params: [] },
+      { tag: "a_set_orientation_left", name: "设置为left", params: [] },
+      { tag: "a_set_orientation_right", name: "设置为right", params: [] },
+      { tag: "a_set_orientation_upsidedown", name: "设置为upsidedown", params: [] },
+      { tag: "a_freeze_rotation", name: "冻结旋转", params: [] },
+      { tag: "a_freeze_rotation_false", name: "取消冻结旋转", params: [] },
+      { tag: "a_dump_hierarchy", name: "获取转储内容", params: [] },
+      { tag: "a_open_notification", name: "打开通知", params: [] }
+    ]
+  }
+];
+
+const stepNodeTypes = [
+  { label: "元素操作", color: "#10b981" },
+  { label: "断言操作", color: "#2548b8" },
+  { label: "SQL操作", color: "#d97706" },
+  { label: "自定义变量", color: "#2548b8" },
+  { label: "条件判断", color: "#64748b" },
+  { label: "python代码", color: "#60a5fa" }
+];
+
 export function UIAutomationPage({ activePath }) {
   const section = activePath[1];
 
@@ -74,6 +273,10 @@ export function UIAutomationPage({ activePath }) {
 
   if (section === "页面步骤") {
     return <PageStepsPage />;
+  }
+
+  if (section === "测试用例") {
+    return <TestCasesPage />;
   }
 
   const resource = listSectionMap[section] || uiAutomationService.elements;
@@ -98,6 +301,671 @@ export function UIAutomationPage({ activePath }) {
       </StateBlock>
     </>
   );
+}
+
+function TestCasesPage() {
+  const [form, setForm] = useState(initialCaseFilters);
+  const [filters, setFilters] = useState(initialCaseFilters);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [modal, setModal] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const { data, loading, error, reload } = useAsyncData(
+    () => uiAutomationService.cases.list({ ...filters, page, pageSize }),
+    [filters.id, filters.name, filters.productId, filters.moduleId, filters.pageId, filters.priority, filters.status, page, pageSize]
+  );
+  const rows = pageItems(data);
+  const total = data?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const allSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
+
+  const { data: productsData, loading: loadingProducts } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
+  const productOptions = pageItems(productsData);
+  const { data: modulesData, loading: loadingModules } = useAsyncData(
+    () => (form.productId ? configService.productModules.list({ productId: form.productId, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] })),
+    [form.productId]
+  );
+  const moduleOptions = pageItems(modulesData);
+  const selectedProduct = productOptions.find((item) => String(item.id) === String(form.productId));
+  const selectedModule = moduleOptions.find((item) => String(item.id) === String(form.moduleId));
+  const { data: pagesData, loading: loadingPages } = useAsyncData(
+    () =>
+      selectedProduct
+        ? uiAutomationService.elements.list({
+            product: `${selectedProduct.projectName}/${selectedProduct.name}`,
+            module: selectedModule?.name || "",
+            page: 1,
+            pageSize: 200
+          })
+        : Promise.resolve({ items: [] }),
+    [selectedProduct?.id, selectedModule?.id]
+  );
+  const pageOptions = pageItems(pagesData);
+
+  function submitSearch(event) {
+    event.preventDefault();
+    setFilters({ ...form });
+    setSelectedIds([]);
+    setPage(1);
+  }
+
+  function resetSearch() {
+    setForm(initialCaseFilters);
+    setFilters(initialCaseFilters);
+    setSelectedIds([]);
+    setPage(1);
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds(allSelected ? [] : rows.map((row) => row.id));
+  }
+
+  function toggleSelectOne(id) {
+    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  async function deleteRows(ids) {
+    if (!ids.length) {
+      setNotice("请先选择需要删除的测试用例。");
+      return;
+    }
+    if (!window.confirm(`确认删除 ${ids.length} 条测试用例吗？`)) {
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      await Promise.all(ids.map((id) => uiAutomationService.cases.remove(id)));
+      setSelectedIds([]);
+      setDetail(null);
+      await reload();
+      setNotice("测试用例已删除。");
+    } catch (err) {
+      setNotice(err.message || "删除失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openDetail(row) {
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await uiAutomationService.cases.get(row.id);
+      setDetail(result);
+    } catch (err) {
+      setNotice(err.message || "读取详情失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportCases() {
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await uiAutomationService.cases.export(filters);
+      const blob = new Blob([JSON.stringify(result.items || [], null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "test-cases.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      setNotice("测试用例已导出。");
+    } catch (err) {
+      setNotice(err.message || "导出失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importCases(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const items = Array.isArray(parsed) ? parsed : parsed.items;
+      if (!Array.isArray(items)) {
+        throw new Error("导入文件必须是数组或包含 items 数组");
+      }
+      const result = await uiAutomationService.cases.import(items);
+      await reload();
+      setNotice(`已导入 ${result.count || items.length} 条测试用例。`);
+    } catch (err) {
+      setNotice(err.message || "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="section-stack">
+      <PageHeader title="测试用例" description="管理界面自动化测试用例、关联步骤和参数化数据" />
+      <section className="resource-panel">
+        <div className="panel-header">
+          <strong>测试用例管理</strong>
+          <div className="action-row">
+            <label className="icon-text-button compact-button file-action">
+              导入
+              <input accept="application/json" onChange={importCases} type="file" />
+            </label>
+            <button className="icon-text-button compact-button" disabled={busy} onClick={exportCases} type="button">
+              导出
+            </button>
+            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
+              新增
+            </button>
+            <button className="danger-button compact-button" disabled={busy} onClick={() => deleteRows(selectedIds)} type="button">
+              批量删除
+            </button>
+          </div>
+        </div>
+
+        <form className="filter-grid filter-grid-cases" onSubmit={submitSearch}>
+          <label className="form-field">
+            <span>ID</span>
+            <input className="text-input" value={form.id} onChange={(event) => setForm({ ...form, id: event.target.value })} placeholder="请输入用例ID" />
+          </label>
+          <label className="form-field">
+            <span>用例名称</span>
+            <input className="text-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="请输入用例名称" />
+          </label>
+          <label className="form-field">
+            <span>项目/产品</span>
+            <select className="text-input" disabled={loadingProducts} value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value, moduleId: "", pageId: "" })}>
+              <option value="">{loadingProducts ? "加载产品中" : "请选择产品"}</option>
+              {productOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.projectName}/{item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>模块名称</span>
+            <select className="text-input" disabled={!form.productId || loadingModules} value={form.moduleId} onChange={(event) => setForm({ ...form, moduleId: event.target.value, pageId: "" })}>
+              <option value="">{form.productId ? "请选择模块" : "请先选择产品"}</option>
+              {moduleOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>所属页面</span>
+            <select className="text-input" disabled={!form.productId || loadingPages} value={form.pageId} onChange={(event) => setForm({ ...form, pageId: event.target.value })}>
+              <option value="">{form.productId ? "请选择页面" : "请先选择产品"}</option>
+              {pageOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>优先级</span>
+            <select className="text-input" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}>
+              <option value="">全部</option>
+              <option value="P0">P0</option>
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>状态</span>
+            <select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+              <option value="">全部</option>
+              <option value="draft">草稿</option>
+              <option value="active">启用</option>
+              <option value="disabled">停用</option>
+            </select>
+          </label>
+          <div className="filter-actions">
+            <button className="primary-button compact-button" type="submit">
+              搜索
+            </button>
+            <button className="icon-text-button compact-button" onClick={resetSearch} type="button">
+              重置
+            </button>
+          </div>
+        </form>
+
+        {notice ? <div className="inline-notice">{notice}</div> : null}
+
+        <StateBlock loading={loading} error={error}>
+          <TablePanel>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="checkbox-cell">
+                      <input checked={allSelected} onChange={toggleSelectAll} type="checkbox" />
+                    </th>
+                    <th>ID</th>
+                    <th>项目/产品</th>
+                    <th>模块</th>
+                    <th>所属页面</th>
+                    <th>用例名称</th>
+                    <th>优先级</th>
+                    <th>状态</th>
+                    <th>负责人</th>
+                    <th>更新时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length ? (
+                    rows.map((row) => (
+                      <tr key={row.id}>
+                        <td className="checkbox-cell">
+                          <input checked={selectedIds.includes(row.id)} onChange={() => toggleSelectOne(row.id)} type="checkbox" />
+                        </td>
+                        <td>{row.id}</td>
+                        <td>{row.productName || "-"}</td>
+                        <td>{row.moduleName || "-"}</td>
+                        <td>{row.pageName || "-"}</td>
+                        <td>{row.name}</td>
+                        <td>
+                          <span className="status-pill neutral">{row.priority}</span>
+                        </td>
+                        <td>
+                          <span className={`status-pill ${row.status === "active" ? "success" : row.status === "disabled" ? "danger" : "warning"}`}>{caseStatusLabel(row.status)}</span>
+                        </td>
+                        <td>{row.owner || "-"}</td>
+                        <td>{formatTime(row.updatedAt)}</td>
+                        <td>
+                          <div className="action-links">
+                            <button className="link-button" onClick={() => openDetail(row)} type="button">
+                              详情
+                            </button>
+                            <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
+                              编辑
+                            </button>
+                            <button className="link-button danger-link" disabled={busy} onClick={() => deleteRows([row.id])} type="button">
+                              删除
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="11">暂无数据</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={(value) => {
+                setPage(1);
+                setPageSize(value);
+              }}
+            />
+          </TablePanel>
+        </StateBlock>
+      </section>
+
+      {detail ? <TestCaseDetailPanel detail={detail} onClose={() => setDetail(null)} onRefresh={() => openDetail(detail)} /> : null}
+      {modal ? (
+        <TestCaseModal
+          busy={busy}
+          modal={modal}
+          onClose={() => setModal(null)}
+          onSubmit={async (payload, mode) => {
+            setBusy(true);
+            setNotice("");
+            try {
+              if (mode === "edit") {
+                await uiAutomationService.cases.update(modal.row.id, payload);
+                setNotice("测试用例已更新。");
+              } else {
+                await uiAutomationService.cases.create(payload);
+                setNotice("测试用例已创建。");
+              }
+              setModal(null);
+              await reload();
+            } catch (err) {
+              setNotice(err.message || "保存失败");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function TestCaseModal({ busy, modal, onClose, onSubmit }) {
+  const source = modal.row;
+  const [form, setForm] = useState(
+    source
+      ? {
+          productId: String(source.productId || ""),
+          moduleId: source.moduleId ? String(source.moduleId) : "",
+          pageId: source.pageId ? String(source.pageId) : "",
+          name: source.name || "",
+          caseType: source.caseType || "ui",
+          priority: source.priority || "P2",
+          status: source.status || "draft",
+          owner: source.owner || "",
+          tags: source.tags || "",
+          description: source.description || "",
+          preconditions: source.preconditions || "",
+          expectedResult: source.expectedResult || "",
+          dataEnabled: Boolean(source.dataEnabled),
+          stepIds: source.steps?.map((item) => item.stepId) || []
+        }
+      : emptyCaseForm
+  );
+  const [error, setError] = useState("");
+  const { data: productsData, loading: loadingProducts } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
+  const productOptions = pageItems(productsData);
+  const selectedProduct = productOptions.find((item) => String(item.id) === String(form.productId));
+  const { data: modulesData, loading: loadingModules } = useAsyncData(
+    () => (form.productId ? configService.productModules.list({ productId: form.productId, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] })),
+    [form.productId]
+  );
+  const moduleOptions = pageItems(modulesData);
+  const selectedModule = moduleOptions.find((item) => String(item.id) === String(form.moduleId));
+  const { data: pagesData, loading: loadingPages } = useAsyncData(
+    () =>
+      selectedProduct
+        ? uiAutomationService.elements.list({
+            product: `${selectedProduct.projectName}/${selectedProduct.name}`,
+            module: selectedModule?.name || "",
+            page: 1,
+            pageSize: 200
+          })
+        : Promise.resolve({ items: [] }),
+    [selectedProduct?.id, selectedModule?.id]
+  );
+  const pageOptions = pageItems(pagesData);
+  const selectedPage = pageOptions.find((item) => String(item.id) === String(form.pageId));
+  const { data: stepsData, loading: loadingSteps } = useAsyncData(
+    () =>
+      selectedProduct
+        ? uiAutomationService.steps.list({
+            product: `${selectedProduct.projectName}/${selectedProduct.name}`,
+            module: selectedModule?.name || "",
+            pageUrl: selectedPage?.name || "",
+            page: 1,
+            pageSize: 200
+          })
+        : Promise.resolve({ items: [] }),
+    [selectedProduct?.id, selectedModule?.id, selectedPage?.id]
+  );
+  const stepOptions = pageItems(stepsData);
+
+  function toggleStep(id) {
+    setForm((current) => ({
+      ...current,
+      stepIds: current.stepIds.includes(id) ? current.stepIds.filter((item) => item !== id) : [...current.stepIds, id]
+    }));
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError("");
+    if (!form.productId || !form.name.trim()) {
+      setError("项目/产品和用例名称不能为空。");
+      return;
+    }
+    await onSubmit(
+      {
+        ...form,
+        productId: Number(form.productId),
+        moduleId: Number(form.moduleId || 0),
+        pageId: Number(form.pageId || 0),
+        name: form.name.trim(),
+        owner: form.owner.trim(),
+        tags: form.tags.trim(),
+        description: form.description.trim(),
+        preconditions: form.preconditions.trim(),
+        expectedResult: form.expectedResult.trim(),
+        stepIds: form.stepIds.map(Number)
+      },
+      modal.mode
+    );
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <form className="modal-card modal-card-wide" onSubmit={handleSubmit}>
+        <div className="modal-header">
+          <strong>{modal.mode === "edit" ? "编辑测试用例" : "新增测试用例"}</strong>
+          <button className="modal-close" onClick={onClose} type="button">
+            ×
+          </button>
+        </div>
+        <div className="modal-grid case-modal-form">
+          <label className="form-field required-field">
+            <span>项目/产品</span>
+            <select className="text-input" disabled={loadingProducts} value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value, moduleId: "", pageId: "", stepIds: [] })}>
+              <option value="">{loadingProducts ? "加载产品中" : "请选择产品"}</option>
+              {productOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.projectName}/{item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>模块名称</span>
+            <select className="text-input" disabled={!form.productId || loadingModules} value={form.moduleId} onChange={(event) => setForm({ ...form, moduleId: event.target.value, pageId: "", stepIds: [] })}>
+              <option value="">{form.productId ? "请选择模块" : "请先选择产品"}</option>
+              {moduleOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>所属页面</span>
+            <select className="text-input" disabled={!form.productId || loadingPages} value={form.pageId} onChange={(event) => setForm({ ...form, pageId: event.target.value, stepIds: [] })}>
+              <option value="">{form.productId ? "请选择页面" : "请先选择产品"}</option>
+              {pageOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field required-field">
+            <span>用例名称</span>
+            <input className="text-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="请输入用例名称" />
+          </label>
+          <label className="form-field">
+            <span>用例类型</span>
+            <select className="text-input" value={form.caseType} onChange={(event) => setForm({ ...form, caseType: event.target.value })}>
+              <option value="ui">UI</option>
+              <option value="api">API</option>
+              <option value="unit">单元</option>
+              <option value="mixed">混合</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>优先级</span>
+            <select className="text-input" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}>
+              <option value="P0">P0</option>
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>状态</span>
+            <select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+              <option value="draft">草稿</option>
+              <option value="active">启用</option>
+              <option value="disabled">停用</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>负责人</span>
+            <input className="text-input" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} placeholder="请输入负责人" />
+          </label>
+          <label className="form-field">
+            <span>标签</span>
+            <input className="text-input" value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="smoke,login" />
+          </label>
+          <label className="form-field checkbox-line">
+            <input checked={form.dataEnabled} onChange={(event) => setForm({ ...form, dataEnabled: event.target.checked })} type="checkbox" />
+            <span>启用参数化</span>
+          </label>
+          <label className="form-field field-span-2">
+            <span>前置条件</span>
+            <textarea className="text-area" rows="3" value={form.preconditions} onChange={(event) => setForm({ ...form, preconditions: event.target.value })} />
+          </label>
+          <label className="form-field field-span-2">
+            <span>预期结果</span>
+            <textarea className="text-area" rows="3" value={form.expectedResult} onChange={(event) => setForm({ ...form, expectedResult: event.target.value })} />
+          </label>
+          <label className="form-field field-span-2">
+            <span>描述</span>
+            <textarea className="text-area" rows="3" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+          </label>
+          <div className="form-field field-span-2">
+            <span>关联步骤</span>
+            <div className="check-list">
+              {loadingSteps ? <span className="muted-text">加载步骤中</span> : null}
+              {!loadingSteps && !stepOptions.length ? <span className="muted-text">暂无可关联步骤</span> : null}
+              {stepOptions.map((item) => (
+                <label key={item.id} className="check-item">
+                  <input checked={form.stepIds.includes(item.id)} onChange={() => toggleStep(item.id)} type="checkbox" />
+                  <span>{item.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        {error ? <div className="form-error">{error}</div> : null}
+        <div className="modal-actions">
+          <button className="icon-text-button compact-button" onClick={onClose} type="button">
+            取消
+          </button>
+          <button className="primary-button compact-button" disabled={busy} type="submit">
+            {busy ? "保存中" : "提交"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TestCaseDetailPanel({ detail, onClose, onRefresh }) {
+  const [datasetForm, setDatasetForm] = useState({ name: "", variables: "{\n  \n}", enabled: true });
+  const [notice, setNotice] = useState("");
+
+  async function createDataset(event) {
+    event.preventDefault();
+    setNotice("");
+    try {
+      await uiAutomationService.cases.datasets.create(detail.id, {
+        name: datasetForm.name,
+        variables: JSON.parse(datasetForm.variables || "{}"),
+        enabled: datasetForm.enabled
+      });
+      setDatasetForm({ name: "", variables: "{\n  \n}", enabled: true });
+      await onRefresh();
+    } catch (err) {
+      setNotice(err.message || "保存参数化数据失败");
+    }
+  }
+
+  async function removeDataset(row) {
+    if (!window.confirm(`确认删除数据集“${row.name}”吗？`)) {
+      return;
+    }
+    setNotice("");
+    try {
+      await uiAutomationService.cases.datasets.remove(detail.id, row.id);
+      await onRefresh();
+    } catch (err) {
+      setNotice(err.message || "删除参数化数据失败");
+    }
+  }
+
+  return (
+    <section className="resource-panel detail-panel">
+      <div className="panel-header">
+        <strong>测试用例详情 / {detail.id} / {detail.name}</strong>
+        <button className="icon-text-button compact-button" onClick={onClose} type="button">
+          关闭
+        </button>
+      </div>
+      <div className="detail-grid">
+        <span>项目/产品：{detail.productName || "-"}</span>
+        <span>模块：{detail.moduleName || "-"}</span>
+        <span>页面：{detail.pageName || "-"}</span>
+        <span>优先级：{detail.priority}</span>
+        <span>状态：{caseStatusLabel(detail.status)}</span>
+        <span>负责人：{detail.owner || "-"}</span>
+      </div>
+      <div className="detail-block">
+        <strong>关联步骤</strong>
+        {(detail.steps || []).length ? (
+          <ol className="step-list">
+            {detail.steps.map((item) => (
+              <li key={item.id}>{item.stepName || item.stepId}</li>
+            ))}
+          </ol>
+        ) : (
+          <span className="muted-text">暂无关联步骤</span>
+        )}
+      </div>
+      <div className="detail-block">
+        <strong>参数化数据</strong>
+        {notice ? <div className="inline-notice">{notice}</div> : null}
+        <form className="dataset-form" onSubmit={createDataset}>
+          <input className="text-input" value={datasetForm.name} onChange={(event) => setDatasetForm({ ...datasetForm, name: event.target.value })} placeholder="数据集名称" />
+          <textarea className="text-area" rows="3" value={datasetForm.variables} onChange={(event) => setDatasetForm({ ...datasetForm, variables: event.target.value })} placeholder='{"username":"admin"}' />
+          <label className="checkbox-line">
+            <input checked={datasetForm.enabled} onChange={(event) => setDatasetForm({ ...datasetForm, enabled: event.target.checked })} type="checkbox" />
+            <span>启用</span>
+          </label>
+          <button className="primary-button compact-button" type="submit">
+            新增数据集
+          </button>
+        </form>
+        <div className="dataset-list">
+          {(detail.datasets || []).map((item) => (
+            <div className="dataset-row" key={item.id}>
+              <span>{item.name}</span>
+              <code>{JSON.stringify(item.variables)}</code>
+              <button className="link-button danger-link" onClick={() => removeDataset(item)} type="button">
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function caseStatusLabel(status) {
+  return { draft: "草稿", active: "启用", disabled: "停用" }[status] || status || "-";
 }
 
 function PageStepsPage() {
@@ -390,7 +1258,14 @@ function PageStepsPage() {
                         </td>
                         <td>
                           <div className="action-links">
-                            <button className="link-button" type="button">
+                            <button
+                              className="link-button"
+                              onClick={() => {
+                                persistPageState("ui.steps.workingStep", row);
+                                setWorkingStep(row);
+                              }}
+                              type="button"
+                            >
                               调试
                             </button>
                             <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
@@ -642,16 +1517,9 @@ function StepWorkbench({ step, onBack }) {
   const canvasRef = useRef(null);
   const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
-  const selected = selectedNode;
+  const selected = selectedNode ? nodes.find((node) => node.id === selectedNode.id) || selectedNode : null;
   const canvasSize = { width: 1200, height: 720 };
-  const palette = [
-    ["元素操作", "#10b981"],
-    ["断言操作", "#2548b8"],
-    ["SQL操作", "#d97706"],
-    ["自定义变量", "#2548b8"],
-    ["条件判断", "#64748b"],
-    ["python代码", "#60a5fa"]
-  ];
+  const operationOptions = operationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
 
   const createNode = (item, event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -660,8 +1528,14 @@ function StepWorkbench({ step, onBack }) {
       type: item.label,
       color: item.color,
       title: item.label,
-      locator: "拖入后配置节点定位",
-      x: Math.max(24, (event.clientX - rect.left + event.currentTarget.scrollLeft) / zoomRef.current - 48),
+      tag: "",
+      operationName: "",
+      operationGroup: "",
+      params: [],
+      values: {},
+      locator: "未配置",
+      saved: false,
+      x: Math.max(24, (event.clientX - rect.left + event.currentTarget.scrollLeft) / zoomRef.current - 78),
       y: Math.max(24, (event.clientY - rect.top + event.currentTarget.scrollTop) / zoomRef.current - 24)
     };
 
@@ -763,8 +1637,8 @@ function StepWorkbench({ step, onBack }) {
         node.id === draggingNode.id
           ? {
               ...node,
-              x: Math.max(0, Math.min(canvasSize.width - 92, nextX)),
-              y: Math.max(0, Math.min(canvasSize.height - 44, nextY))
+              x: Math.max(0, Math.min(canvasSize.width - 156, nextX)),
+              y: Math.max(0, Math.min(canvasSize.height - 64, nextY))
             }
           : node
       )
@@ -782,6 +1656,38 @@ function StepWorkbench({ step, onBack }) {
       clientY: event.clientY,
       scrollLeft: canvas.scrollLeft,
       scrollTop: canvas.scrollTop
+    });
+  };
+
+  const updateSelectedNode = (patch) => {
+    if (!selected) return;
+    setNodes((current) => current.map((node) => (node.id === selected.id ? { ...node, ...patch } : node)));
+    setSelectedNode((current) => (current ? { ...current, ...patch } : current));
+  };
+
+  const selectOperation = (tag) => {
+    const item = operationOptions.find((option) => option.tag === tag);
+    if (!item) {
+      updateSelectedNode({
+        operationGroup: "",
+        operationName: "",
+        title: selected.type,
+        tag: "",
+        params: [],
+        values: {},
+        locator: "未配置"
+      });
+      return;
+    }
+    const values = item.params.reduce((result, param) => ({ ...result, [param]: selected?.values?.[param] || "" }), {});
+    updateSelectedNode({
+      operationGroup: item.group,
+      operationName: item.name,
+      title: item.name,
+      tag: item.tag,
+      params: item.params,
+      values,
+      locator: item.params.includes("locating") ? values.locating || "请配置元素定位" : item.params.join(", ") || "无需参数"
     });
   };
 
@@ -822,18 +1728,18 @@ function StepWorkbench({ step, onBack }) {
           <strong>操作面板</strong>
           <p>拖入节点类型</p>
           <div className="palette-list">
-            {palette.map(([label, color]) => (
+            {stepNodeTypes.map((item) => (
               <button
-                className="palette-item"
+                className="palette-item node-type-item"
                 draggable
-                key={label}
+                key={item.label}
                 onDragEnd={() => setDraggingItem(null)}
-                onDragStart={(event) => handleDragStart(event, { label, color })}
-                onMouseDown={() => setDraggingItem({ label, color })}
+                onDragStart={(event) => handleDragStart(event, item)}
+                onMouseDown={() => setDraggingItem(item)}
                 type="button"
               >
-                <span style={{ background: color }} />
-                {label}
+                <span style={{ background: item.color }} />
+                <strong>{item.label}</strong>
               </button>
             ))}
           </div>
@@ -846,6 +1752,8 @@ function StepWorkbench({ step, onBack }) {
               <p>从左侧拖入节点，连接执行顺序后保存画布</p>
             </div>
             <div className="flow-stats">
+              <span className="warning-stat">未保存 {nodes.filter((node) => !node.saved).length}</span>
+              <span className="warning-stat">未连接 {nodes.length > 1 ? 1 : 0}</span>
               <span>节点 {nodes.length}</span>
               <span>连线 {Math.max(0, nodes.length - 1)}</span>
               <span>步骤 {nodes.length}</span>
@@ -891,7 +1799,8 @@ function StepWorkbench({ step, onBack }) {
                       >
                         <span>{node.type}</span>
                         <strong>{node.title}</strong>
-                        <small>{node.locator}</small>
+                        <small>{node.tag || "未配置"}</small>
+                        <em>{node.saved ? "已配置" : "未保存"}</em>
                         <i />
                       </button>
                     ))}
@@ -913,8 +1822,13 @@ function StepWorkbench({ step, onBack }) {
         </main>
 
         <aside className="node-detail">
-          <strong>节点详情</strong>
-          <p>选择画布节点后维护配置</p>
+          <div className="node-detail-title">
+            <div>
+              <strong>节点详情</strong>
+              <p>{selected?.type || "选择画布节点后维护配置"}</p>
+            </div>
+            {selected ? <span>{selected.type}</span> : null}
+          </div>
           <div className="detail-tabs">
             <button className="active" type="button">
               节点配置
@@ -923,17 +1837,30 @@ function StepWorkbench({ step, onBack }) {
           </div>
           {selected ? (
             <div className="node-config">
-              <label className="form-field">
-                <span>节点名称</span>
-                <input className="text-input" readOnly value={selected.title} />
+              <div className="recent-element-box">
+                <strong>最近测试的元素信息</strong>
+                <div>暂无元素信息</div>
+              </div>
+              <div className="node-section-title">节点详情</div>
+              <label className="form-field required-field">
+                <span>元素操作</span>
+                <select className="text-input" value={selected.tag || ""} onChange={(event) => selectOperation(event.target.value)}>
+                  <option value="">请选择元素操作</option>
+                  {operationOptions.map((item) => (
+                    <option key={item.tag} value={item.tag}>
+                      {item.group} / {item.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="form-field">
-                <span>节点类型</span>
-                <input className="text-input" readOnly value={selected.type} />
-              </label>
-              <label className="form-field">
-                <span>定位表达式</span>
-                <textarea className="text-area" readOnly rows="4" value={selected.locator} />
+                <span>备注</span>
+                <textarea
+                  className="text-area"
+                  rows="3"
+                  value={selected.remark || ""}
+                  onChange={(event) => updateSelectedNode({ remark: event.target.value })}
+                />
               </label>
             </div>
           ) : (

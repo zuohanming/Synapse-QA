@@ -42,11 +42,13 @@ func main() {
 	catalogRepo := repository.NewCatalogRepository(db)
 	automationRepo := repository.NewAutomationRepository(db)
 	executorRepo := repository.NewExecutorRepository(db)
+	testCaseRepo := repository.NewTestCaseRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
 	automationService := service.NewAutomationService(automationRepo, systemRepo)
 	executorService := service.NewExecutorService(executorRepo, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token"))
+	testCaseService := service.NewTestCaseService(testCaseRepo, systemRepo)
 
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
@@ -56,6 +58,7 @@ func main() {
 		CatalogController:    controller.NewCatalogController(catalogService),
 		AutomationController: controller.NewAutomationController(automationService),
 		ExecutorController:   controller.NewExecutorController(executorService),
+		TestCaseController:   controller.NewTestCaseController(testCaseService),
 		AuthMiddleware:       controller.AuthMiddleware(systemService),
 	})
 

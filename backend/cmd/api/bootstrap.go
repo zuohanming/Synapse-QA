@@ -157,6 +157,46 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			unique(product_id, env_name)
 		)`,
+		`create table if not exists test_cases (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			module_id bigint references product_modules(id),
+			page_id bigint references ui_assets(id),
+			name text not null,
+			case_type text not null default 'ui',
+			priority text not null default 'P2',
+			status text not null default 'draft',
+			owner text not null default '',
+			tags text not null default '',
+			description text not null default '',
+			preconditions text not null default '',
+			expected_result text not null default '',
+			data_enabled boolean not null default false,
+			created_by text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now(),
+			unique(product_id, name)
+		)`,
+		`create table if not exists test_case_steps (
+			id bigserial primary key,
+			case_id bigint not null references test_cases(id),
+			step_id bigint not null references ui_assets(id),
+			sort_order int not null default 1,
+			note text not null default '',
+			created_at timestamptz not null default now(),
+			unique(case_id, step_id)
+		)`,
+		`create table if not exists test_case_datasets (
+			id bigserial primary key,
+			case_id bigint not null references test_cases(id),
+			name text not null,
+			variables jsonb not null default '{}'::jsonb,
+			enabled boolean not null default true,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			unique(case_id, name)
+		)`,
 		`create table if not exists executors (
 			executor_id text primary key,
 			name text not null,
@@ -204,6 +244,19 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table test_objects add column if not exists write_enabled boolean not null default false`,
 		`alter table test_objects add column if not exists updated_at timestamptz not null default now()`,
 		`alter table test_objects add column if not exists deleted_at timestamptz`,
+		`alter table test_cases add column if not exists module_id bigint references product_modules(id)`,
+		`alter table test_cases add column if not exists page_id bigint references ui_assets(id)`,
+		`alter table test_cases add column if not exists case_type text not null default 'ui'`,
+		`alter table test_cases add column if not exists priority text not null default 'P2'`,
+		`alter table test_cases add column if not exists status text not null default 'draft'`,
+		`alter table test_cases add column if not exists owner text not null default ''`,
+		`alter table test_cases add column if not exists tags text not null default ''`,
+		`alter table test_cases add column if not exists preconditions text not null default ''`,
+		`alter table test_cases add column if not exists expected_result text not null default ''`,
+		`alter table test_cases add column if not exists data_enabled boolean not null default false`,
+		`alter table test_cases add column if not exists created_by text not null default ''`,
+		`alter table test_cases add column if not exists updated_at timestamptz not null default now()`,
+		`alter table test_cases add column if not exists deleted_at timestamptz`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {

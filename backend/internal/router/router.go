@@ -14,6 +14,7 @@ type Dependencies struct {
 	CatalogController    *controller.CatalogController
 	AutomationController *controller.AutomationController
 	ExecutorController   *controller.ExecutorController
+	TestCaseController   *controller.TestCaseController
 	AuthMiddleware       gin.HandlerFunc
 }
 
@@ -35,6 +36,7 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerSystemRoutes(authed, deps)
 	registerConfigRoutes(authed, deps)
 	registerUIRoutes(authed, deps)
+	registerTestCaseRoutes(authed, deps)
 }
 
 func registerSystemRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -88,4 +90,18 @@ func registerUIAssetRoutes(authed *gin.RouterGroup, path string, assetType strin
 	authed.POST(path, deps.AutomationController.CreateUIAsset(assetType))
 	authed.PATCH(path+"/:id", deps.AutomationController.UpdateUIAsset(assetType))
 	authed.DELETE(path+"/:id", deps.AutomationController.DeleteUIAsset(assetType))
+}
+
+func registerTestCaseRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/test-cases", deps.TestCaseController.List)
+	authed.POST("/test-cases", deps.TestCaseController.Create)
+	authed.POST("/test-cases/import", deps.TestCaseController.Import)
+	authed.GET("/test-cases/export", deps.TestCaseController.Export)
+	authed.GET("/test-cases/:id", deps.TestCaseController.Get)
+	authed.PATCH("/test-cases/:id", deps.TestCaseController.Update)
+	authed.DELETE("/test-cases/:id", deps.TestCaseController.Delete)
+	authed.GET("/test-cases/:id/datasets", deps.TestCaseController.ListDatasets)
+	authed.POST("/test-cases/:id/datasets", deps.TestCaseController.CreateDataset)
+	authed.PATCH("/test-cases/:id/datasets/:datasetId", deps.TestCaseController.UpdateDataset)
+	authed.DELETE("/test-cases/:id/datasets/:datasetId", deps.TestCaseController.DeleteDataset)
 }
