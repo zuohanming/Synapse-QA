@@ -27,7 +27,7 @@ function mockFetch() {
       return apiResponse({ items: [{ id: 1, name: "登录成功" }], total: 1 });
     }
     if (target.includes("/api/test-cases/import")) {
-      return apiResponse({ count: 1, message: "测试用例已导入" });
+      return apiResponse(globalThis.__importNoCount ? { message: "测试用例已导入" } : { count: 1, message: "测试用例已导入" });
     }
     if (target.includes("/api/test-cases/1/datasets") && options.method === "POST") {
       return apiResponse({ message: "参数化数据已创建" });
@@ -44,15 +44,15 @@ function mockFetch() {
       }
       return apiResponse({
         id: 1,
-        productName: "演示DEMO/模拟UI",
-        moduleName: "登录",
-        pageName: "登录页",
-        name: "登录成功",
+        productName: globalThis.__sparseDetail ? "" : "演示DEMO/模拟UI",
+        moduleName: globalThis.__sparseDetail ? "" : "登录",
+        pageName: globalThis.__sparseDetail ? "" : "登录页",
+        name: globalThis.__sparseDetail ? "" : "登录成功",
         priority: "P1",
-        status: "active",
-        owner: "admin",
-        steps: [{ id: 1, stepId: 40, stepName: "输入账号" }],
-        datasets: [{ id: 1, name: "默认数据", variables: { username: "admin" }, enabled: true }]
+        status: globalThis.__sparseDetail ? "" : "active",
+        owner: globalThis.__sparseDetail ? "" : "admin",
+        steps: globalThis.__emptyDetailSteps ? [] : [{ id: 1, stepId: 40, stepName: globalThis.__sparseDetail ? "" : "输入账号" }],
+        datasets: globalThis.__sparseDetail ? undefined : [{ id: 1, name: "默认数据", variables: { username: "admin" }, enabled: true }]
       });
     }
     if (target.includes("/api/test-cases/1") && options.method === "DELETE") {
@@ -83,17 +83,17 @@ function mockFetch() {
           : [
           {
             id: 1,
-            productId: 10,
-            moduleId: 20,
-            pageId: 30,
-            productName: "演示DEMO/模拟UI",
-            moduleName: "登录",
-            pageName: "登录页",
-            name: "登录成功",
+            productId: globalThis.__sparseCase ? 0 : 10,
+            moduleId: globalThis.__sparseCase ? 0 : 20,
+            pageId: globalThis.__sparseCase ? 0 : 30,
+            productName: globalThis.__missingRowNames ? "" : "演示DEMO/模拟UI",
+            moduleName: globalThis.__missingRowNames ? "" : "登录",
+            pageName: globalThis.__missingRowNames ? "" : "登录页",
+            name: globalThis.__sparseCase ? "" : "登录成功",
             priority: "P1",
             status: globalThis.__caseStatus || "active",
             owner: globalThis.__missingOwner ? "" : "admin",
-            steps: [{ stepId: 40, stepName: "输入账号" }],
+            steps: globalThis.__sparseCase ? undefined : [{ stepId: 40, stepName: "输入账号" }],
             updatedAt: "2026-06-17T10:00:00Z"
           }
         ],
@@ -135,6 +135,11 @@ describe("UIAutomationPage 测试用例页", () => {
     delete globalThis.__emptyCases;
     delete globalThis.__caseStatus;
     delete globalThis.__missingOwner;
+    delete globalThis.__missingRowNames;
+    delete globalThis.__sparseCase;
+    delete globalThis.__sparseDetail;
+    delete globalThis.__emptyDetailSteps;
+    delete globalThis.__importNoCount;
     delete globalThis.__listFails;
     delete globalThis.__detailFails;
     delete globalThis.__exportFails;
