@@ -15,6 +15,7 @@ type fakeTestCaseRepo struct {
 	productExists bool
 	missingSteps  int64
 	createID      int64
+	listErr       error
 	getErr        error
 	createErr     error
 	updateErr     error
@@ -35,6 +36,9 @@ func (f *fakeOperationLogger) LogOperation(ctx context.Context, actor, action, t
 }
 
 func (f *fakeTestCaseRepo) List(ctx context.Context, filter model.TestCaseFilter, page, pageSize int) ([]model.TestCase, int64, error) {
+	if f.listErr != nil {
+		return nil, 0, f.listErr
+	}
 	return []model.TestCase{{ID: 1, Name: "登录成功"}}, 1, nil
 }
 
@@ -255,6 +259,51 @@ func TestTestCaseServiceUpdateAndDeleteSuccess(t *testing.T) {
 	}
 	if err := svc.Delete(context.Background(), "admin", 0); err == nil {
 		t.Fatal("expected invalid delete id error")
+	}
+}
+
+func TestTestCaseServiceImportAndExport(t *testing.T) {
+	repo := &fakeTestCaseRepo{productExists: true, createID: 9}
+	logger := &fakeOperationLogger{}
+	svc := NewTestCaseServiceWithLogger(repo, logger)
+	count, err := svc.Import(context.Background(), "admin", model.TestCaseImportRequest{Items: []model.TestCaseRequest{validTestCaseRequest()}})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected imported count 1, got %d", count)
+	}
+	items, err := svc.Export(context.Background(), model.TestCaseFilter{Name: " 登录 "})
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "登录成功" {
+		t.Fatalf("unexpected export items: %+v", items)
+	}
+	if logger.calls < 2 {
+		t.Fatalf("expected import logs, got %d", logger.calls)
+	}
+}
+
+func TestTestCaseServiceImportAndExportFailures(t *testing.T) {
+	svc := NewTestCaseService(&fakeTestCaseRepo{productExists: true}, nil)
+	if _, err := svc.Import(context.Background(), "admin", model.TestCaseImportRequest{}); err == nil {
+		t.Fatal("expected empty import error")
+	}
+	items := make([]model.TestCaseRequest, 201)
+	for i := range items {
+		items[i] = validTestCaseRequest()
+	}
+	if _, err := svc.Import(context.Background(), "admin", model.TestCaseImportRequest{Items: items}); err == nil {
+		t.Fatal("expected import size error")
+	}
+	bad := validTestCaseRequest()
+	bad.Name = ""
+	if _, err := svc.Import(context.Background(), "admin", model.TestCaseImportRequest{Items: []model.TestCaseRequest{bad}}); err == nil {
+		t.Fatal("expected import validation error")
+	}
+	if _, err := NewTestCaseService(&fakeTestCaseRepo{listErr: errors.New("db")}, nil).Export(context.Background(), model.TestCaseFilter{}); err == nil {
+		t.Fatal("expected export list error")
 	}
 }
 

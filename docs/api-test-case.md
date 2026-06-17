@@ -80,6 +80,39 @@ DELETE /api/test-cases/{id}
 
 软删除测试用例。
 
+## 导入测试用例
+
+```http
+POST /api/test-cases/import
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "productId": 1,
+      "moduleId": 2,
+      "pageId": 3,
+      "name": "登录成功",
+      "caseType": "ui",
+      "priority": "P1",
+      "status": "active",
+      "owner": "admin",
+      "stepIds": [10, 11]
+    }
+  ]
+}
+```
+
+单次最多导入 200 条。导入时逐条复用创建接口校验规则。
+
+## 导出测试用例
+
+```http
+GET /api/test-cases/export?name=登录&productId=1&status=active
+```
+
+查询参数同分页查询接口，返回当前筛选条件下最多 10000 条测试用例。
+
 ## 查询参数化数据
 
 ```http

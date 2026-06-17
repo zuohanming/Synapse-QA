@@ -26,6 +26,14 @@ export default defineConfig({
   optimizeDeps: {
     esbuildCommonjs: { loader: { ".js": "jsx" } }
   },
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.js",
+    exclude: ["node_modules/**", "dist/**", "e2e/**"],
+    coverage: {
+      include: ["src/pages/TestCasesPage.js", "src/services/uiAutomationService.js"]
+    }
+  },
   server: {
     host: "127.0.0.1",
     port: 4173

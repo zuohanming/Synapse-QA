@@ -119,8 +119,10 @@ func testCaseRouterWithRepo(authenticated bool, repo *controllerFakeTestCaseRepo
 		})
 	}
 	r.GET("/test-cases", ctl.List)
-	r.GET("/test-cases/:id", ctl.Get)
 	r.POST("/test-cases", ctl.Create)
+	r.POST("/test-cases/import", ctl.Import)
+	r.GET("/test-cases/export", ctl.Export)
+	r.GET("/test-cases/:id", ctl.Get)
 	r.PATCH("/test-cases/:id", ctl.Update)
 	r.DELETE("/test-cases/:id", ctl.Delete)
 	r.GET("/test-cases/:id/datasets", ctl.ListDatasets)
@@ -162,6 +164,29 @@ func TestTestCaseControllerCRUD(t *testing.T) {
 		{http.MethodPost, "/test-cases", body, http.StatusCreated},
 		{http.MethodPatch, "/test-cases/1", body, http.StatusOK},
 		{http.MethodDelete, "/test-cases/1", nil, http.StatusOK},
+	}
+	r := testCaseRouter(true)
+	for _, item := range cases {
+		req := httptest.NewRequest(item.method, item.path, bytes.NewReader(item.body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != item.code {
+			t.Fatalf("%s %s expected %d, got %d: %s", item.method, item.path, item.code, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestTestCaseControllerImportAndExport(t *testing.T) {
+	body, _ := json.Marshal(model.TestCaseImportRequest{Items: []model.TestCaseRequest{{ProductID: 1, Name: "导入用例", CaseType: "ui", Priority: "P1", Status: "active"}}})
+	cases := []struct {
+		method string
+		path   string
+		body   []byte
+		code   int
+	}{
+		{http.MethodPost, "/test-cases/import", body, http.StatusCreated},
+		{http.MethodGet, "/test-cases/export", nil, http.StatusOK},
 	}
 	r := testCaseRouter(true)
 	for _, item := range cases {
@@ -224,6 +249,7 @@ func TestTestCaseControllerInvalidInputs(t *testing.T) {
 		{http.MethodPatch, "/test-cases/1/datasets/bad", []byte(`{}`)},
 		{http.MethodDelete, "/test-cases/1/datasets/bad", nil},
 		{http.MethodPost, "/test-cases", []byte(`{`)},
+		{http.MethodPost, "/test-cases/import", []byte(`{`)},
 		{http.MethodPost, "/test-cases/1/datasets", []byte(`{`)},
 	}
 	for _, item := range cases {
@@ -246,6 +272,7 @@ func TestTestCaseControllerAuthFailures(t *testing.T) {
 		body   []byte
 	}{
 		{http.MethodPost, "/test-cases", body},
+		{http.MethodPost, "/test-cases/import", []byte(`{"items":[]}`)},
 		{http.MethodPatch, "/test-cases/1", body},
 		{http.MethodDelete, "/test-cases/1", nil},
 		{http.MethodPost, "/test-cases/1/datasets", datasetBody},
@@ -286,6 +313,8 @@ func TestTestCaseControllerServiceFailures(t *testing.T) {
 	}{
 		{http.MethodGet, "/test-cases", nil, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{productExists: true, listErr: true}), http.StatusBadRequest},
 		{http.MethodGet, "/test-cases/1", nil, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{productExists: true, getErr: true}), http.StatusNotFound},
+		{http.MethodGet, "/test-cases/export", nil, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{productExists: true, listErr: true}), http.StatusBadRequest},
+		{http.MethodPost, "/test-cases/import", []byte(`{"items":[]}`), testCaseRouter(true), http.StatusBadRequest},
 		{http.MethodPatch, "/test-cases/1", body, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{productExists: false}), http.StatusBadRequest},
 		{http.MethodDelete, "/test-cases/1", nil, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{deleteMissing: true}), http.StatusBadRequest},
 		{http.MethodDelete, "/test-cases/1", nil, testCaseRouterWithRepo(true, &controllerFakeTestCaseRepo{deleteRows: -1}), http.StatusOK},
