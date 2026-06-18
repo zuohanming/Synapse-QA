@@ -49,10 +49,10 @@ test-case 新增后端函数级覆盖率均不低于 85%。当前 Go 包级总�
 
 前端覆盖率结果：
 
-- Statements：90.9%
-- Functions：85.26%
-- Lines：91.74%
-- Branches：69.36%
+- Statements：99.09%
+- Branches：91.9%
+- Functions：97.89%
+- Lines：99.02%
 
 Playwright 关键 E2E：1 passed。
 

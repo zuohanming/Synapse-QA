@@ -174,6 +174,15 @@ describe("UIAutomationPage 测试用例页", () => {
     expect(screen.getAllByText("-").length).toBeGreaterThan(0);
   });
 
+  it("渲染表格兜底字段和停用状态", async () => {
+    globalThis.__missingRowNames = true;
+    globalThis.__missingOwner = true;
+    globalThis.__caseStatus = "disabled";
+    render(<TestCasesPage />);
+    expect(await screen.findByText("停用")).toBeInTheDocument();
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(4);
+  });
+
   it("按名称筛选测试用例", async () => {
     render(<TestCasesPage />);
     await screen.findByText("登录成功");
@@ -196,6 +205,31 @@ describe("UIAutomationPage 测试用例页", () => {
     fireEvent.change(screen.getByDisplayValue("20 条/页"), { target: { value: "50" } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("pageSize=50"), expect.any(Object));
+    });
+  });
+
+  it("筛选联动产品模块页面并切换全选状态", async () => {
+    const { container } = render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    const selects = container.querySelectorAll("form.filter-grid select");
+    fireEvent.change(selects[0], { target: { value: "10" } });
+    await screen.findByText("登录");
+    fireEvent.change(selects[1], { target: { value: "20" } });
+    await screen.findAllByText("登录页");
+    fireEvent.change(selects[2], { target: { value: "30" } });
+    fireEvent.change(selects[3], { target: { value: "P1" } });
+    fireEvent.change(selects[4], { target: { value: "active" } });
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    fireEvent.click(checkboxes[0]);
+    expect(checkboxes[1]).toBeChecked();
+    fireEvent.click(checkboxes[1]);
+    expect(checkboxes[0]).not.toBeChecked();
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(checkboxes[0]);
+    expect(checkboxes[1]).not.toBeChecked();
+    fireEvent.click(screen.getByText("搜索"));
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("productId=10"), expect.any(Object));
     });
   });
 
@@ -307,6 +341,21 @@ describe("UIAutomationPage 测试用例页", () => {
     expect(await screen.findByText("保存失败")).toBeInTheDocument();
   });
 
+  it("编辑稀疏测试用例时使用默认表单值", async () => {
+    globalThis.__sparseCase = true;
+    render(<TestCasesPage />);
+    await screen.findByText("P1");
+    fireEvent.click(screen.getByText("编辑"));
+    const modal = document.querySelector(".modal-card");
+    const selects = within(modal).getAllByRole("combobox");
+    expect(selects[3]).toHaveValue("ui");
+    expect(selects[4]).toHaveValue("P1");
+    fireEvent.click(within(modal).getByText("取消"));
+    await waitFor(() => {
+      expect(document.querySelector(".modal-card")).not.toBeInTheDocument();
+    });
+  });
+
   it("查看详情并维护参数化数据", async () => {
     render(<TestCasesPage />);
     await screen.findByText("登录成功");
@@ -335,6 +384,24 @@ describe("UIAutomationPage 测试用例页", () => {
     await waitFor(() => {
       expect(screen.queryByText("测试用例详情 / 1 / 登录成功")).not.toBeInTheDocument();
     });
+  });
+
+  it("详情页显示空字段、空步骤和步骤 ID 兜底", async () => {
+    globalThis.__sparseDetail = true;
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByText("详情"));
+    expect(await screen.findByText("40")).toBeInTheDocument();
+    expect(screen.getAllByText(/：-/).length).toBeGreaterThan(0);
+    cleanup();
+
+    globalThis.__sparseDetail = false;
+    globalThis.__emptyDetailSteps = true;
+    mockFetch();
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByText("详情"));
+    expect(await screen.findByText("暂无关联步骤")).toBeInTheDocument();
   });
 
   it("批量删除并处理参数化数据删除失败", async () => {
@@ -370,10 +437,13 @@ describe("UIAutomationPage 测试用例页", () => {
       expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/test-cases/1"), expect.objectContaining({ method: "DELETE" }));
     });
     const file = new File([JSON.stringify([{ productId: 10, name: "导入用例" }])], "cases.json", { type: "application/json" });
+    globalThis.__importNoCount = true;
     fireEvent.change(screen.getByLabelText("导入"), { target: { files: [file] } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/test-cases/import"), expect.objectContaining({ method: "POST" }));
     });
+    expect(await screen.findByText("已导入 1 条测试用例。")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("导入"), { target: { files: [] } });
     const invalidFile = new File([JSON.stringify({ item: [] })], "invalid.json", { type: "application/json" });
     fireEvent.change(screen.getByLabelText("导入"), { target: { files: [invalidFile] } });
     expect(await screen.findByText("导入文件必须是数组或包含 items 数组")).toBeInTheDocument();

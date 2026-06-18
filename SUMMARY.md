@@ -70,18 +70,16 @@ go tool cover -func testcase-cover.out
 - test-case 新增函数级覆盖率全部不低于 85%。
 - Go 包级总覆盖率为 25.3%。原因是 Go 覆盖率按包统计，`controller`、`service`、`repository` 包中包含大量既有非 test-case 代码。
 - 前端覆盖率：
-  - Statements：90.9%
-  - Functions：85.26%
-  - Lines：91.74%
-  - Branches：69.36%
+  - Statements：99.09%
+  - Branches：91.9%
+  - Functions：97.89%
+  - Lines：99.02%
 - Playwright 关键 E2E：1 passed。
 
 ## 剩余说明
 
-- 前端 branch 覆盖率为 69.36%，低于 85%；当前停止条件只写“覆盖率 ≥ 85%”，未明确要求 branch 指标。
 - 后端包级总覆盖率受既有非 test-case 代码影响为 25.3%，但 test-case 新增函数均已达到 85% 以上。
 
 ## 后续建议
 
-- 如要求所有覆盖率维度均达到 85%，需要继续补 branch 覆盖。
 - 如要求 Go 包级覆盖率达到 85%，需要扩大测试范围，补测同包内既有 controller/service/repository 代码。

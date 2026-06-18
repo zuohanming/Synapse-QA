@@ -29,6 +29,6 @@
 - 后端实现已完成并通过 `go test ./...`、`go vet ./...`、`go build ./cmd/api`。
 - 前端测试用例页面已接入 `/api/test-cases` 并通过 `npm run build`、`npm test`、`npm run test:coverage`、`npm run e2e`。
 - test-case 新增后端函数级覆盖率已达到 85% 以上。
-- 前端覆盖率：Statements 90.9%、Functions 85.26%、Lines 91.74%、Branches 69.36%。
+- 前端覆盖率：Statements 99.09%、Branches 91.9%、Functions 97.89%、Lines 99.02%。
 - Playwright 关键 E2E 已通过：1 passed。
 - 后端包级总覆盖率为 25.3%，原因是同包包含大量既有非 test-case 代码；test-case 新增函数级覆盖率均不低于 85%。
