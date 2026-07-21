@@ -1,0 +1,51 @@
+{
+  "id": 1,
+  "runType": "ui",
+  "status": "completed",
+  "triggeredBy": "admin",
+  "caseIds": null,
+  "summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+  },
+  "startedAt": "2026-07-21T17:22:15.744683+08:00",
+  "finishedAt": "2026-07-21T17:22:18.594933+08:00",
+  "createdAt": "2026-07-21T17:22:15.730998+08:00",
+  "updatedAt": "2026-07-21T17:22:18.596184+08:00",
+  "tasks": [
+    {
+      "id": 1,
+      "runId": 1,
+      "taskId": "task-1784625735773546000-1784625735773546",
+      "caseId": 23,
+      "executorId": "local-python-executor",
+      "taskType": "ui",
+      "payload": {
+        "url": "http://127.0.0.1:4173/e2e-target.html",
+        "caseId": 23,
+        "actions": [
+          {
+            "text": "Synapse QA E2E Target",
+            "action": "assertTitle",
+            "selector": "E2E-目标页-20260721-172215"
+          }
+        ],
+        "caseName": "E2E-完整流程-20260721-172215"
+      },
+      "callbackUrl": "http://127.0.0.1:8080/api/executions/tasks/task-1784625735773546000-1784625735773546/callback",
+      "status": "success",
+      "result": {
+        "error": "",
+        "output": "goto http://127.0.0.1:4173/e2e-target.html\nassertTitle Synapse QA E2E Target",
+        "exitCode": 0,
+        "artifacts": []
+      },
+      "startedAt": null,
+      "finishedAt": "2026-07-21T17:22:18.586985+08:00",
+      "createdAt": "2026-07-21T17:22:15.775045+08:00",
+      "updatedAt": "2026-07-21T17:22:18.59255+08:00"
+    }
+  ]
+}

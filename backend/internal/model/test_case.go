@@ -33,6 +33,10 @@ type TestCaseStep struct {
 	CaseID    int64     `json:"caseId"`
 	StepID    int64     `json:"stepId"`
 	StepName  string    `json:"stepName"`
+	Action    string    `json:"action"`
+	Locator   string    `json:"locator"`
+	Value     string    `json:"value"`
+	Method    string    `json:"method"`
 	SortOrder int       `json:"sortOrder"`
 	Note      string    `json:"note"`
 	CreatedAt time.Time `json:"createdAt"`

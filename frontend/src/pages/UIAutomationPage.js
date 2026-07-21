@@ -1,7 +1,9 @@
 ﻿import { useMemo, useRef, useState } from "react";
+import { useEffect } from "react";
 import { TestCasesPage } from "./TestCasesPage.js";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
+import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
@@ -48,6 +50,8 @@ const emptyStepForm = {
   category: "",
   method: "",
   locator: "",
+  action: "",
+  value: "",
   description: "",
   status: "active"
 };
@@ -230,6 +234,45 @@ const operationGroups = [
   }
 ];
 
+const visibleOperationGroups = operationGroups.filter(
+  (group) => group.title !== "WEB 定制开发" && !group.title.startsWith("安卓 ")
+);
+
+const operationParamLabels = {
+  _time: "等待时间",
+  locating: "选择元素",
+  locating1: "选择元素 A",
+  locating2: "选择元素 B",
+  input_value: "输入内容",
+  url: "URL 地址",
+  path: "保存路径",
+  file_path: "文件路径",
+  file_name: "文件名称",
+  storage_state: "Cookie 数据",
+  set_cache_key: "缓存变量名",
+  file_key: "文件变量名",
+  keyboard: "按键",
+  text: "文本内容",
+  count: "数量",
+  package_name: "应用包名",
+  catalogue: "目录",
+  time_: "等待时间",
+  n: "数值",
+  individual: "页签序号",
+  x: "横坐标 X",
+  y: "纵坐标 Y",
+  sx: "起点 X",
+  sy: "起点 Y",
+  ex: "终点 X",
+  ey: "终点 Y",
+  x_key: "X 坐标变量名",
+  y_key: "Y 坐标变量名"
+};
+
+function operationGroupLabel(title = "") {
+  return title.startsWith("WEB ") ? title.slice(4) : title.replace(/^安卓 /, "安卓·");
+}
+
 const stepNodeTypes = [
   { label: "元素操作", color: "#10b981" },
   { label: "断言操作", color: "#2548b8" },
@@ -258,23 +301,23 @@ export function UIAutomationPage({ activePath }) {
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
   return (
-    <>
-      <PageHeader title={section} description="界面自动化资产管理" />
-      <StateBlock loading={loading} error={error}>
-        <DataTable
-          rows={pageItems(data)}
-          columns={[
-            { key: "id", title: "ID" },
-            { key: "name", title: "名称" },
-            { key: "category", title: "分类" },
-            { key: "method", title: "模块/方法" },
-            { key: "locator", title: "定位/地址" },
-            { key: "status", title: "状态" },
-            { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) }
-          ]}
-        />
-      </StateBlock>
-    </>
+    <ResourceListPage
+      title={section}
+      description="界面自动化资产管理"
+      panelTitle={`${section}列表`}
+      rows={pageItems(data)}
+      loading={loading}
+      error={error}
+      columns={[
+        { key: "id", title: "ID" },
+        { key: "name", title: "名称" },
+        { key: "category", title: "分类" },
+        { key: "method", title: "模块/方法" },
+        { key: "locator", title: "定位/地址" },
+        { key: "status", title: "状态" },
+        { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) }
+      ]}
+    />
   );
 }
 
@@ -669,6 +712,8 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
           category: source.category || "",
           method: source.method || "",
           locator: source.locator || "",
+          action: source.action || "",
+          value: source.value || "",
           description: source.description || "",
           status: source.status || "active"
         }
@@ -724,8 +769,8 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
         category: form.category.trim(),
         method: form.method.trim(),
         locator: form.locator.trim(),
-        action: "",
-        value: "",
+        action: form.action,
+        value: form.value.trim(),
         description: form.description.trim(),
         status: form.status || "active"
       },
@@ -790,17 +835,6 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
             <span>步骤名称</span>
             <input className="text-input" placeholder="请输入页面步骤名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           </label>
-          <label className="form-field form-field-inline">
-            <span>状态</span>
-            <select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
-              <option value="active">通过</option>
-              <option value="disabled">失败</option>
-            </select>
-          </label>
-          <label className="form-field field-span-2">
-            <span>预估步骤顺序</span>
-            <textarea className="text-area" rows="3" placeholder="例如：-> 设置 -> 点击 -> 结果" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
-          </label>
         </div>
         {error ? <div className="form-error modal-error">{error}</div> : null}
         <div className="modal-actions">
@@ -818,18 +852,80 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
 
 function StepWorkbench({ step, onBack }) {
   const [nodes, setNodes] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [nodeSeq, setNodeSeq] = useState(1);
   const [selectedNode, setSelectedNode] = useState(null);
   const [draggingItem, setDraggingItem] = useState(null);
   const [draggingNode, setDraggingNode] = useState(null);
   const [panningCanvas, setPanningCanvas] = useState(null);
   const [zoom, setZoom] = useState(1);
+  const [configError, setConfigError] = useState("");
+  const [operationMenuOpen, setOperationMenuOpen] = useState(false);
+  const [activeOperationGroup, setActiveOperationGroup] = useState(visibleOperationGroups[0].title);
+  const [pageElementOptions, setPageElementOptions] = useState([]);
+  const [pageElementsLoading, setPageElementsLoading] = useState(false);
+  const [toast, setToast] = useState("");
+  const [connectingFrom, setConnectingFrom] = useState(null);
   const canvasRef = useRef(null);
+  const operationPickerRef = useRef(null);
   const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
   const selected = selectedNode ? nodes.find((node) => node.id === selectedNode.id) || selectedNode : null;
   const canvasSize = { width: 1200, height: 720 };
   const operationOptions = operationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
+  const activeGroup = visibleOperationGroups.find((group) => group.title === activeOperationGroup) || visibleOperationGroups[0];
+  const operationDisplay = selected?.tag
+    ? `${operationGroupLabel(selected.operationGroup)} / ${selected.operationName}`
+    : "请选择元素操作";
+  const connectionCount = connections.length;
+  const connectedNodeIds = new Set(connections.flatMap((connection) => [connection.from, connection.to]));
+  const unconnectedCount = nodes.filter((node) => !connectedNodeIds.has(node.id)).length;
+
+  useEffect(() => {
+    const closeOperationMenu = (event) => {
+      if (!operationPickerRef.current?.contains(event.target)) setOperationMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOperationMenu);
+    return () => document.removeEventListener("mousedown", closeOperationMenu);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function loadPageElements() {
+      setPageElementsLoading(true);
+      try {
+        const pages = await uiAutomationService.elements.list({ pageName: step.locator || "", page: 1, pageSize: 100 });
+        const pageRows = pageItems(pages);
+        const pageRow = pageRows.find((item) => item.name === step.locator) || pageRows[0];
+        if (!pageRow) {
+          if (active) setPageElementOptions([]);
+          return;
+        }
+        const elements = await uiAutomationService.pageElements.list({ pageId: pageRow.id, page: 1, pageSize: 200 });
+        if (active) {
+          setPageElementOptions(
+            pageItems(elements)
+              .map((item) => ({ id: item.id, name: item.name, locator: item.locator1 || item.locator2 || item.locator3 || "" }))
+              .filter((item) => item.locator)
+          );
+        }
+      } catch {
+        if (active) setPageElementOptions([]);
+      } finally {
+        if (active) setPageElementsLoading(false);
+      }
+    }
+    loadPageElements();
+    return () => {
+      active = false;
+    };
+  }, [step.locator]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(""), 2200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const createNode = (item, event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -849,8 +945,12 @@ function StepWorkbench({ step, onBack }) {
       y: Math.max(24, (event.clientY - rect.top + event.currentTarget.scrollTop) / zoomRef.current - 24)
     };
 
+    const previousNode = nodes[nodes.length - 1];
     setNodeSeq((value) => value + 1);
     setNodes((current) => [...current, nextNode]);
+    if (previousNode) {
+      setConnections((current) => [...current, { from: previousNode.id, to: nextNode.id }]);
+    }
     setSelectedNode(nextNode);
   };
 
@@ -969,6 +1069,49 @@ function StepWorkbench({ step, onBack }) {
     });
   };
 
+  const startConnection = (event, node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setConnectingFrom(node.id);
+    setSelectedNode(node);
+    setToast("请选择目标节点");
+  };
+
+  const completeConnection = (event, node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!connectingFrom) return;
+    if (connectingFrom === node.id) {
+      setToast("不能连接当前节点");
+      return;
+    }
+    const remainingConnections = connections.filter((connection) => connection.from !== connectingFrom && connection.to !== node.id);
+    let cursor = node.id;
+    const visited = new Set();
+    while (cursor && !visited.has(cursor)) {
+      if (cursor === connectingFrom) {
+        setToast("不能形成循环连接");
+        return;
+      }
+      visited.add(cursor);
+      cursor = remainingConnections.find((connection) => connection.from === cursor)?.to;
+    }
+    setConnections([...remainingConnections, { from: connectingFrom, to: node.id }]);
+    setConnectingFrom(null);
+    setSelectedNode(node);
+    setToast("连接成功");
+  };
+
+  const deleteSelectedNode = () => {
+    if (!selected) return;
+    setNodes((current) => current.filter((node) => node.id !== selected.id));
+    setConnections((current) => current.filter((connection) => connection.from !== selected.id && connection.to !== selected.id));
+    if (connectingFrom === selected.id) setConnectingFrom(null);
+    setSelectedNode(null);
+    setConfigError("");
+    setToast("节点已删除");
+  };
+
   const updateSelectedNode = (patch) => {
     if (!selected) return;
     setNodes((current) => current.map((node) => (node.id === selected.id ? { ...node, ...patch } : node)));
@@ -976,6 +1119,8 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const selectOperation = (tag) => {
+    setConfigError("");
+    setOperationMenuOpen(false);
     const item = operationOptions.find((option) => option.tag === tag);
     if (!item) {
       updateSelectedNode({
@@ -985,7 +1130,8 @@ function StepWorkbench({ step, onBack }) {
         tag: "",
         params: [],
         values: {},
-        locator: "未配置"
+        locator: "未配置",
+        saved: false
       });
       return;
     }
@@ -997,8 +1143,40 @@ function StepWorkbench({ step, onBack }) {
       tag: item.tag,
       params: item.params,
       values,
-      locator: item.params.includes("locating") ? values.locating || "请配置元素定位" : item.params.join(", ") || "无需参数"
+      locator: item.params.includes("locating") ? values.locating || "请配置元素定位" : item.params.join(", ") || "无需参数",
+      saved: false
     });
+  };
+
+  const toggleOperationMenu = () => {
+    if (!operationMenuOpen) {
+      const selectedGroupVisible = visibleOperationGroups.some((group) => group.title === selected?.operationGroup);
+      setActiveOperationGroup(selectedGroupVisible ? selected.operationGroup : visibleOperationGroups[0].title);
+    }
+    setOperationMenuOpen((open) => !open);
+  };
+
+  const updateOperationParam = (param, value) => {
+    setConfigError("");
+    updateSelectedNode({ values: { ...selected.values, [param]: value }, saved: false });
+  };
+
+  const saveNodeConfig = () => {
+    if (!selected.tag) {
+      setConfigError("请选择元素操作");
+      return;
+    }
+    const missingParam = selected.params.find((param) => !String(selected.values?.[param] || "").trim());
+    if (missingParam) {
+      setConfigError(`请输入${operationParamLabels[missingParam] || missingParam}`);
+      return;
+    }
+    setConfigError("");
+    updateSelectedNode({
+      saved: true,
+      locator: selected.params.includes("locating") ? selected.values.locating : selected.params.length ? "参数已配置" : "无需参数"
+    });
+    setToast("保存成功");
   };
 
   const handleWheel = (event) => {
@@ -1013,9 +1191,8 @@ function StepWorkbench({ step, onBack }) {
   return (
     <section className="step-workbench">
       <div className="step-workbench-header">
-        <div>
-          <h2>页面步骤工作台 / {step.id} / {step.name || "-"}</h2>
-          <p>编排页面步骤、维护节点配置，并查看最近一次调试结果</p>
+        <div className="toolbar-title">
+          <strong>页面步骤工作台 / {step.id} / {step.name || "-"}</strong>
         </div>
         <div className="action-row">
           <button className="icon-text-button compact-button" type="button">
@@ -1035,8 +1212,9 @@ function StepWorkbench({ step, onBack }) {
 
       <div className="step-workbench-grid">
         <aside className="step-palette">
-          <strong>操作面板</strong>
-          <p>拖入节点类型</p>
+          <div className="toolbar-title">
+            <strong>操作面板</strong>
+          </div>
           <div className="palette-list">
             {stepNodeTypes.map((item) => (
               <button
@@ -1057,15 +1235,15 @@ function StepWorkbench({ step, onBack }) {
 
         <main className="flow-panel">
           <div className="flow-panel-header">
-            <div>
+            <div className="toolbar-title">
               <strong>流程画布</strong>
-              <p>从左侧拖入节点，连接执行顺序后保存画布</p>
+              {connectingFrom ? <small className="connection-mode-tip">请选择目标节点左侧连接点</small> : null}
             </div>
             <div className="flow-stats">
               <span className="warning-stat">未保存 {nodes.filter((node) => !node.saved).length}</span>
-              <span className="warning-stat">未连接 {nodes.length > 1 ? 1 : 0}</span>
+              <span className="warning-stat">未连接 {unconnectedCount}</span>
               <span>节点 {nodes.length}</span>
-              <span>连线 {Math.max(0, nodes.length - 1)}</span>
+              <span>连线 {connectionCount}</span>
               <span>步骤 {nodes.length}</span>
             </div>
           </div>
@@ -1099,20 +1277,50 @@ function StepWorkbench({ step, onBack }) {
               <>
                 <div className="canvas-content" style={{ height: canvasSize.height * zoom, width: canvasSize.width * zoom }}>
                   <div className="free-node-layer" style={{ height: canvasSize.height, transform: `scale(${zoom})`, width: canvasSize.width }}>
+                    <svg className="flow-connections" height={canvasSize.height} width={canvasSize.width} aria-hidden="true">
+                      <defs>
+                        <marker id="flow-arrow" markerHeight="7" markerWidth="8" orient="auto" refX="7" refY="3.5">
+                          <path d="M0,0 L8,3.5 L0,7 Z" />
+                        </marker>
+                      </defs>
+                      {connections.map((connection) => {
+                        const node = nodes.find((item) => item.id === connection.from);
+                        const nextNode = nodes.find((item) => item.id === connection.to);
+                        if (!node || !nextNode) return null;
+                        const startX = node.x + 156;
+                        const startY = node.y + 32;
+                        const endX = nextNode.x;
+                        const endY = nextNode.y + 32;
+                        const curve = Math.max(55, Math.abs(endX - startX) / 2);
+                        return (
+                          <path
+                            className="flow-connection-path"
+                            d={`M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`}
+                            key={`${connection.from}-${connection.to}`}
+                            markerEnd="url(#flow-arrow)"
+                          />
+                        );
+                      })}
+                    </svg>
                     {nodes.map((node) => (
-                      <button
-                        className={selected?.id === node.id ? "flow-node active" : "flow-node"}
+                      <div
+                        className={`${selected?.id === node.id ? "flow-node active" : "flow-node"}${connectingFrom === node.id ? " is-connecting" : ""}`}
                         key={node.id}
                         onMouseDown={(event) => handleNodeMouseDown(event, node)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") setSelectedNode(node);
+                        }}
+                        role="button"
                         style={{ borderLeftColor: node.color, left: node.x, top: node.y }}
-                        type="button"
+                        tabIndex="0"
                       >
+                        <button aria-label={`连接到${node.title}`} className="node-port input-port" onClick={(event) => completeConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
                         <span>{node.type}</span>
                         <strong>{node.title}</strong>
                         <small>{node.tag || "未配置"}</small>
                         <em>{node.saved ? "已配置" : "未保存"}</em>
-                        <i />
-                      </button>
+                        <button aria-label={`从${node.title}开始连接`} className="node-port output-port" onClick={(event) => startConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1152,17 +1360,82 @@ function StepWorkbench({ step, onBack }) {
                 <div>暂无元素信息</div>
               </div>
               <div className="node-section-title">节点详情</div>
-              <label className="form-field required-field">
+              <div className="form-field required-field">
                 <span>元素操作</span>
-                <select className="text-input" value={selected.tag || ""} onChange={(event) => selectOperation(event.target.value)}>
-                  <option value="">请选择元素操作</option>
-                  {operationOptions.map((item) => (
-                    <option key={item.tag} value={item.tag}>
-                      {item.group} / {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <div className="operation-cascader" ref={operationPickerRef}>
+                  <button
+                    aria-expanded={operationMenuOpen}
+                    aria-haspopup="listbox"
+                    className={operationMenuOpen ? "operation-cascader-trigger is-open" : "operation-cascader-trigger"}
+                    onClick={toggleOperationMenu}
+                    type="button"
+                  >
+                    <span className={selected.tag ? "" : "placeholder"}>{operationDisplay}</span>
+                    <i>⌄</i>
+                  </button>
+                  {operationMenuOpen ? (
+                    <div className="operation-cascader-menu">
+                      <div className="operation-group-list" role="listbox" aria-label="操作分类">
+                        {visibleOperationGroups.map((group) => (
+                          <button
+                            aria-selected={activeGroup.title === group.title}
+                            className={activeGroup.title === group.title ? "active" : ""}
+                            key={group.title}
+                            onClick={() => setActiveOperationGroup(group.title)}
+                            onMouseEnter={() => setActiveOperationGroup(group.title)}
+                            type="button"
+                          >
+                            <span>{operationGroupLabel(group.title)}</span><i>›</i>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="operation-item-list" role="listbox" aria-label={operationGroupLabel(activeGroup.title)}>
+                        {activeGroup.items.map((item) => (
+                          <button
+                            aria-selected={selected.tag === item.tag}
+                            className={selected.tag === item.tag ? "active" : ""}
+                            key={item.tag}
+                            onClick={() => selectOperation(item.tag)}
+                            type="button"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              {selected.params.map((param) => (
+                <label className="form-field required-field" key={param}>
+                  <span>{operationParamLabels[param] || param}</span>
+                  {param.startsWith("locating") ? (
+                    <select
+                      className="text-input"
+                      disabled={pageElementsLoading || pageElementOptions.length === 0}
+                      value={selected.values?.[param] || ""}
+                      onChange={(event) => updateOperationParam(param, event.target.value)}
+                    >
+                      <option value="">
+                        {pageElementsLoading ? "正在加载页面元素" : pageElementOptions.length ? "请选择页面元素" : "暂无可选页面元素"}
+                      </option>
+                      {pageElementOptions.map((element) => (
+                        <option key={`${param}-${element.id}`} value={element.locator}>
+                          {element.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <textarea
+                      className="text-area node-param-input"
+                      placeholder={`请输入${operationParamLabels[param] || param}`}
+                      rows="3"
+                      value={selected.values?.[param] || ""}
+                      onChange={(event) => updateOperationParam(param, event.target.value)}
+                    />
+                  )}
+                </label>
+              ))}
               <label className="form-field">
                 <span>备注</span>
                 <textarea
@@ -1172,6 +1445,15 @@ function StepWorkbench({ step, onBack }) {
                   onChange={(event) => updateSelectedNode({ remark: event.target.value })}
                 />
               </label>
+              {configError ? <div className="form-error">{configError}</div> : null}
+              <div className="node-config-actions">
+                <button className="danger-button compact-button" onClick={deleteSelectedNode} type="button">
+                  删除节点
+                </button>
+                <button className="primary-button compact-button" onClick={saveNodeConfig} type="button">
+                  保存配置
+                </button>
+              </div>
             </div>
           ) : (
             <div className="empty-detail">
@@ -1181,6 +1463,7 @@ function StepWorkbench({ step, onBack }) {
           )}
         </aside>
       </div>
+      {toast ? <div className="success-toast" role="status">{toast}</div> : null}
     </section>
   );
 }
@@ -1570,39 +1853,29 @@ function PageElementPanel({ pageRow, onBack }) {
   }
 
   return (
-    <section className="resource-panel page-element-config">
-      <div className="page-config-header">
-        <div>
-          <h2>页面元素配置 / {pageRow.id} / {pageRow.name || "-"}</h2>
-          <p className="panel-subtitle">维护页面元素定位、操作配置和批量导入数据</p>
+    <div className="section-stack">
+      <PageHeader title="页面元素配置" description={`页面对象：${pageRow.id} / ${pageRow.name || "-"}`} />
+      <section className="resource-panel">
+        <div className="panel-header">
+          <strong>元素列表</strong>
         </div>
-        <button className="icon-text-button compact-button" onClick={onBack} type="button">
-          返回
-        </button>
-      </div>
 
-      <div className="page-config-toolbar">
-        <span />
-        <div className="action-row">
-          <button className="primary-button compact-button" type="button">
-            下载模板
+        <div className="list-actions">
+          <button className="icon-text-button compact-button" onClick={onBack} type="button">
+            返回
           </button>
-          <button className="primary-button compact-button" type="button">
-            点击上传
-          </button>
-          <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
-            单个新增
-          </button>
-          <button className="danger-button compact-button" disabled={busy} onClick={handleBulkDelete} type="button">
-            批量删除
-          </button>
+          <div className="action-row">
+            <button className="icon-text-button compact-button" type="button">下载模板</button>
+            <button className="icon-text-button compact-button" type="button">点击上传</button>
+            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">新增</button>
+            <button className="danger-button compact-button" disabled={busy} onClick={handleBulkDelete} type="button">批量删除</button>
+          </div>
         </div>
-      </div>
 
-      {notice ? <div className="inline-notice">{notice}</div> : null}
+        {notice ? <div className="inline-notice">{notice}</div> : null}
 
-      <StateBlock loading={loading} error={error}>
-        <TablePanel>
+        <StateBlock loading={loading} error={error}>
+          <TablePanel>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -1679,8 +1952,9 @@ function PageElementPanel({ pageRow, onBack }) {
               setElementPageSize(value);
             }}
           />
-        </TablePanel>
-      </StateBlock>
+          </TablePanel>
+        </StateBlock>
+      </section>
 
       {modal ? (
         <PageElementModal
@@ -1709,7 +1983,7 @@ function PageElementPanel({ pageRow, onBack }) {
           }}
         />
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -2019,5 +2293,3 @@ function PageElementModal({ busy, modal, pageRow, onClose, onSubmit }) {
 function uniqueOptions(rows, key) {
   return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
 }
-
-

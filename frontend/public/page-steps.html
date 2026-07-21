@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>界面自动化 - 页面步骤</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: #f5f7fa;
+  color: #333;
+  min-height: 100vh;
+}
+
+/* ===== 顶部导航栏 ===== */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 24px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8e8;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #666;
+}
+
+.breadcrumb span {
+  color: #999;
+}
+
+.breadcrumb .current {
+  color: #333;
+  font-weight: 500;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topbar-right .user {
+  color: #333;
+  font-size: 14px;
+}
+
+.topbar-right .btn-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  color: #666;
+  background: #f5f5f5;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.topbar-right .btn-exit:hover {
+  color: #ff4d4f;
+  border-color: #ff4d4f;
+}
+
+/* ===== 主内容区 ===== */
+.main-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ===== 标题区 ===== */
+.page-title {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.page-title h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 4px;
+}
+
+.page-title p {
+  font-size: 14px;
+  color: #999;
+}
+
+/* ===== 筛选区 ===== */
+.filter-section {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+}
+
+.filter-section strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 16px;
+}
+
+.filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 180px;
+  min-width: 160px;
+  max-width: 240px;
+}
+
+.filter-field label {
+  font-size: 13px;
+  color: #666;
+  font-weight: 500;
+}
+
+.filter-field input,
+.filter-field select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  background: #fff;
+  transition: border-color 0.2s;
+  outline: none;
+  width: 100%;
+}
+
+.filter-field input:focus,
+.filter-field select:focus {
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24,144,255,0.15);
+}
+
+.filter-field input::placeholder {
+  color: #bfbfbf;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding-bottom: 0;
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  gap: 6px;
+}
+
+.btn-primary {
+  color: #fff;
+  background: #1890ff;
+}
+
+.btn-primary:hover {
+  background: #096dd9;
+}
+
+.btn-danger {
+  color: #fff;
+  background: #ff4d4f;
+}
+
+.btn-danger:hover {
+  background: #cf1322;
+}
+
+.btn-default {
+  color: #666;
+  background: #f5f5f5;
+  border: 1px solid #d9d9d9;
+}
+
+.btn-default:hover {
+  color: #333;
+  border-color: #bfbfbf;
+  background: #e8e8e8;
+}
+
+/* ===== 操作按钮区 ===== */
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.action-bar .left {
+  display: flex;
+  gap: 10px;
+}
+
+/* ===== 通知消息 ===== */
+.notice {
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1890ff;
+}
+
+/* ===== 表格 ===== */
+.table-wrap {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1000px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 13px;
+  border-bottom: 1px solid #f0f0f0;
+  white-space: nowrap;
+}
+
+.data-table th {
+  background: #fafafa;
+  color: #333;
+  font-weight: 600;
+  border-bottom: 2px solid #e8e8e8;
+}
+
+.data-table tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.data-table tbody tr:nth-child(odd) {
+  background: #fff;
+}
+
+.data-table tbody tr:hover {
+  background: #e6f7ff;
+}
+
+.data-table .col-checkbox {
+  width: 48px;
+  text-align: center;
+}
+
+.data-table .col-checkbox input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.data-table .col-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.link-btn {
+  color: #1890ff;
+  background: none;
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+.link-btn:hover {
+  color: #096dd9;
+  text-decoration: underline;
+}
+
+.link-btn.danger {
+  color: #ff4d4f;
+}
+
+.link-btn.danger:hover {
+  color: #cf1322;
+}
+
+.more-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.more-menu-wrap summary {
+  color: #1890ff;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  user-select: none;
+}
+
+.more-menu-wrap summary:hover {
+  color: #096dd9;
+}
+
+.more-menu-wrap summary::-webkit-details-marker {
+  display: none;
+}
+
+.more-dropdown {
+  position: absolute;
+  top: 24px;
+  right: 0;
+  z-index: 20;
+  min-width: 100px;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  padding: 4px 0;
+}
+
+.more-dropdown .link-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  text-align: left;
+}
+
+.more-dropdown .link-btn:hover {
+  background: #f5f5f5;
+  text-decoration: none;
+}
+
+/* ===== 状态标签 ===== */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tag-success {
+  color: #fff;
+  background: #52c41a;
+}
+
+.tag-danger {
+  color: #fff;
+  background: #ff4d4f;
+}
+
+/* ===== 分页 ===== */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  padding: 0 20px;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+}
+
+.pager-left {
+  font-size: 13px;
+  color: #999;
+}
+
+.pager-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pager-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pager-btn:hover:not(:disabled) {
+  color: #1890ff;
+  border-color: #1890ff;
+}
+
+.pager-btn:disabled {
+  color: #d9d9d9;
+  cursor: not-allowed;
+}
+
+.pager-btn.active {
+  color: #fff;
+  background: #1890ff;
+  border-color: #1890ff;
+}
+
+.pager-right select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  outline: none;
+}
+
+/* ===== 弹窗 ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-box {
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  animation: slideUp 0.25s;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: #999;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.modal-close:hover {
+  background: #f5f5f5;
+  color: #333;
+}
+
+.modal-body {
+  padding: 24px;
+}
+
+.modal-body p {
+  color: #666;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 24px 16px;
+}
+
+/* 响应式 */
+@media (max-width: 800px) {
+  .filter-grid {
+    flex-direction: column;
+  }
+  .filter-field {
+    max-width: 100%;
+  }
+  .main-content {
+    padding: 16px;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- 顶部导航栏 -->
+<nav class="topbar">
+  <div class="breadcrumb">
+    <span>界面自动化</span>
+    <span>&gt;</span>
+    <span class="current">页面步骤</span>
+  </div>
+  <div class="topbar-right">
+    <span class="user">系统管理员</span>
+    <button class="btn-exit" onclick="handleExit()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      退出
+    </button>
+  </div>
+</nav>
+
+<div class="main-content">
+
+  <!-- 标题区 -->
+  <div class="page-title">
+    <h1>页面步骤</h1>
+    <p>调试页面步骤</p>
+  </div>
+
+  <!-- 筛选区 -->
+  <section class="filter-section">
+    <strong>调试页面步骤</strong>
+    <form id="filterForm" class="filter-grid" onsubmit="return handleSearch(event)">
+      <div class="filter-field">
+        <label>ID</label>
+        <input type="text" id="filterId" placeholder="请输入步骤ID">
+      </div>
+      <div class="filter-field">
+        <label>步骤名称</label>
+        <input type="text" id="filterName" placeholder="请输入步骤名称">
+      </div>
+      <div class="filter-field">
+        <label>项目/产品</label>
+        <select id="filterProduct">
+          <option value="">请选择产品</option>
+          <option value="Synapse QA/测试">Synapse QA/测试</option>
+          <option value="Synapse QA/电商平台">Synapse QA/电商平台</option>
+          <option value="Synapse QA/后台管理">Synapse QA/后台管理</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>模块名称</label>
+        <select id="filterModule" disabled>
+          <option value="">请先选择产品</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>所属页面</label>
+        <select id="filterPage" disabled>
+          <option value="">请先选择模块</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>状态</label>
+        <select id="filterStatus">
+          <option value="">请选择步骤状态</option>
+          <option value="passed">通过</option>
+          <option value="failed">未通过</option>
+        </select>
+      </div>
+      <div class="filter-actions">
+        <button type="submit" class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          搜索
+        </button>
+        <button type="button" class="btn btn-default" onclick="handleReset()">重置</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- 操作按钮区 -->
+  <div class="action-bar">
+    <div class="left">
+      <button class="btn btn-primary" onclick="handleAdd()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新增
+      </button>
+      <button class="btn btn-danger" id="btnBatchDelete" onclick="handleBatchDelete()">批量删除</button>
+    </div>
+  </div>
+
+  <!-- 通知 -->
+  <div id="notice" class="notice" style="display:none"></div>
+
+  <!-- 数据表格 -->
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th class="col-checkbox"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></th>
+          <th>ID</th>
+          <th>项目/产品</th>
+          <th>模块名称</th>
+          <th>所属页面</th>
+          <th>步骤名称</th>
+          <th>预估步骤顺序</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <!-- JS 动态渲染 -->
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 分页区 -->
+  <div class="pager">
+    <div class="pager-left" id="pagerTotal">共 0 条</div>
+    <div class="pager-center">
+      <button class="pager-btn" id="btnPrev" onclick="changePage(-1)" disabled>上一页</button>
+      <span class="pager-btn active" id="pageCurrent">1</span>
+      <button class="pager-btn" id="btnNext" onclick="changePage(1)">下一页</button>
+    </div>
+    <div class="pager-right">
+      <select id="pageSizeSelect" onchange="changePageSize()">
+        <option value="10">10 条/页</option>
+        <option value="20" selected>20 条/页</option>
+        <option value="50">50 条/页</option>
+      </select>
+    </div>
+  </div>
+
+</div>
+
+<!-- 弹窗容器 -->
+<div id="modalContainer"></div>
+
+<script>
+/* ===== 数据定义 ===== */
+const moduleMap = {
+  'Synapse QA/测试': ['首页', '登录模块', '用户管理', '权限管理', '订单管理'],
+  'Synapse QA/电商平台': ['首页', '商品管理', '购物车', '支付管理', '物流配送'],
+  'Synapse QA/后台管理': ['首页', '系统设置', '日志管理', '数据报表', '通知中心']
+};
+
+const pageMap = {
+  '首页': ['百度首页', '谷歌首页', 'Bing首页'],
+  '登录模块': ['登录页', '注册页', '找回密码页'],
+  '用户管理': ['用户列表', '用户详情', '角色管理'],
+  '权限管理': ['权限列表', '角色分配', '资源管理'],
+  '订单管理': ['订单列表', '订单详情', '退款管理'],
+  '商品管理': ['商品列表', '商品详情', '分类管理'],
+  '购物车': ['购物车列表', '结算页面'],
+  '支付管理': ['支付列表', '对账页面'],
+  '物流配送': ['物流列表', '配送配置'],
+  '系统设置': ['基本设置', '安全设置', '通知设置'],
+  '日志管理': ['操作日志', '登录日志', '错误日志'],
+  '数据报表': ['销售报表', '用户报表', '流量报表'],
+  '通知中心': ['系统通知', '消息推送', '邮件模板']
+};
+
+/* ===== 模拟全量数据 ===== */
+const allData = [
+  { id: 16, product: 'Synapse QA/测试', module: '首页', page: '百度首页', name: '测试百度一下', steps: '-', status: 'passed' },
+  { id: 15, product: 'Synapse QA/测试', module: '登录模块', page: '登录页', name: '验证登录功能', steps: '-> 输入 -> 点击 -> 验证', status: 'passed' },
+  { id: 14, product: 'Synapse QA/测试', module: '用户管理', page: '用户列表', name: '检查用户列表加载', steps: '-> 打开 -> 等待 -> 断言', status: 'passed' },
+  { id: 13, product: 'Synapse QA/电商平台', module: '首页', page: 'Bing首页', name: '搜索商品关键词', steps: '-> 输入 -> 回车 -> 验证结果', status: 'failed' },
+  { id: 12, product: 'Synapse QA/电商平台', module: '商品管理', page: '商品列表', name: '验证商品筛选', steps: '-> 选择分类 -> 点击筛选', status: 'passed' },
+  { id: 11, product: 'Synapse QA/电商平台', module: '购物车', page: '购物车列表', name: '添加商品到购物车', steps: '-> 点击 -> 验证数量', status: 'passed' },
+  { id: 10, product: 'Synapse QA/后台管理', module: '系统设置', page: '基本设置', name: '修改系统名称', steps: '-> 输入 -> 保存 -> 验证', status: 'failed' },
+  { id: 9, product: 'Synapse QA/后台管理', module: '日志管理', page: '操作日志', name: '导出操作日志', steps: '-> 点击导出 -> 验证文件', status: 'passed' },
+  { id: 8, product: 'Synapse QA/测试', module: '权限管理', page: '权限列表', name: '新增权限角色', steps: '-> 点击新增 -> 填写 -> 保存', status: 'passed' },
+  { id: 7, product: 'Synapse QA/测试', module: '订单管理', page: '订单列表', name: '查询订单详情', steps: '-> 输入订单号 -> 搜索', status: 'failed' },
+  { id: 6, product: 'Synapse QA/电商平台', module: '支付管理', page: '支付列表', name: '验证支付流程', steps: '-> 选择订单 -> 支付 -> 验证', status: 'passed' },
+  { id: 5, product: 'Synapse QA/电商平台', module: '物流配送', page: '物流列表', name: '查看物流轨迹', steps: '-> 点击运单号 -> 查看轨迹', status: 'passed' },
+  { id: 4, product: 'Synapse QA/后台管理', module: '数据报表', page: '销售报表', name: '生成月度报表', steps: '-> 选择月份 -> 生成 -> 验证', status: 'passed' },
+  { id: 3, product: 'Synapse QA/后台管理', module: '通知中心', page: '系统通知', name: '发送系统通知', steps: '-> 编辑内容 -> 发送 -> 验证', status: 'failed' },
+  { id: 2, product: 'Synapse QA/测试', module: '首页', page: '谷歌首页', name: '验证首页元素', steps: '-', status: 'passed' },
+  { id: 1, product: 'Synapse QA/电商平台', module: '首页', page: '百度首页', name: '加载首页性能测试', steps: '-> 打开 -> 计时 -> 断言', status: 'passed' }
+];
+
+/* ===== 状态管理 ===== */
+const state = {
+  filters: { id: '', name: '', product: '', module: '', page: '', status: '' },
+  page: 1,
+  pageSize: 20,
+  selectedIds: new Set()
+};
+
+/* ===== 下拉框联动 ===== */
+document.getElementById('filterProduct').addEventListener('change', function(e) {
+  const product = e.target.value;
+  const moduleSelect = document.getElementById('filterModule');
+  const pageSelect = document.getElementById('filterPage');
+
+  moduleSelect.innerHTML = '<option value="">' + (product ? '请选择模块' : '请先选择产品') + '</option>';
+  moduleSelect.disabled = !product;
+
+  if (product && moduleMap[product]) {
+    moduleMap[product].forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      moduleSelect.appendChild(opt);
+    });
+  }
+
+  // 重置页面下拉
+  pageSelect.innerHTML = '<option value="">请先选择模块</option>';
+  pageSelect.disabled = true;
+});
+
+document.getElementById('filterModule').addEventListener('change', function(e) {
+  const module = e.target.value;
+  const pageSelect = document.getElementById('filterPage');
+
+  pageSelect.innerHTML = '<option value="">' + (module ? '请选择所属页面' : '请先选择模块') + '</option>';
+  pageSelect.disabled = !module;
+
+  if (module && pageMap[module]) {
+    pageMap[module].forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p;
+      pageSelect.appendChild(opt);
+    });
+  }
+});
+
+/* ===== 筛选逻辑 ===== */
+function getFilteredData() {
+  const f = state.filters;
+  return allData.filter(row => {
+    if (f.id && !String(row.id).includes(f.id)) return false;
+    if (f.name && !row.name.includes(f.name)) return false;
+    if (f.product && row.product !== f.product) return false;
+    if (f.module && row.module !== f.module) return false;
+    if (f.page && row.page !== f.page) return false;
+    if (f.status && row.status !== f.status) return false;
+    return true;
+  });
+}
+
+/* ===== 渲染表格 ===== */
+function renderTable() {
+  const filtered = getFilteredData();
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+  const start = (state.page - 1) * state.pageSize;
+  const pageData = filtered.slice(start, start + state.pageSize);
+
+  // 表格体
+  const tbody = document.getElementById('tableBody');
+  if (pageData.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:#999;">暂无页面步骤数据</td></tr>';
+  } else {
+    tbody.innerHTML = pageData.map(row => `
+      <tr>
+        <td class="col-checkbox">
+          <input type="checkbox" ${state.selectedIds.has(row.id) ? 'checked' : ''} onchange="toggleSelectOne(${row.id})">
+        </td>
+        <td>${row.id}</td>
+        <td>${row.product}</td>
+        <td>${row.module}</td>
+        <td>${row.page}</td>
+        <td>${row.name}</td>
+        <td>${row.steps}</td>
+        <td><span class="tag ${row.status === 'passed' ? 'tag-success' : 'tag-danger'}">${row.status === 'passed' ? '通过' : '未通过'}</span></td>
+        <td>
+          <div class="col-actions">
+            <button class="link-btn" onclick="handleAction('调试', ${row.id})">调试</button>
+            <button class="link-btn" onclick="handleAction('编辑', ${row.id})">编辑</button>
+            <button class="link-btn" onclick="handleAction('步骤', ${row.id})">步骤</button>
+            <details class="more-menu-wrap">
+              <summary>更多</summary>
+              <div class="more-dropdown">
+                <button class="link-btn" onclick="handleAction('复制', ${row.id})">复制</button>
+                <button class="link-btn danger" onclick="handleAction('删除', ${row.id})">删除</button>
+              </div>
+            </details>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  // 全选状态
+  const allVisibleIds = pageData.map(r => r.id);
+  document.getElementById('selectAll').checked =
+    allVisibleIds.length > 0 && allVisibleIds.every(id => state.selectedIds.has(id));
+
+  // 分页
+  document.getElementById('pagerTotal').textContent = `共 ${total} 条`;
+  document.getElementById('pageCurrent').textContent = state.page;
+  document.getElementById('btnPrev').disabled = state.page <= 1;
+  document.getElementById('btnNext').disabled = state.page >= totalPages;
+
+  // 如果当前页超出范围
+  if (state.page > totalPages && totalPages > 0) {
+    state.page = totalPages;
+    renderTable();
+  }
+}
+
+/* ===== 选择逻辑 ===== */
+function toggleSelectAll() {
+  const filtered = getFilteredData();
+  const start = (state.page - 1) * state.pageSize;
+  const pageData = filtered.slice(start, start + state.pageSize);
+  const allVisibleIds = pageData.map(r => r.id);
+  const allSelected = allVisibleIds.every(id => state.selectedIds.has(id));
+
+  if (allSelected) {
+    allVisibleIds.forEach(id => state.selectedIds.delete(id));
+  } else {
+    allVisibleIds.forEach(id => state.selectedIds.add(id));
+  }
+  renderTable();
+}
+
+function toggleSelectOne(id) {
+  if (state.selectedIds.has(id)) {
+    state.selectedIds.delete(id);
+  } else {
+    state.selectedIds.add(id);
+  }
+  renderTable();
+}
+
+/* ===== 分页 ===== */
+function changePage(delta) {
+  const filtered = getFilteredData();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+  const next = state.page + delta;
+  if (next >= 1 && next <= totalPages) {
+    state.page = next;
+    renderTable();
+  }
+}
+
+function changePageSize() {
+  state.pageSize = Number(document.getElementById('pageSizeSelect').value);
+  state.page = 1;
+  renderTable();
+}
+
+/* ===== 搜索/重置 ===== */
+function handleSearch(e) {
+  e.preventDefault();
+  state.filters = {
+    id: document.getElementById('filterId').value.trim(),
+    name: document.getElementById('filterName').value.trim(),
+    product: document.getElementById('filterProduct').value,
+    module: document.getElementById('filterModule').value,
+    page: document.getElementById('filterPage').value,
+    status: document.getElementById('filterStatus').value
+  };
+  state.page = 1;
+  state.selectedIds.clear();
+  renderTable();
+}
+
+function handleReset() {
+  document.getElementById('filterId').value = '';
+  document.getElementById('filterName').value = '';
+  document.getElementById('filterProduct').value = '';
+  document.getElementById('filterModule').innerHTML = '<option value="">请先选择产品</option>';
+  document.getElementById('filterModule').disabled = true;
+  document.getElementById('filterPage').innerHTML = '<option value="">请先选择模块</option>';
+  document.getElementById('filterPage').disabled = true;
+  document.getElementById('filterStatus').value = '';
+  state.filters = { id: '', name: '', product: '', module: '', page: '', status: '' };
+  state.page = 1;
+  state.selectedIds.clear();
+  renderTable();
+  showNotice('筛选条件已重置。');
+}
+
+/* ===== 操作按钮 ===== */
+function handleAdd() {
+  showModal('新增页面步骤', '请在弹窗中填写步骤信息（功能开发中）。');
+}
+
+function handleBatchDelete() {
+  if (state.selectedIds.size === 0) {
+    showNotice('请先选择需要删除的页面步骤。');
+    return;
+  }
+  if (!confirm(`确认删除已选中的 ${state.selectedIds.size} 个页面步骤吗？`)) return;
+  state.selectedIds.clear();
+  renderTable();
+  showNotice('已删除选中的页面步骤。');
+}
+
+function handleAction(action, id) {
+  const row = allData.find(r => r.id === id);
+  showModal(`${action} - 步骤 #${id}`, `当前操作：<strong>${action}</strong><br>步骤名称：${row ? row.name : '-'}<br><br><em>（功能开发中，此处为占位提示）</em>`);
+}
+
+function handleExit() {
+  if (confirm('确认退出登录吗？')) {
+    showNotice('已退出登录。');
+  }
+}
+
+/* ===== 弹窗 ===== */
+function showModal(title, bodyHTML) {
+  const container = document.getElementById('modalContainer');
+  container.innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h3>${title}</h3>
+          <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>${bodyHTML}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" onclick="closeModal()">确定</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function closeModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('modalContainer').innerHTML = '';
+}
+
+/* ===== 通知 ===== */
+function showNotice(msg) {
+  const el = document.getElementById('notice');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+/* ===== 初始化 ===== */
+renderTable();
+</script>
+
+</body>
+</html>

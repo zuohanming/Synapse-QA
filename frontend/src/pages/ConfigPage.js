@@ -2,6 +2,7 @@ import { Copy, KeyRound, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
+import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
@@ -23,14 +24,7 @@ export function ConfigPage({ activePath }) {
   const resource = section === "测试对象" ? configService.testObjects : configService.projects;
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
-  return (
-    <>
-      <PageHeader title={section} description="测试配置资产管理" />
-      <StateBlock loading={loading} error={error}>
-        <DataTable rows={pageItems(data)} columns={columnsFor(section)} />
-      </StateBlock>
-    </>
-  );
+  return <ResourceListPage title={section} description="测试配置资产管理" panelTitle={`${section}列表`} rows={pageItems(data)} columns={columnsFor(section)} loading={loading} error={error} />;
 }
 
 function columnsFor(section) {
@@ -758,9 +752,8 @@ function ProductModulePage({ product, onBack }) {
     <div className="section-stack">
       <section className="resource-panel product-module-page">
         <div className="page-config-header">
-          <div>
-            <h2>产品模块配置 / {product.id} / {product.name}</h2>
-            <p className="panel-subtitle">维护当前产品下的模块结构和模块名称</p>
+          <div className="toolbar-title">
+            <strong>产品模块配置 / {product.id} / {product.name}</strong>
           </div>
           <div className="action-row">
             <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
@@ -778,7 +771,6 @@ function ProductModulePage({ product, onBack }) {
               <strong>模块导航</strong>
               <span>{total}</span>
             </div>
-            <p>按层级快速定位模块</p>
             <input className="text-input" placeholder="搜索模块" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
             <div className="module-chip-row">
               <span>一级 {level1Options.length}</span>

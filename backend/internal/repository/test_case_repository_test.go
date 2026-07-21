@@ -112,8 +112,8 @@ func TestTestCaseRepositoryGetDetail(t *testing.T) {
 		AddRow(1, 2, "项目/产品", 3, "模块", 4, "页面", "登录成功", "ui", "P1", "active", "admin", "smoke", "desc", "pre", "ok", true, "admin", now, now)
 	mock.ExpectQuery("select tc.id").WithArgs(int64(1)).WillReturnRows(caseRows)
 	mock.ExpectQuery("select tcs.id").WithArgs(int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "case_id", "step_id", "step_name", "sort_order", "note", "created_at"}).
-			AddRow(1, 1, 10, "输入账号", 1, "", now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "case_id", "step_id", "step_name", "action", "locator", "value", "method", "sort_order", "note", "created_at"}).
+			AddRow(1, 1, 10, "输入账号", "fill", "#username", "admin", "登录", 1, "", now))
 	mock.ExpectQuery("select id, case_id, name, variables, enabled, created_at, updated_at from test_case_datasets").
 		WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "case_id", "name", "variables", "enabled", "created_at", "updated_at"}).

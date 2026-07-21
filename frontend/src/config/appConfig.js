@@ -16,6 +16,10 @@ export const menuData = [
     children: ["项目配置", "项目产品", "测试对象", "执行器配置"]
   },
   {
+    title: "执行中心",
+    children: ["执行记录", "测试报告"]
+  },
+  {
     title: "系统管理",
     children: ["配置管理", "用户管理", "角色管理", "操作日志"]
   }

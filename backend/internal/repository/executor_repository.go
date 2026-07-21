@@ -63,6 +63,15 @@ func (r *ExecutorRepository) UpsertHeartbeat(ctx context.Context, req model.Exec
 	return scanExecutor(row)
 }
 
+func (r *ExecutorRepository) GetByID(ctx context.Context, executorID string) (model.ExecutorView, error) {
+	row := r.db.QueryRowContext(ctx, `
+		select executor_id, name, endpoint, status, version, max_workers, running_tasks, queued_tasks, supported_types, checks, last_heartbeat_at, updated_at, created_at
+		from executors
+		where executor_id = $1
+	`, executorID)
+	return scanExecutor(row)
+}
+
 func (r *ExecutorRepository) List(ctx context.Context) ([]model.ExecutorView, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		select executor_id, name, endpoint, status, version, max_workers, running_tasks, queued_tasks, supported_types, checks, last_heartbeat_at, updated_at, created_at

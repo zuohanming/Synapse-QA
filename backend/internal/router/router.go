@@ -15,6 +15,7 @@ type Dependencies struct {
 	AutomationController *controller.AutomationController
 	ExecutorController   *controller.ExecutorController
 	TestCaseController   *controller.TestCaseController
+	ExecutionController  *controller.ExecutionController
 	AuthMiddleware       gin.HandlerFunc
 }
 
@@ -26,6 +27,8 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	})
 	api.POST("/executors/register", deps.ExecutorController.Register)
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
+	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
+	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 
@@ -37,6 +40,15 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerConfigRoutes(authed, deps)
 	registerUIRoutes(authed, deps)
 	registerTestCaseRoutes(authed, deps)
+	registerExecutionRoutes(authed, deps)
+}
+
+func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/executions", deps.ExecutionController.List)
+	authed.POST("/executions", deps.ExecutionController.Create)
+	authed.GET("/executions/:id", deps.ExecutionController.Get)
+	authed.POST("/executions/:id/cancel", deps.ExecutionController.Cancel)
+	authed.GET("/executions/tasks/:taskId/logs", deps.ExecutionController.ListTaskLogs)
 }
 
 func registerSystemRoutes(authed *gin.RouterGroup, deps Dependencies) {

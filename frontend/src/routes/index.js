@@ -2,6 +2,7 @@ import { DashboardPage } from "../pages/DashboardPage.js";
 import { SystemPage } from "../pages/SystemPage.js";
 import { ConfigPage } from "../pages/ConfigPage.js";
 import { UIAutomationPage } from "../pages/UIAutomationPage.js";
+import { ExecutionPage } from "../pages/ExecutionPage.js";
 
 export const routes = [
   {
@@ -19,5 +20,9 @@ export const routes = [
   {
     match: (path) => path[0] === "界面自动化",
     Component: UIAutomationPage
+  },
+  {
+    match: (path) => path[0] === "执行中心",
+    Component: ExecutionPage
   }
 ];

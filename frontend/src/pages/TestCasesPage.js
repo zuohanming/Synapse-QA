@@ -5,6 +5,7 @@ import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
 import { uiAutomationService } from "../services/uiAutomationService.js";
+import { executionService } from "../services/executionService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 
 const initialCaseFilters = {
@@ -179,27 +180,29 @@ export function TestCasesPage() {
     }
   }
 
+  async function executeRows(ids) {
+    if (!ids.length) {
+      setNotice("请先选择需要执行的测试用例。");
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      const run = await executionService.create({ runType: "ui", caseIds: ids });
+      setNotice(`执行批次 #${run.id} 已创建，请前往执行中心查看结果。`);
+    } catch (err) {
+      setNotice(err.message || "创建执行批次失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="section-stack">
       <PageHeader title="测试用例" description="管理界面自动化测试用例、关联步骤和参数化数据" />
       <section className="resource-panel">
         <div className="panel-header">
           <strong>测试用例管理</strong>
-          <div className="action-row">
-            <label className="icon-text-button compact-button file-action">
-              导入
-              <input accept="application/json" onChange={importCases} type="file" />
-            </label>
-            <button className="icon-text-button compact-button" disabled={busy} onClick={exportCases} type="button">
-              导出
-            </button>
-            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
-              新增
-            </button>
-            <button className="danger-button compact-button" disabled={busy} onClick={() => deleteRows(selectedIds)} type="button">
-              批量删除
-            </button>
-          </div>
         </div>
 
         <form className="filter-grid filter-grid-cases" onSubmit={submitSearch}>
@@ -272,6 +275,20 @@ export function TestCasesPage() {
             </button>
           </div>
         </form>
+
+        <div className="list-actions">
+          <div />
+          <div className="action-row">
+            <label className="icon-text-button compact-button file-action">
+              导入
+              <input accept="application/json" onChange={importCases} type="file" />
+            </label>
+            <button className="icon-text-button compact-button" disabled={busy} onClick={exportCases} type="button">导出</button>
+            <button className="success-button compact-button" disabled={busy} onClick={() => executeRows(selectedIds)} type="button">执行</button>
+            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">新增</button>
+            <button className="danger-button compact-button" disabled={busy} onClick={() => deleteRows(selectedIds)} type="button">批量删除</button>
+          </div>
+        </div>
 
         {notice ? <div className="inline-notice">{notice}</div> : null}
 
