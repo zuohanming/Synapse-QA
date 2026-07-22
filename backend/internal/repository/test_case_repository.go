@@ -210,7 +210,7 @@ func (r *TestCaseRepository) CountMissingSteps(ctx context.Context, ids []int64)
 
 func (r *TestCaseRepository) ListSteps(ctx context.Context, caseID int64) ([]model.TestCaseStep, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		select tcs.id, tcs.case_id, tcs.step_id, coalesce(s.name, ''), coalesce(s.action, ''), coalesce(s.locator, ''), coalesce(s.value, ''), coalesce(s.method, ''), tcs.sort_order, tcs.note, tcs.created_at
+		select tcs.id, tcs.case_id, tcs.step_id, coalesce(s.name, ''), coalesce(s.action, ''), coalesce(s.locator, ''), coalesce(s.value, ''), coalesce(s.method, ''), coalesce(s.description, ''), tcs.sort_order, tcs.note, tcs.created_at
 		from test_case_steps tcs
 		left join ui_assets s on s.id = tcs.step_id
 		where tcs.case_id = $1
@@ -222,7 +222,7 @@ func (r *TestCaseRepository) ListSteps(ctx context.Context, caseID int64) ([]mod
 	items := []model.TestCaseStep{}
 	for rows.Next() {
 		var item model.TestCaseStep
-		if err := rows.Scan(&item.ID, &item.CaseID, &item.StepID, &item.StepName, &item.Action, &item.Locator, &item.Value, &item.Method, &item.SortOrder, &item.Note, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.CaseID, &item.StepID, &item.StepName, &item.Action, &item.Locator, &item.Value, &item.Method, &item.Description, &item.SortOrder, &item.Note, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

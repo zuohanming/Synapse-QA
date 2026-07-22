@@ -15,9 +15,43 @@ type ExecutionService interface {
 	ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error)
 	GetRun(ctx context.Context, id int64) (model.ExecutionRunDetail, error)
 	CreateRun(ctx context.Context, actor string, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error)
+	StartDebug(ctx context.Context, actor string, req model.ExecutionDebugRequest) (model.ExecutionDebugStart, error)
+	GetDebugTask(ctx context.Context, executorID, taskID string) (map[string]any, error)
 	CancelRun(ctx context.Context, actor string, id int64) error
 	HandleCallback(ctx context.Context, req model.ExecutionCallbackRequest) error
 	ListLogs(ctx context.Context, taskID int64) ([]model.ExecutionLog, error)
+}
+
+// StartDebug 创建页面步骤即时调试任务。
+func (ctl *ExecutionController) StartDebug(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.ExecutionDebugRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	result, err := ctl.executionService.StartDebug(c.Request.Context(), claims.Username, req)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	created(c, result)
+}
+
+// GetDebug 查询页面步骤即时调试状态。
+func (ctl *ExecutionController) GetDebug(c *gin.Context) {
+	if _, exists := claimsFromContext(c); !exists {
+		return
+	}
+	result, err := ctl.executionService.GetDebugTask(c.Request.Context(), c.Query("executorId"), c.Param("taskId"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, result)
 }
 
 // ExecutionController 处理执行批次相关 HTTP 请求。

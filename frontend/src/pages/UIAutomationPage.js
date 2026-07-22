@@ -7,6 +7,7 @@ import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
+import { executionService } from "../services/executionService.js";
 import { uiAutomationService } from "../services/uiAutomationService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
@@ -234,9 +235,61 @@ const operationGroups = [
   }
 ];
 
-const visibleOperationGroups = operationGroups.filter(
+const elementOperationGroups = operationGroups.filter(
   (group) => group.title !== "WEB 定制开发" && !group.title.startsWith("安卓 ")
 );
+
+const specialOperationGroups = {
+  断言操作: [{
+    title: "断言操作",
+    color: "#2548b8",
+    items: [
+      { tag: "assert_text", name: "页面文本包含", params: ["locating", "expected"] },
+      { tag: "assert_text_equals", name: "元素文本等于", params: ["locating", "expected"] },
+      { tag: "assert_title", name: "页面标题包含", params: ["expected"] },
+      { tag: "assert_title_equals", name: "页面标题等于", params: ["expected"] },
+      { tag: "assert_url", name: "页面 URL 包含", params: ["expected"] },
+      { tag: "assert_element_exists", name: "元素存在", params: ["locating"] },
+      { tag: "assert_visible", name: "元素可见", params: ["locating"] },
+      { tag: "assert_hidden", name: "元素隐藏", params: ["locating"] },
+      { tag: "assert_enabled", name: "元素启用", params: ["locating"] },
+      { tag: "assert_disabled", name: "元素禁用", params: ["locating"] },
+      { tag: "assert_checked", name: "元素已选中", params: ["locating"] },
+      { tag: "assert_unchecked", name: "元素未选中", params: ["locating"] },
+      { tag: "assert_value_equals", name: "输入值等于", params: ["locating", "expected"] },
+      { tag: "assert_attribute_equals", name: "元素属性等于", params: ["locating", "attribute_name", "expected"] },
+      { tag: "assert_attribute_contains", name: "元素属性包含", params: ["locating", "attribute_name", "expected"] },
+      { tag: "assert_count", name: "元素数量等于", params: ["locating", "expected_count"] },
+      { tag: "assert_variable", name: "变量比较", params: ["left_value", "operator", "right_value"] },
+      { tag: "assert_variable_exists", name: "变量存在", params: ["variable_name"] },
+      { tag: "assert_regex", name: "正则匹配", params: ["left_value", "pattern"] }
+    ]
+  }],
+  SQL操作: [{
+    title: "SQL 操作",
+    color: "#d97706",
+    items: [{ tag: "sql_query", name: "执行 PostgreSQL 查询", params: ["connection_string", "sql", "result_variable"] }]
+  }],
+  自定义变量: [{
+    title: "自定义变量",
+    color: "#2548b8",
+    items: [{ tag: "set_variable", name: "设置变量", params: ["variable_name", "variable_value"] }]
+  }],
+  条件判断: [{
+    title: "条件判断",
+    color: "#64748b",
+    items: [{ tag: "condition", name: "变量条件判断", params: ["left_value", "operator", "right_value"] }]
+  }],
+  python代码: [{
+    title: "Python 代码",
+    color: "#60a5fa",
+    items: [{ tag: "python_code", name: "执行 Python 代码", params: ["python_code"] }]
+  }]
+};
+
+function operationGroupsForType(type) {
+  return specialOperationGroups[type] || elementOperationGroups;
+}
 
 const operationParamLabels = {
   _time: "等待时间",
@@ -266,11 +319,120 @@ const operationParamLabels = {
   ex: "终点 X",
   ey: "终点 Y",
   x_key: "X 坐标变量名",
-  y_key: "Y 坐标变量名"
+  y_key: "Y 坐标变量名",
+  expected: "期望值",
+  expected_count: "期望数量",
+  attribute_name: "属性名称",
+  pattern: "正则表达式",
+  left_value: "左值（支持 ${变量名}）",
+  operator: "比较方式",
+  right_value: "右值（支持 ${变量名}）",
+  connection_string: "PostgreSQL 连接串",
+  sql: "SQL 查询",
+  result_variable: "结果变量名",
+  variable_name: "变量名",
+  variable_value: "变量值（支持 ${变量名}）",
+  python_code: "Python 代码"
 };
 
 function operationGroupLabel(title = "") {
   return title.startsWith("WEB ") ? title.slice(4) : title.replace(/^安卓 /, "安卓·");
+}
+
+function parseStepFlow(description = "") {
+  try {
+    const flow = JSON.parse(description);
+    if (flow?.schema === "synapse-flow-v1" && Array.isArray(flow.nodes) && Array.isArray(flow.connections)) return flow;
+  } catch {
+    // 兼容原有的纯文本步骤描述。
+  }
+  return { schema: "synapse-flow-v1", nodes: [], connections: [] };
+}
+
+function formatStepSequence(description = "") {
+  const flow = parseStepFlow(description);
+  if (flow.nodes.length) return flow.nodes.map((node) => node.operationName || node.title || node.type).filter(Boolean).join(" → ");
+  return description;
+}
+
+function orderFlowNodes(nodes, connections) {
+  if (!nodes.length) return [];
+  const incoming = new Set(connections.map((connection) => connection.to));
+  const ordered = [];
+  const visited = new Set();
+  let current = nodes.find((node) => !incoming.has(node.id)) || nodes[0];
+  while (current && !visited.has(current.id)) {
+    ordered.push(current);
+    visited.add(current.id);
+    const nextID = connections.find((connection) => connection.from === current.id)?.to;
+    current = nodes.find((node) => node.id === nextID);
+  }
+  nodes.forEach((node) => {
+    if (!visited.has(node.id)) ordered.push(node);
+  });
+  return ordered;
+}
+
+export function buildDebugActions(nodes, connections, pageElements = []) {
+  return nodes.map((node) => {
+    const action = buildDebugAction(node, pageElements);
+    const outgoing = connections.filter((connection) => connection.from === node.id);
+    return {
+      ...action,
+      nodeId: String(node.id),
+      next: outgoing.find((connection) => !connection.branch)?.to?.toString() || "",
+      trueNext: outgoing.find((connection) => connection.branch === "true")?.to?.toString() || "",
+      falseNext: outgoing.find((connection) => connection.branch === "false")?.to?.toString() || ""
+    };
+  });
+}
+
+function buildDebugAction(node, pageElements = []) {
+  const values = node.values || {};
+  const elementName = (locator) => pageElements.find((item) => item.locator === locator)?.name || "元素";
+  switch (node.tag) {
+    case "w_wait_for_timeout": return { action: "waitForTimeout", value: values._time, label: `等待 ${values._time || 0} 秒` };
+    case "w_goto": return { action: "goto", url: values.url, label: `打开 ${values.url || "URL"}` };
+    case "w_screenshot": return { action: "screenshot", name: values.path || undefined, label: "页面截图" };
+    case "w_click":
+    case "w_force_click": return { action: "click", selector: values.locating, label: `点击${elementName(values.locating)}` };
+    case "w_dblclick": return { action: "dblclick", selector: values.locating, label: `双击${elementName(values.locating)}` };
+    case "w_input":
+    case "w_clear_input": return { action: "fill", selector: values.locating, value: values.input_value || "", label: `输入${elementName(values.locating)} ${values.input_value || "空值"}` };
+    case "w_hover": return { action: "hover", selector: values.locating, label: `悬停${elementName(values.locating)}` };
+    case "assert_text": return { action: "assertText", selector: values.locating, text: values.expected, label: "断言页面文本" };
+    case "assert_text_equals": return { action: "assertTextEquals", selector: values.locating, text: values.expected, label: "断言元素文本等于" };
+    case "assert_title": return { action: "assertTitle", text: values.expected, label: "断言页面标题" };
+    case "assert_title_equals": return { action: "assertTitleEquals", text: values.expected, label: "断言页面标题等于" };
+    case "assert_url": return { action: "assertURL", text: values.expected, label: "断言页面 URL" };
+    case "assert_element_exists": return { action: "assertElementExists", selector: values.locating, label: "断言元素存在" };
+    case "assert_visible": return { action: "assertVisible", selector: values.locating, label: "断言元素可见" };
+    case "assert_hidden": return { action: "assertHidden", selector: values.locating, label: "断言元素隐藏" };
+    case "assert_enabled": return { action: "assertEnabled", selector: values.locating, label: "断言元素启用" };
+    case "assert_disabled": return { action: "assertDisabled", selector: values.locating, label: "断言元素禁用" };
+    case "assert_checked": return { action: "assertChecked", selector: values.locating, label: "断言元素已选中" };
+    case "assert_unchecked": return { action: "assertUnchecked", selector: values.locating, label: "断言元素未选中" };
+    case "assert_value_equals": return { action: "assertValueEquals", selector: values.locating, text: values.expected, label: "断言输入值" };
+    case "assert_attribute_equals": return { action: "assertAttribute", selector: values.locating, attribute: values.attribute_name, text: values.expected, operator: "equals", label: "断言元素属性等于" };
+    case "assert_attribute_contains": return { action: "assertAttribute", selector: values.locating, attribute: values.attribute_name, text: values.expected, operator: "contains", label: "断言元素属性包含" };
+    case "assert_count": return { action: "assertCount", selector: values.locating, count: values.expected_count, label: "断言元素数量" };
+    case "assert_variable": return { action: "assertVariable", left: values.left_value, operator: values.operator, right: values.right_value, label: "断言变量" };
+    case "assert_variable_exists": return { action: "assertVariableExists", name: values.variable_name, label: "断言变量存在" };
+    case "assert_regex": return { action: "assertRegex", value: values.left_value, pattern: values.pattern, label: "断言正则匹配" };
+    case "sql_query": return { action: "sqlQuery", connectionString: values.connection_string, query: values.sql, resultVariable: values.result_variable, label: "执行 SQL 查询" };
+    case "set_variable": return { action: "setVariable", name: values.variable_name, value: values.variable_value, label: `设置变量 ${values.variable_name}` };
+    case "condition": return { action: "condition", left: values.left_value, operator: values.operator, right: values.right_value, label: "条件判断" };
+    case "python_code": return { action: "pythonCode", code: values.python_code, label: "执行 Python 代码" };
+    default: throw new Error(`暂不支持调试操作：${node.operationName || node.tag}`);
+  }
+}
+
+function debugStatusLabel(status, debugging) {
+  if (debugging || status === "queued" || status === "running") return "调试执行中";
+  if (status === "success") return "调试通过";
+  if (status === "failed") return "调试失败";
+  if (status === "canceled") return "调试已取消";
+  return "等待调试";
 }
 
 const stepNodeTypes = [
@@ -465,11 +627,28 @@ function PageStepsPage() {
     }
   }
 
+  async function openStepWorkbench(row) {
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await uiAutomationService.steps.list({ id: row.id, page: 1, pageSize: 1 });
+      const latestStep = pageItems(result)[0];
+      if (!latestStep) throw new Error("页面步骤不存在或已被删除");
+      persistPageState("ui.steps.workingStep", latestStep);
+      setWorkingStep(latestStep);
+    } catch (err) {
+      setNotice(err.message || "加载页面步骤失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (workingStep) {
     return (
       <StepWorkbench
         step={workingStep}
-        onBack={() => {
+        onBack={async () => {
+          await reload();
           clearPageState("ui.steps.workingStep");
           setWorkingStep(null);
         }}
@@ -584,7 +763,7 @@ function PageStepsPage() {
                     <th>模块名称</th>
                     <th>所属页面</th>
                     <th>步骤名称</th>
-                    <th>预估步骤顺序</th>
+                    <th className="step-sequence-column">预估步骤顺序</th>
                     <th>状态</th>
                     <th>操作</th>
                   </tr>
@@ -601,8 +780,10 @@ function PageStepsPage() {
                         <td>{row.method || "-"}</td>
                         <td>{row.locator || "-"}</td>
                         <td>{row.name || "-"}</td>
-                        <td className="cell-ellipsis cell-wide" title={row.description || ""}>
-                          {row.description || "-"}
+                        <td className="step-sequence-column">
+                          <div className="step-sequence-text" title={formatStepSequence(row.description)}>
+                            {formatStepSequence(row.description) || "-"}
+                          </div>
                         </td>
                         <td>
                           <span className={row.status === "disabled" ? "status-badge status-failed" : "status-badge status-passed"}>
@@ -613,10 +794,7 @@ function PageStepsPage() {
                           <div className="action-links">
                             <button
                               className="link-button"
-                              onClick={() => {
-                                persistPageState("ui.steps.workingStep", row);
-                                setWorkingStep(row);
-                              }}
+                              onClick={() => openStepWorkbench(row)}
                               type="button"
                             >
                               调试
@@ -626,10 +804,7 @@ function PageStepsPage() {
                             </button>
                             <button
                               className="link-button"
-                              onClick={() => {
-                                persistPageState("ui.steps.workingStep", row);
-                                setWorkingStep(row);
-                              }}
+                              onClick={() => openStepWorkbench(row)}
                               type="button"
                             >
                               步骤
@@ -851,9 +1026,9 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
 }
 
 function StepWorkbench({ step, onBack }) {
-  const [nodes, setNodes] = useState([]);
-  const [connections, setConnections] = useState([]);
-  const [nodeSeq, setNodeSeq] = useState(1);
+  const [nodes, setNodes] = useState(() => parseStepFlow(step.description).nodes);
+  const [connections, setConnections] = useState(() => parseStepFlow(step.description).connections);
+  const [nodeSeq, setNodeSeq] = useState(() => Math.max(0, ...parseStepFlow(step.description).nodes.map((node) => Number(node.id) || 0)) + 1);
   const [selectedNode, setSelectedNode] = useState(null);
   const [draggingItem, setDraggingItem] = useState(null);
   const [draggingNode, setDraggingNode] = useState(null);
@@ -861,22 +1036,29 @@ function StepWorkbench({ step, onBack }) {
   const [zoom, setZoom] = useState(1);
   const [configError, setConfigError] = useState("");
   const [operationMenuOpen, setOperationMenuOpen] = useState(false);
-  const [activeOperationGroup, setActiveOperationGroup] = useState(visibleOperationGroups[0].title);
+  const [activeOperationGroup, setActiveOperationGroup] = useState(elementOperationGroups[0].title);
   const [pageElementOptions, setPageElementOptions] = useState([]);
   const [pageElementsLoading, setPageElementsLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [connectingFrom, setConnectingFrom] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [debugging, setDebugging] = useState(false);
+  const [debugHeadless, setDebugHeadless] = useState(true);
+  const [debugResult, setDebugResult] = useState(null);
+  const [detailTab, setDetailTab] = useState("config");
+  const [debugBaseURL, setDebugBaseURL] = useState("");
   const canvasRef = useRef(null);
   const operationPickerRef = useRef(null);
   const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
   const selected = selectedNode ? nodes.find((node) => node.id === selectedNode.id) || selectedNode : null;
   const canvasSize = { width: 1200, height: 720 };
-  const operationOptions = operationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
-  const activeGroup = visibleOperationGroups.find((group) => group.title === activeOperationGroup) || visibleOperationGroups[0];
+  const availableOperationGroups = operationGroupsForType(selected?.type);
+  const operationOptions = availableOperationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
+  const activeGroup = availableOperationGroups.find((group) => group.title === activeOperationGroup) || availableOperationGroups[0];
   const operationDisplay = selected?.tag
     ? `${operationGroupLabel(selected.operationGroup)} / ${selected.operationName}`
-    : "请选择元素操作";
+    : "请选择节点操作";
   const connectionCount = connections.length;
   const connectedNodeIds = new Set(connections.flatMap((connection) => [connection.from, connection.to]));
   const unconnectedCount = nodes.filter((node) => !connectedNodeIds.has(node.id)).length;
@@ -901,6 +1083,7 @@ function StepWorkbench({ step, onBack }) {
           if (active) setPageElementOptions([]);
           return;
         }
+        if (active) setDebugBaseURL(pageRow.locator || "");
         const elements = await uiAutomationService.pageElements.list({ pageId: pageRow.id, page: 1, pageSize: 200 });
         if (active) {
           setPageElementOptions(
@@ -948,7 +1131,7 @@ function StepWorkbench({ step, onBack }) {
     const previousNode = nodes[nodes.length - 1];
     setNodeSeq((value) => value + 1);
     setNodes((current) => [...current, nextNode]);
-    if (previousNode) {
+    if (previousNode && previousNode.type !== "条件判断" && !connections.some((connection) => connection.from === previousNode.id)) {
       setConnections((current) => [...current, { from: previousNode.id, to: nextNode.id }]);
     }
     setSelectedNode(nextNode);
@@ -1069,10 +1252,10 @@ function StepWorkbench({ step, onBack }) {
     });
   };
 
-  const startConnection = (event, node) => {
+  const startConnection = (event, node, branch = "") => {
     event.preventDefault();
     event.stopPropagation();
-    setConnectingFrom(node.id);
+    setConnectingFrom({ nodeId: node.id, branch });
     setSelectedNode(node);
     setToast("请选择目标节点");
   };
@@ -1081,35 +1264,39 @@ function StepWorkbench({ step, onBack }) {
     event.preventDefault();
     event.stopPropagation();
     if (!connectingFrom) return;
-    if (connectingFrom === node.id) {
+    if (connectingFrom.nodeId === node.id) {
       setToast("不能连接当前节点");
       return;
     }
-    const remainingConnections = connections.filter((connection) => connection.from !== connectingFrom && connection.to !== node.id);
-    let cursor = node.id;
+    const remainingConnections = connections.filter((connection) => !(connection.from === connectingFrom.nodeId && (connection.branch || "") === connectingFrom.branch) && connection.to !== node.id);
+    const pending = [node.id];
     const visited = new Set();
-    while (cursor && !visited.has(cursor)) {
-      if (cursor === connectingFrom) {
+    while (pending.length) {
+      const cursor = pending.pop();
+      if (cursor === connectingFrom.nodeId) {
         setToast("不能形成循环连接");
         return;
       }
+      if (visited.has(cursor)) continue;
       visited.add(cursor);
-      cursor = remainingConnections.find((connection) => connection.from === cursor)?.to;
+      remainingConnections.filter((connection) => connection.from === cursor).forEach((connection) => pending.push(connection.to));
     }
-    setConnections([...remainingConnections, { from: connectingFrom, to: node.id }]);
+    setConnections([...remainingConnections, { from: connectingFrom.nodeId, to: node.id, ...(connectingFrom.branch ? { branch: connectingFrom.branch } : {}) }]);
     setConnectingFrom(null);
     setSelectedNode(node);
     setToast("连接成功");
   };
 
-  const deleteSelectedNode = () => {
+  const deleteSelectedNode = async () => {
     if (!selected) return;
-    setNodes((current) => current.filter((node) => node.id !== selected.id));
-    setConnections((current) => current.filter((connection) => connection.from !== selected.id && connection.to !== selected.id));
-    if (connectingFrom === selected.id) setConnectingFrom(null);
-    setSelectedNode(null);
-    setConfigError("");
-    setToast("节点已删除");
+    const nextNodes = nodes.filter((node) => node.id !== selected.id);
+    const nextConnections = connections.filter((connection) => connection.from !== selected.id && connection.to !== selected.id);
+    if (await persistFlow(nextNodes, nextConnections, "节点已删除")) {
+      setNodes(nextNodes);
+      setConnections(nextConnections);
+      if (connectingFrom?.nodeId === selected.id) setConnectingFrom(null);
+      setSelectedNode(null);
+    }
   };
 
   const updateSelectedNode = (patch) => {
@@ -1135,7 +1322,10 @@ function StepWorkbench({ step, onBack }) {
       });
       return;
     }
-    const values = item.params.reduce((result, param) => ({ ...result, [param]: selected?.values?.[param] || "" }), {});
+    const values = item.params.reduce((result, param) => ({
+      ...result,
+      [param]: selected?.values?.[param] || (param === "operator" ? "equals" : "")
+    }), {});
     updateSelectedNode({
       operationGroup: item.group,
       operationName: item.name,
@@ -1150,8 +1340,8 @@ function StepWorkbench({ step, onBack }) {
 
   const toggleOperationMenu = () => {
     if (!operationMenuOpen) {
-      const selectedGroupVisible = visibleOperationGroups.some((group) => group.title === selected?.operationGroup);
-      setActiveOperationGroup(selectedGroupVisible ? selected.operationGroup : visibleOperationGroups[0].title);
+      const selectedGroupVisible = availableOperationGroups.some((group) => group.title === selected?.operationGroup);
+      setActiveOperationGroup(selectedGroupVisible ? selected.operationGroup : availableOperationGroups[0].title);
     }
     setOperationMenuOpen((open) => !open);
   };
@@ -1161,7 +1351,33 @@ function StepWorkbench({ step, onBack }) {
     updateSelectedNode({ values: { ...selected.values, [param]: value }, saved: false });
   };
 
-  const saveNodeConfig = () => {
+  const persistFlow = async (nextNodes = nodes, nextConnections = connections, successMessage = "保存成功") => {
+    setSaving(true);
+    setConfigError("");
+    try {
+      const description = JSON.stringify({ schema: "synapse-flow-v1", nodes: nextNodes, connections: nextConnections });
+      await uiAutomationService.steps.update(step.id, {
+        name: step.name || "",
+        category: step.category || "",
+        method: step.method || "",
+        locator: step.locator || "",
+        action: step.action || "",
+        value: step.value || "",
+        description,
+        status: step.status || "active"
+      });
+      persistPageState("ui.steps.workingStep", { ...step, description });
+      setToast(successMessage);
+      return true;
+    } catch (error) {
+      setConfigError(error.message || "保存失败，请稍后重试");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveNodeConfig = async () => {
     if (!selected.tag) {
       setConfigError("请选择元素操作");
       return;
@@ -1171,12 +1387,86 @@ function StepWorkbench({ step, onBack }) {
       setConfigError(`请输入${operationParamLabels[missingParam] || missingParam}`);
       return;
     }
-    setConfigError("");
-    updateSelectedNode({
+    const savedNode = {
+      ...selected,
       saved: true,
       locator: selected.params.includes("locating") ? selected.values.locating : selected.params.length ? "参数已配置" : "无需参数"
-    });
-    setToast("保存成功");
+    };
+    const nextNodes = nodes.map((node) => (node.id === selected.id ? savedNode : node));
+    if (await persistFlow(nextNodes, connections)) {
+      setNodes(nextNodes);
+      setSelectedNode(savedNode);
+    }
+  };
+
+  const runDebug = async () => {
+    setConfigError("");
+    if (!nodes.length) {
+      setConfigError("请先添加调试节点");
+      return;
+    }
+    if (nodes.some((node) => !node.saved)) {
+      setConfigError("请先保存所有节点配置");
+      return;
+    }
+    const incompleteCondition = nodes.find((node) => node.type === "条件判断" && (
+      !connections.some((connection) => connection.from === node.id && connection.branch === "true")
+      || !connections.some((connection) => connection.from === node.id && connection.branch === "false")
+    ));
+    if (incompleteCondition) {
+      setConfigError(`条件节点“${incompleteCondition.title}”必须同时连接真、假分支`);
+      return;
+    }
+    const incomingNodeIDs = new Set(connections.map((connection) => connection.to));
+    const roots = nodes.filter((node) => !incomingNodeIDs.has(node.id));
+    const reachable = new Set();
+    const pendingNodeIDs = roots.length === 1 ? [roots[0].id] : [];
+    while (pendingNodeIDs.length) {
+      const nodeID = pendingNodeIDs.pop();
+      if (reachable.has(nodeID)) continue;
+      reachable.add(nodeID);
+      connections.filter((connection) => connection.from === nodeID).forEach((connection) => pendingNodeIDs.push(connection.to));
+    }
+    if (roots.length !== 1 || reachable.size !== nodes.length) {
+      setConfigError("所有节点必须连接成一个完整流程后才能调试");
+      return;
+    }
+    let actions;
+    try {
+      actions = buildDebugActions(nodes, connections, pageElementOptions);
+    } catch (error) {
+      setConfigError(error.message);
+      return;
+    }
+    if (!(await persistFlow(nodes, connections, "画布已保存"))) return;
+    setDebugging(true);
+    setDetailTab("debug");
+    setDebugResult({ status: "queued", result: null });
+    try {
+      const task = await executionService.debug({
+        url: actions.some((action) => action.action === "goto") ? "" : debugBaseURL,
+        actions,
+        timeoutSeconds: 30,
+        headless: debugHeadless
+      });
+      const deadline = Date.now() + 60000;
+      let result = task;
+      while (Date.now() < deadline) {
+        result = await executionService.debugStatus(task.taskId, task.executorId);
+        setDebugResult(result);
+        if (["success", "failed", "canceled"].includes(result.status)) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+      }
+      if (!["success", "failed", "canceled"].includes(result.status)) {
+        throw new Error("调试执行超时，请检查执行器状态");
+      }
+      setToast(result.status === "success" ? "调试通过" : "调试失败");
+    } catch (error) {
+      setDebugResult({ status: "failed", result: { error: error.message || "调试失败" } });
+      setToast("调试失败");
+    } finally {
+      setDebugging(false);
+    }
   };
 
   const handleWheel = (event) => {
@@ -1198,11 +1488,15 @@ function StepWorkbench({ step, onBack }) {
           <button className="icon-text-button compact-button" type="button">
             美化画布
           </button>
-          <button className="primary-button compact-button" type="button">
-            保存画布
+          <button className="primary-button compact-button" disabled={saving} onClick={() => persistFlow(nodes, connections, "画布保存成功")} type="button">
+            {saving ? "保存中" : "保存画布"}
           </button>
-          <button className="success-button compact-button" type="button">
-            调试
+          <div className="debug-mode-switch" aria-label="调试浏览器模式">
+            <button className={!debugHeadless ? "active" : ""} disabled={debugging} onClick={() => setDebugHeadless(false)} type="button">有头</button>
+            <button className={debugHeadless ? "active" : ""} disabled={debugging} onClick={() => setDebugHeadless(true)} type="button">无头</button>
+          </div>
+          <button className="success-button compact-button" disabled={debugging || saving} onClick={runDebug} type="button">
+            {debugging ? "调试中" : "调试"}
           </button>
           <button className="icon-text-button compact-button" onClick={onBack} type="button">
             返回
@@ -1288,7 +1582,7 @@ function StepWorkbench({ step, onBack }) {
                         const nextNode = nodes.find((item) => item.id === connection.to);
                         if (!node || !nextNode) return null;
                         const startX = node.x + 156;
-                        const startY = node.y + 32;
+                        const startY = node.y + (connection.branch === "true" ? 20 : connection.branch === "false" ? 46 : 32);
                         const endX = nextNode.x;
                         const endY = nextNode.y + 32;
                         const curve = Math.max(55, Math.abs(endX - startX) / 2);
@@ -1296,7 +1590,7 @@ function StepWorkbench({ step, onBack }) {
                           <path
                             className="flow-connection-path"
                             d={`M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`}
-                            key={`${connection.from}-${connection.to}`}
+                            key={`${connection.from}-${connection.to}-${connection.branch || "next"}`}
                             markerEnd="url(#flow-arrow)"
                           />
                         );
@@ -1304,7 +1598,7 @@ function StepWorkbench({ step, onBack }) {
                     </svg>
                     {nodes.map((node) => (
                       <div
-                        className={`${selected?.id === node.id ? "flow-node active" : "flow-node"}${connectingFrom === node.id ? " is-connecting" : ""}`}
+                        className={`${selected?.id === node.id ? "flow-node active" : "flow-node"}${connectingFrom?.nodeId === node.id ? " is-connecting" : ""}`}
                         key={node.id}
                         onMouseDown={(event) => handleNodeMouseDown(event, node)}
                         onKeyDown={(event) => {
@@ -1319,7 +1613,14 @@ function StepWorkbench({ step, onBack }) {
                         <strong>{node.title}</strong>
                         <small>{node.tag || "未配置"}</small>
                         <em>{node.saved ? "已配置" : "未保存"}</em>
-                        <button aria-label={`从${node.title}开始连接`} className="node-port output-port" onClick={(event) => startConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
+                        {node.type === "条件判断" ? (
+                          <>
+                            <button aria-label={`从${node.title}真分支开始连接`} className="node-port output-port condition-true-port" onClick={(event) => startConnection(event, node, "true")} onMouseDown={(event) => event.stopPropagation()} type="button">真</button>
+                            <button aria-label={`从${node.title}假分支开始连接`} className="node-port output-port condition-false-port" onClick={(event) => startConnection(event, node, "false")} onMouseDown={(event) => event.stopPropagation()} type="button">假</button>
+                          </>
+                        ) : (
+                          <button aria-label={`从${node.title}开始连接`} className="node-port output-port" onClick={(event) => startConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1348,20 +1649,20 @@ function StepWorkbench({ step, onBack }) {
             {selected ? <span>{selected.type}</span> : null}
           </div>
           <div className="detail-tabs">
-            <button className="active" type="button">
+            <button className={detailTab === "config" ? "active" : ""} onClick={() => setDetailTab("config")} type="button">
               节点配置
             </button>
-            <button type="button">调试结果</button>
+            <button className={detailTab === "debug" ? "active" : ""} onClick={() => setDetailTab("debug")} type="button">调试结果</button>
           </div>
-          {selected ? (
+          {detailTab === "config" ? (selected ? (
             <div className="node-config">
               <div className="recent-element-box">
-                <strong>最近测试的元素信息</strong>
-                <div>暂无元素信息</div>
+                <strong>{selected.type === "元素操作" || selected.type === "断言操作" ? "最近测试的元素信息" : "节点运行上下文"}</strong>
+                <div>{selected.type === "元素操作" || selected.type === "断言操作" ? "暂无元素信息" : "可使用 ${变量名} 引用前序节点结果"}</div>
               </div>
               <div className="node-section-title">节点详情</div>
               <div className="form-field required-field">
-                <span>元素操作</span>
+                <span>节点操作</span>
                 <div className="operation-cascader" ref={operationPickerRef}>
                   <button
                     aria-expanded={operationMenuOpen}
@@ -1376,7 +1677,7 @@ function StepWorkbench({ step, onBack }) {
                   {operationMenuOpen ? (
                     <div className="operation-cascader-menu">
                       <div className="operation-group-list" role="listbox" aria-label="操作分类">
-                        {visibleOperationGroups.map((group) => (
+                        {availableOperationGroups.map((group) => (
                           <button
                             aria-selected={activeGroup.title === group.title}
                             className={activeGroup.title === group.title ? "active" : ""}
@@ -1409,7 +1710,15 @@ function StepWorkbench({ step, onBack }) {
               {selected.params.map((param) => (
                 <label className="form-field required-field" key={param}>
                   <span>{operationParamLabels[param] || param}</span>
-                  {param.startsWith("locating") ? (
+                  {param === "operator" ? (
+                    <select className="text-input" value={selected.values?.[param] || "equals"} onChange={(event) => updateOperationParam(param, event.target.value)}>
+                      <option value="equals">等于</option>
+                      <option value="notEquals">不等于</option>
+                      <option value="contains">包含</option>
+                      <option value="greaterThan">大于</option>
+                      <option value="lessThan">小于</option>
+                    </select>
+                  ) : param.startsWith("locating") ? (
                     <select
                       className="text-input"
                       disabled={pageElementsLoading || pageElementOptions.length === 0}
@@ -1429,7 +1738,7 @@ function StepWorkbench({ step, onBack }) {
                     <textarea
                       className="text-area node-param-input"
                       placeholder={`请输入${operationParamLabels[param] || param}`}
-                      rows="3"
+                      rows={param === "python_code" || param === "sql" ? 8 : 3}
                       value={selected.values?.[param] || ""}
                       onChange={(event) => updateOperationParam(param, event.target.value)}
                     />
@@ -1447,11 +1756,11 @@ function StepWorkbench({ step, onBack }) {
               </label>
               {configError ? <div className="form-error">{configError}</div> : null}
               <div className="node-config-actions">
-                <button className="danger-button compact-button" onClick={deleteSelectedNode} type="button">
+                <button className="danger-button compact-button" disabled={saving} onClick={deleteSelectedNode} type="button">
                   删除节点
                 </button>
-                <button className="primary-button compact-button" onClick={saveNodeConfig} type="button">
-                  保存配置
+                <button className="primary-button compact-button" disabled={saving} onClick={saveNodeConfig} type="button">
+                  {saving ? "保存中" : "保存配置"}
                 </button>
               </div>
             </div>
@@ -1459,6 +1768,24 @@ function StepWorkbench({ step, onBack }) {
             <div className="empty-detail">
               <strong>暂未选择节点</strong>
               <p>在左侧画布中点击一个节点后，这里会显示元素、操作和断言配置。</p>
+            </div>
+          )) : (
+            <div className="debug-result-panel">
+              <div className={`debug-status debug-status-${debugResult?.status || "idle"}`}>
+                <strong>{debugStatusLabel(debugResult?.status, debugging)}</strong>
+                <span>{debugResult?.taskId || "尚未启动调试任务"}</span>
+              </div>
+              {debugResult?.result?.output ? (
+                <div className="debug-output">
+                  <strong>执行进度</strong>
+                  <div className="debug-console" aria-live="polite">
+                    <div className="debug-console-title">调试执行窗口</div>
+                    <pre>{debugResult.result.output.split("\n").filter(Boolean).map((line) => `> ${line}`).join("\n")}</pre>
+                  </div>
+                </div>
+              ) : null}
+              {debugResult?.result?.error ? <div className="debug-output debug-error"><strong>错误信息</strong><pre>{debugResult.result.error}</pre></div> : null}
+              {!debugResult ? <div className="empty-detail"><strong>暂无调试结果</strong><p>点击页面右上角“调试”后，这里会实时显示执行结果。</p></div> : null}
             </div>
           )}
         </aside>

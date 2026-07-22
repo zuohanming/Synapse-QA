@@ -33,7 +33,8 @@ func (f *fakeExecutionRepo) CreateRun(ctx context.Context, req model.ExecutionRu
 		return model.ExecutionRun{}, f.createRunErr
 	}
 	if f.run.ID == 0 {
-		f.run = model.ExecutionRun{ID: 1, RunType: req.RunType, Status: "pending", TriggeredBy: triggeredBy, CaseIDs: req.CaseIDs}
+		headless := req.Headless == nil || *req.Headless
+		f.run = model.ExecutionRun{ID: 1, RunType: req.RunType, Headless: headless, Status: "pending", TriggeredBy: triggeredBy, CaseIDs: req.CaseIDs}
 	}
 	return f.run, nil
 }
@@ -70,11 +71,12 @@ func (f *fakeExecutionRepo) CreateTask(ctx context.Context, runID int64, taskID 
 	if f.createTaskErr != nil {
 		return model.ExecutionTask{}, f.createTaskErr
 	}
-	if f.createTaskReturn.TaskID == "" {
-		f.createTaskReturn = model.ExecutionTask{ID: 1, RunID: runID, TaskID: taskID, CaseID: caseID, ExecutorID: executorID, TaskType: taskType, Payload: payload, CallbackURL: callbackURL, Status: "queued"}
+	item := f.createTaskReturn
+	if item.TaskID == "" {
+		item = model.ExecutionTask{ID: int64(len(f.tasks) + 1), RunID: runID, TaskID: taskID, CaseID: caseID, ExecutorID: executorID, TaskType: taskType, Payload: payload, CallbackURL: callbackURL, Status: "queued"}
 	}
-	f.tasks = append(f.tasks, f.createTaskReturn)
-	return f.createTaskReturn, nil
+	f.tasks = append(f.tasks, item)
+	return item, nil
 }
 
 func (f *fakeExecutionRepo) GetTaskByTaskID(ctx context.Context, taskID string) (model.ExecutionTask, error) {
@@ -101,13 +103,33 @@ func (f *fakeExecutionRepo) ListTasksByRun(ctx context.Context, runID int64) ([]
 	return f.tasks, nil
 }
 
+func (f *fakeExecutionRepo) CountActiveTasksByExecutor(ctx context.Context, executorID string) (int, error) {
+	count := 0
+	for _, task := range f.tasks {
+		if task.ExecutorID == executorID && (task.Status == "queued" || task.Status == "running") {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (f *fakeExecutionRepo) UpdateTaskStatus(ctx context.Context, id int64, status string) error {
 	f.task.Status = status
+	for index := range f.tasks {
+		if f.tasks[index].ID == id {
+			f.tasks[index].Status = status
+		}
+	}
 	return f.updateStatusErr
 }
 
 func (f *fakeExecutionRepo) UpdateTaskResult(ctx context.Context, id int64, result json.RawMessage) error {
 	f.task.Result = result
+	for index := range f.tasks {
+		if f.tasks[index].ID == id {
+			f.tasks[index].Result = result
+		}
+	}
 	return f.updateResultErr
 }
 
@@ -150,7 +172,10 @@ func (f *fakeTestCaseReader) Get(ctx context.Context, id int64) (model.TestCaseD
 		return model.TestCaseDetail{}, f.getErr
 	}
 	if f.getReturn.ID == 0 {
-		f.getReturn = model.TestCaseDetail{TestCase: model.TestCase{ID: id, Name: "登录成功", Status: "active"}}
+		f.getReturn = model.TestCaseDetail{
+			TestCase: model.TestCase{ID: id, Name: "登录成功", Status: "active"},
+			Steps:    []model.TestCaseStep{{Action: "click", Locator: "#submit"}},
+		}
 	}
 	return f.getReturn, nil
 }
@@ -189,6 +214,27 @@ func TestExecutionServiceCreateRunSuccess(t *testing.T) {
 	}
 }
 
+func TestExecutionServicePassesHeadedModeToExecutor(t *testing.T) {
+	var receivedHeadless any
+	svc, server := newExecutionServiceWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode executor request: %v", err)
+		}
+		payload, _ := body["payload"].(map[string]any)
+		receivedHeadless = payload["headless"]
+		w.WriteHeader(http.StatusAccepted)
+	})
+	defer server.Close()
+	headless := false
+	if _, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1}, Headless: &headless}); err != nil {
+		t.Fatalf("CreateRun returned error: %v", err)
+	}
+	if receivedHeadless != false {
+		t.Fatalf("expected headed mode, got %#v", receivedHeadless)
+	}
+}
+
 func TestExecutionServiceCreateRunValidation(t *testing.T) {
 	svc := NewExecutionService(&fakeExecutionRepo{}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
 	if _, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{}); err == nil {
@@ -199,10 +245,118 @@ func TestExecutionServiceCreateRunValidation(t *testing.T) {
 	}
 }
 
+func TestExecutionServiceCreateRunDispatchesOnlyExecutorCapacity(t *testing.T) {
+	dispatched := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dispatched++
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"taskId":"accepted","type":"ui","status":"queued","payload":{},"createdAt":"2026-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	caseIDs := make([]int64, 1000)
+	for i := range caseIDs {
+		caseIDs[i] = int64(i + 1)
+	}
+	repo := &fakeExecutionRepo{}
+	executors := &fakeExecutorRepo{executors: []model.ExecutorView{{
+		ExecutorID: "exec-1", Endpoint: server.URL, Status: "online", MaxWorkers: 2, SupportedTypes: []string{"ui"},
+	}}}
+	svc := NewExecutionService(repo, executors, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, server.URL)
+	detail, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: caseIDs})
+	if err != nil {
+		t.Fatalf("CreateRun returned error: %v", err)
+	}
+	if dispatched != 4 || len(detail.Tasks) != 4 {
+		t.Fatalf("expected 4 initial tasks, dispatched=%d tasks=%d", dispatched, len(detail.Tasks))
+	}
+	if detail.Status != "running" {
+		t.Fatalf("expected running batch, got %s", detail.Status)
+	}
+}
+
+func TestExecutionServiceHeadedRunUsesExecutorCapacity(t *testing.T) {
+	dispatched := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dispatched++
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	repo := &fakeExecutionRepo{}
+	executors := &fakeExecutorRepo{executors: []model.ExecutorView{{
+		ExecutorID: "exec-1", Endpoint: server.URL, Status: "online", MaxWorkers: 8, SupportedTypes: []string{"ui"},
+	}}}
+	svc := NewExecutionService(repo, executors, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, server.URL)
+	headless := false
+	_, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1, 2, 3}, Headless: &headless})
+	if err != nil {
+		t.Fatalf("CreateRun returned error: %v", err)
+	}
+	if dispatched != 3 {
+		t.Fatalf("expected three headed tasks, got %d", dispatched)
+	}
+}
+
+func TestExecutionServiceDispatchPendingRefillsAvailableSlots(t *testing.T) {
+	dispatched := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dispatched++
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	repo := &fakeExecutionRepo{}
+	executors := &fakeExecutorRepo{executors: []model.ExecutorView{{
+		ExecutorID: "exec-1", Endpoint: server.URL, Status: "online", MaxWorkers: 1, SupportedTypes: []string{"ui"},
+	}}}
+	svc := NewExecutionService(repo, executors, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, server.URL)
+	_, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1, 2, 3, 4, 5}})
+	if err != nil {
+		t.Fatalf("CreateRun returned error: %v", err)
+	}
+	if dispatched != 2 {
+		t.Fatalf("expected initial queue capacity 2, got %d", dispatched)
+	}
+	repo.tasks[0].Status = "success"
+	repo.tasks[1].Status = "success"
+	if err := svc.DispatchPending(context.Background()); err != nil {
+		t.Fatalf("DispatchPending returned error: %v", err)
+	}
+	if dispatched != 4 {
+		t.Fatalf("expected two replacement tasks, got %d total", dispatched)
+	}
+}
+
 func TestExecutionServiceCreateRunNoExecutor(t *testing.T) {
 	svc := NewExecutionService(&fakeExecutionRepo{}, &fakeExecutorRepo{executors: []model.ExecutorView{}}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
 	if _, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1}}); err == nil {
 		t.Fatal("expected no executor error")
+	}
+}
+
+func TestExecutionServiceRejectsDisabledCase(t *testing.T) {
+	repo := &fakeExecutionRepo{}
+	svc := NewExecutionService(repo, &fakeExecutorRepo{executors: []model.ExecutorView{{ExecutorID: "exec-1", Status: "online", SupportedTypes: []string{"ui"}}}}, &fakeTestCaseReader{
+		getReturn: model.TestCaseDetail{TestCase: model.TestCase{ID: 1, Name: "停用用例", Status: "disabled"}, Steps: []model.TestCaseStep{{Action: "click", Locator: "#submit"}}},
+	}, &fakeExecutionOperationLogger{}, "http://localhost")
+	detail, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1}})
+	if err != nil {
+		t.Fatalf("CreateRun returned unexpected error: %v", err)
+	}
+	if detail.Status != "failed" || len(detail.Tasks) != 1 || detail.Tasks[0].Status != "failed" {
+		t.Fatalf("expected disabled case to create a failed task: %+v", detail)
+	}
+}
+
+func TestExecutionServiceAllowsDraftCasePayload(t *testing.T) {
+	svc := NewExecutionService(&fakeExecutionRepo{}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
+	payload, err := svc.buildTaskPayload(model.TestCaseDetail{
+		TestCase: model.TestCase{ID: 1, Name: "草稿用例", Status: "draft"},
+		Steps:    []model.TestCaseStep{{Action: "click", Locator: "#submit"}},
+	}, "ui")
+	if err != nil || len(payload["actions"].([]map[string]any)) != 1 {
+		t.Fatalf("draft case should remain executable: payload=%#v err=%v", payload, err)
 	}
 }
 
@@ -323,7 +477,7 @@ func TestExecutionServicePickExecutor(t *testing.T) {
 
 func TestExecutionServiceBuildsPlayableUIPayload(t *testing.T) {
 	svc := NewExecutionService(&fakeExecutionRepo{}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
-	payload := svc.buildTaskPayload(model.TestCaseDetail{
+	payload, err := svc.buildTaskPayload(model.TestCaseDetail{
 		TestCase: model.TestCase{ID: 7, Name: "登录", Preconditions: "http://127.0.0.1:4173/target.html"},
 		Steps: []model.TestCaseStep{
 			{Action: "w_input", Locator: "#username", Value: "admin"},
@@ -331,6 +485,9 @@ func TestExecutionServiceBuildsPlayableUIPayload(t *testing.T) {
 			{Action: "assertTitle", Value: "Synapse QA E2E Target"},
 		},
 	}, "ui")
+	if err != nil {
+		t.Fatalf("buildTaskPayload returned error: %v", err)
+	}
 	if payload["url"] != "http://127.0.0.1:4173/target.html" {
 		t.Fatalf("unexpected url: %v", payload["url"])
 	}
@@ -343,6 +500,37 @@ func TestExecutionServiceBuildsPlayableUIPayload(t *testing.T) {
 	}
 	if actions[2]["text"] != "Synapse QA E2E Target" {
 		t.Fatalf("unexpected assertion action: %#v", actions[2])
+	}
+}
+
+func TestExecutionServiceBuildsCanvasAndDatasetPayload(t *testing.T) {
+	svc := NewExecutionService(&fakeExecutionRepo{}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
+	flow := `{"schema":"synapse-flow-v1","nodes":[{"id":1,"tag":"set_variable","operationName":"设置变量","values":{"variable_name":"role","variable_value":"${dataset_role}"}},{"id":2,"tag":"condition","operationName":"判断角色","values":{"left_value":"${role}","operator":"equals","right_value":"admin"}},{"id":3,"tag":"assert_title","operationName":"标题断言","values":{"expected":"管理台"}},{"id":4,"tag":"assert_url","operationName":"URL断言","values":{"expected":"login"}}],"connections":[{"from":1,"to":2},{"from":2,"to":3,"branch":"true"},{"from":2,"to":4,"branch":"false"}]}`
+	finalFlow := `{"schema":"synapse-flow-v1","nodes":[{"id":1,"tag":"assert_variable_exists","operationName":"变量断言","values":{"variable_name":"role"}}],"connections":[]}`
+	payload, err := svc.buildTaskPayload(model.TestCaseDetail{
+		TestCase: model.TestCase{ID: 8, Name: "角色登录", DataEnabled: true},
+		Steps: []model.TestCaseStep{
+			{StepName: "角色分支", Description: flow},
+			{StepName: "最终断言", Description: finalFlow},
+		},
+		Datasets: []model.TestCaseDataset{
+			{Name: "管理员", Enabled: true, Variables: json.RawMessage(`{"dataset_role":"admin"}`)},
+			{Name: "停用数据", Enabled: false, Variables: json.RawMessage(`{"dataset_role":"guest"}`)},
+		},
+	}, "ui")
+	if err != nil {
+		t.Fatalf("buildTaskPayload returned error: %v", err)
+	}
+	actions := payload["actions"].([]map[string]any)
+	if len(actions) != 5 || actions[1]["trueNext"] != "step-1-3" || actions[1]["falseNext"] != "step-1-4" {
+		t.Fatalf("unexpected canvas actions: %#v", actions)
+	}
+	if actions[2]["next"] != "step-2-1" || actions[3]["next"] != "step-2-1" {
+		t.Fatalf("canvas steps were not chained: %#v", actions)
+	}
+	datasets := payload["datasets"].([]map[string]any)
+	if len(datasets) != 1 || datasets[0]["name"] != "管理员" {
+		t.Fatalf("unexpected datasets: %#v", datasets)
 	}
 }
 

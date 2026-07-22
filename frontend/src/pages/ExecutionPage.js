@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
 import { PaginationBar, TablePanel } from "../components/DataTable.js";
 import { StateBlock } from "../components/StateBlock.js";
@@ -24,6 +24,24 @@ export function ExecutionPage({ activePath }) {
   const rows = pageItems(data);
   const total = data?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const runningStatuses = new Set(["pending", "queued", "running"]);
+  const hasRunningRows = rows.some((row) => runningStatuses.has(row.status));
+  const detailIsRunning = detail && runningStatuses.has(detail.status);
+
+  useEffect(() => {
+    if (!hasRunningRows && !detailIsRunning) return undefined;
+    const timer = window.setTimeout(async () => {
+      await reload({ silent: true });
+      if (detailIsRunning) {
+        try {
+          setDetail(await executionService.get(detail.id));
+        } catch {
+          // 列表轮询仍继续，详情读取失败由下一轮重试。
+        }
+      }
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [hasRunningRows, detail?.id, detail?.status, detailIsRunning, reload]);
 
   async function openDetail(row) {
     setBusy(true);
@@ -67,8 +85,8 @@ export function ExecutionPage({ activePath }) {
         {notice ? <div className="inline-notice">{notice}</div> : null}
         <StateBlock loading={loading} error={error}>
           <TablePanel>
-            <div className="table-wrap"><table className="data-table"><thead><tr><th>批次 ID</th><th>类型</th><th>状态</th><th>用例数</th><th>通过</th><th>失败</th><th>触发人</th><th>开始时间</th><th>操作</th></tr></thead><tbody>
-              {rows.length ? rows.map((row) => { const summary = row.summary || {}; return <tr key={row.id}><td>{row.id}</td><td>{runTypeLabel(row.runType)}</td><td><span className={`status-badge ${row.status === "completed" ? "status-passed" : row.status === "failed" ? "status-failed" : ""}`}>{runStatusLabel(row.status)}</span></td><td>{summary.total ?? row.caseIds?.length ?? 0}</td><td>{summary.passed ?? "-"}</td><td>{summary.failed ?? "-"}</td><td>{row.triggeredBy || "-"}</td><td>{formatTime(row.startedAt || row.createdAt)}</td><td><div className="action-links"><button className="link-button" disabled={busy} onClick={() => openDetail(row)} type="button">{reportMode ? "查看报告" : "详情"}</button>{row.status === "running" ? <button className="link-button danger-link" disabled={busy} onClick={() => cancelRun(row)} type="button">取消</button> : null}</div></td></tr>; }) : <tr><td colSpan="9">暂无执行记录</td></tr>}
+            <div className="table-wrap"><table className="data-table"><thead><tr><th>批次 ID</th><th>类型</th><th>状态</th><th>执行进度</th><th>用例数</th><th>通过</th><th>失败</th><th>触发人</th><th>开始时间</th><th>操作</th></tr></thead><tbody>
+              {rows.length ? rows.map((row) => { const summary = row.summary || {}; return <tr key={row.id}><td>{row.id}</td><td>{runTypeLabel(row.runType)}</td><td><span className={`status-badge ${row.status === "completed" ? "status-passed" : row.status === "failed" ? "status-failed" : ""}`}>{runStatusLabel(row.status)}</span></td><td><ExecutionProgress summary={summary} totalFallback={row.caseIds?.length} /></td><td>{summary.total ?? row.caseIds?.length ?? 0}</td><td>{summary.passed ?? "-"}</td><td>{summary.failed ?? "-"}</td><td>{row.triggeredBy || "-"}</td><td>{formatTime(row.startedAt || row.createdAt)}</td><td><div className="action-links"><button className="link-button" disabled={busy} onClick={() => openDetail(row)} type="button">{reportMode ? "查看报告" : "详情"}</button>{row.status === "running" ? <button className="link-button danger-link" disabled={busy} onClick={() => cancelRun(row)} type="button">取消</button> : null}</div></td></tr>; }) : <tr><td colSpan="10">暂无执行记录</td></tr>}
             </tbody></table></div>
             <PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} />
           </TablePanel>
@@ -85,6 +103,12 @@ function ExecutionReport({ detail, onClose }) {
 }
 
 function ReportMetric({ label, value, tone = "" }) { return <div className={`report-metric ${tone}`}><span>{label}</span><strong>{value}</strong></div>; }
+function ExecutionProgress({ summary = {}, totalFallback = 0 }) {
+  const total = Number(summary.total ?? totalFallback ?? 0);
+  const completed = Number(summary.passed || 0) + Number(summary.failed || 0) + Number(summary.skipped || 0);
+  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  return <div className="execution-progress" title={`已完成 ${completed}/${total}`}><div className="execution-progress-track"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></div>;
+}
 function runTypeLabel(value) { return { ui: "UI", api: "API", unit: "单元测试", script: "脚本", noop: "流程验证" }[value] || value || "-"; }
 function runStatusLabel(value) { return { pending: "等待中", queued: "排队中", running: "执行中", success: "通过", completed: "已通过", failed: "失败", canceled: "已取消" }[value] || value || "-"; }
 function escapeHTML(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }

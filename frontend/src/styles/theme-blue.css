@@ -53,7 +53,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .menu-button { min-height: 42px; padding: 0 12px; font-weight: 500; }
 .menu-button span { flex: 1; }
 .menu-chevron { color: #86909c; transition: transform 160ms ease; }
-.menu-button.active .menu-chevron { transform: rotate(180deg); }
+.menu-button.expanded .menu-chevron { transform: rotate(180deg); }
+.menu-children { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 180ms ease, opacity 140ms ease; }
+.menu-children.open { grid-template-rows: 1fr; opacity: 1; }
+.menu-children-inner { min-height: 0; overflow: hidden; }
 .menu-child { position: relative; min-height: 38px; padding: 0 12px 0 40px; font-size: 13px; }
 .menu-child svg { width: 14px; height: 14px; }
 .menu-button:hover, .menu-child:hover { color: var(--primary); background: #f7f8fa; }
@@ -239,6 +242,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .login-intro { display: none; }
   .login-panel { min-height: 100vh; padding: 24px; }
   .module-config-layout, .step-workbench-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-children { transition: none; }
 }
 
 @media (max-width: 560px) {

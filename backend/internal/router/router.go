@@ -46,6 +46,8 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.GET("/executions", deps.ExecutionController.List)
 	authed.POST("/executions", deps.ExecutionController.Create)
+	authed.POST("/executions/debug", deps.ExecutionController.StartDebug)
+	authed.GET("/executions/debug/:taskId", deps.ExecutionController.GetDebug)
 	authed.GET("/executions/:id", deps.ExecutionController.Get)
 	authed.POST("/executions/:id/cancel", deps.ExecutionController.Cancel)
 	authed.GET("/executions/tasks/:taskId/logs", deps.ExecutionController.ListTaskLogs)

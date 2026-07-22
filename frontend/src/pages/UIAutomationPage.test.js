@@ -20,6 +20,12 @@ function apiError(error) {
 function mockFetch() {
   global.fetch = vi.fn((url, options = {}) => {
     const target = String(url);
+    if (target.includes("/api/executors")) {
+      return apiResponse(globalThis.__executorOffline ? [] : [{ executorId: "local", status: "online", supportedTypes: ["ui"] }]);
+    }
+    if (target.includes("/api/executions") && options.method === "POST") {
+      return apiResponse({ id: 88, status: "running" });
+    }
     if (target.includes("/api/test-cases/export")) {
       if (globalThis.__exportFails) {
         return apiError("导出失败");
@@ -44,6 +50,9 @@ function mockFetch() {
       }
       return apiResponse({
         id: 1,
+        productId: 10,
+        moduleId: 20,
+        pageId: 30,
         productName: globalThis.__sparseDetail ? "" : "演示DEMO/模拟UI",
         moduleName: globalThis.__sparseDetail ? "" : "登录",
         pageName: globalThis.__sparseDetail ? "" : "登录页",
@@ -145,6 +154,7 @@ describe("UIAutomationPage 测试用例页", () => {
     delete globalThis.__exportFails;
     delete globalThis.__saveFails;
     delete globalThis.__caseDeleteFails;
+    delete globalThis.__executorOffline;
     vi.restoreAllMocks();
   });
 
@@ -152,6 +162,71 @@ describe("UIAutomationPage 测试用例页", () => {
     render(<TestCasesPage />);
     expect(await screen.findByText("登录成功")).toBeInTheDocument();
     expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/test-cases?page=1&pageSize=20"), expect.any(Object));
+  });
+
+  it("支持直接执行单条测试用例", async () => {
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByRole("button", { name: "执行用例 登录成功" }));
+    expect(screen.getByRole("region", { name: "选择执行模式" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("开始执行"));
+    expect(await screen.findByText("执行批次 #88 已创建，请前往执行中心查看结果。")).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/executions"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ runType: "ui", caseIds: [1], headless: true }) })
+    );
+  });
+
+  it("支持选择有头模式执行", async () => {
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByRole("button", { name: "执行用例 登录成功" }));
+    fireEvent.click(screen.getByText("有头执行"));
+    fireEvent.click(screen.getByText("开始执行"));
+    await screen.findByText("执行批次 #88 已创建，请前往执行中心查看结果。");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/executions"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ runType: "ui", caseIds: [1], headless: false }) })
+    );
+  });
+
+  it("执行器未启动时阻止执行并显示 Toast", async () => {
+    globalThis.__executorOffline = true;
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByRole("button", { name: "执行用例 登录成功" }));
+    fireEvent.click(screen.getByText("开始执行"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("执行器未启动，请先启动执行器");
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/executions"),
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("用例没有关联步骤时阻止创建执行批次", async () => {
+    globalThis.__emptyDetailSteps = true;
+    render(<TestCasesPage />);
+    await screen.findByText("登录成功");
+    fireEvent.click(screen.getByRole("button", { name: "执行用例 登录成功" }));
+    fireEvent.click(screen.getByText("开始执行"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("以下用例未关联步骤：登录成功");
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/executions"),
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("草稿用例允许执行，停用用例禁止执行", async () => {
+    globalThis.__caseStatus = "draft";
+    const draft = render(<TestCasesPage />);
+    expect(await screen.findByRole("button", { name: "执行用例 登录成功" })).toBeEnabled();
+    draft.unmount();
+
+    globalThis.__caseStatus = "disabled";
+    render(<TestCasesPage />);
+    expect(await screen.findByRole("button", { name: "执行用例 登录成功" })).toBeDisabled();
   });
 
   it("渲染空列表、列表错误和未知状态", async () => {
@@ -306,10 +381,10 @@ describe("UIAutomationPage 测试用例页", () => {
     render(<TestCasesPage />);
     await screen.findByText("登录成功");
     fireEvent.click(screen.getByText("编辑"));
+    await screen.findByText("编辑测试用例");
     const modal = document.querySelector(".modal-card");
     const selects = within(modal).getAllByRole("combobox");
-    fireEvent.change(selects[1], { target: { value: "20" } });
-    fireEvent.change(selects[2], { target: { value: "30" } });
+    expect(await within(modal).findByText("输入账号")).toBeInTheDocument();
     fireEvent.change(selects[3], { target: { value: "api" } });
     fireEvent.change(selects[4], { target: { value: "P0" } });
     fireEvent.change(selects[5], { target: { value: "disabled" } });
@@ -321,8 +396,7 @@ describe("UIAutomationPage 测试用例页", () => {
     fireEvent.change(textareas[0], { target: { value: "存在账号" } });
     fireEvent.change(textareas[1], { target: { value: "进入首页" } });
     fireEvent.change(textareas[2], { target: { value: "编辑说明" } });
-    expect(await within(modal).findByText("输入账号")).toBeInTheDocument();
-    fireEvent.click(within(modal).getByText("输入账号"));
+    expect(within(modal).getByRole("checkbox", { name: "输入账号" })).toBeChecked();
     fireEvent.click(screen.getByText("提交"));
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
@@ -337,6 +411,8 @@ describe("UIAutomationPage 测试用例页", () => {
     render(<TestCasesPage />);
     await screen.findByText("登录成功");
     fireEvent.click(screen.getByText("编辑"));
+    await screen.findByText("编辑测试用例");
+    await screen.findByText("输入账号");
     fireEvent.click(screen.getByText("提交"));
     expect(await screen.findByText("保存失败")).toBeInTheDocument();
   });
@@ -346,6 +422,7 @@ describe("UIAutomationPage 测试用例页", () => {
     render(<TestCasesPage />);
     await screen.findByText("P1");
     fireEvent.click(screen.getByText("编辑"));
+    await screen.findByText("编辑测试用例");
     const modal = document.querySelector(".modal-card");
     const selects = within(modal).getAllByRole("combobox");
     expect(selects[3]).toHaveValue("ui");

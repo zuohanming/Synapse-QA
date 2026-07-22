@@ -1,4 +1,5 @@
 ﻿import { useState } from "react";
+import { EyeOff, Monitor, Play, X } from "lucide-react";
 import { PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { StateBlock } from "../components/StateBlock.js";
@@ -42,7 +43,9 @@ export function TestCasesPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [modal, setModal] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [executionModal, setExecutionModal] = useState(null);
   const [notice, setNotice] = useState("");
+  const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
 
   const { data, loading, error, reload } = useAsyncData(
@@ -135,6 +138,19 @@ export function TestCasesPage() {
     }
   }
 
+  async function openEdit(row) {
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await uiAutomationService.cases.get(row.id);
+      setModal({ mode: "edit", row: result });
+    } catch (err) {
+      setNotice(err.message || "读取用例数据失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function exportCases() {
     setBusy(true);
     setNotice("");
@@ -180,15 +196,36 @@ export function TestCasesPage() {
     }
   }
 
-  async function executeRows(ids) {
+  function openExecutionModal(ids) {
     if (!ids.length) {
       setNotice("请先选择需要执行的测试用例。");
       return;
     }
+    setExecutionModal({ ids });
+  }
+
+  async function executeRows(ids, headless) {
     setBusy(true);
     setNotice("");
     try {
-      const run = await executionService.create({ runType: "ui", caseIds: ids });
+      const caseDetails = await Promise.all(ids.map((id) => uiAutomationService.cases.get(id)));
+      const emptyCases = caseDetails.filter((item) => !Array.isArray(item.steps) || item.steps.length === 0);
+      if (emptyCases.length) {
+        setToast(`以下用例未关联步骤：${emptyCases.map((item) => item.name || `#${item.id}`).join("、")}`);
+        window.setTimeout(() => setToast(""), 3200);
+        return;
+      }
+      const executors = await executionService.executors();
+      const available = Array.isArray(executors) && executors.some((executor) =>
+        executor.status === "online" && Array.isArray(executor.supportedTypes) && executor.supportedTypes.includes("ui")
+      );
+      if (!available) {
+        setToast("执行器未启动，请先启动执行器");
+        window.setTimeout(() => setToast(""), 3200);
+        return;
+      }
+      const run = await executionService.create({ runType: "ui", caseIds: ids, headless });
+      setExecutionModal(null);
       setNotice(`执行批次 #${run.id} 已创建，请前往执行中心查看结果。`);
     } catch (err) {
       setNotice(err.message || "创建执行批次失败");
@@ -199,6 +236,7 @@ export function TestCasesPage() {
 
   return (
     <div className="section-stack">
+      {toast ? <div className="error-toast" role="alert">{toast}</div> : null}
       <PageHeader title="测试用例" description="管理界面自动化测试用例、关联步骤和参数化数据" />
       <section className="resource-panel">
         <div className="panel-header">
@@ -284,7 +322,7 @@ export function TestCasesPage() {
               <input accept="application/json" onChange={importCases} type="file" />
             </label>
             <button className="icon-text-button compact-button" disabled={busy} onClick={exportCases} type="button">导出</button>
-            <button className="success-button compact-button" disabled={busy} onClick={() => executeRows(selectedIds)} type="button">执行</button>
+            <button className="success-button compact-button" disabled={busy} onClick={() => openExecutionModal(selectedIds)} type="button">执行</button>
             <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">新增</button>
             <button className="danger-button compact-button" disabled={busy} onClick={() => deleteRows(selectedIds)} type="button">批量删除</button>
           </div>
@@ -338,8 +376,11 @@ export function TestCasesPage() {
                             <button className="link-button" onClick={() => openDetail(row)} type="button">
                               详情
                             </button>
-                            <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
+                            <button className="link-button" onClick={() => openEdit(row)} type="button">
                               编辑
+                            </button>
+                            <button aria-label={`执行用例 ${row.name}`} className="link-button" disabled={busy || row.status === "disabled"} onClick={() => openExecutionModal([row.id])} type="button">
+                              执行
                             </button>
                             <button className="link-button danger-link" disabled={busy} onClick={() => deleteRows([row.id])} type="button">
                               删除
@@ -372,6 +413,14 @@ export function TestCasesPage() {
       </section>
 
       {detail ? <TestCaseDetailPanel detail={detail} onClose={() => setDetail(null)} onRefresh={() => openDetail(detail)} /> : null}
+      {executionModal ? (
+        <ExecutionModeModal
+          busy={busy}
+          count={executionModal.ids.length}
+          onClose={() => setExecutionModal(null)}
+          onSubmit={(headless) => executeRows(executionModal.ids, headless)}
+        />
+      ) : null}
       {modal ? (
         <TestCaseModal
           busy={busy}
@@ -398,6 +447,53 @@ export function TestCasesPage() {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function ExecutionModeModal({ busy, count, onClose, onSubmit }) {
+  const [headless, setHeadless] = useState(true);
+  return (
+    <div className="modal-backdrop">
+      <section aria-label="选择执行模式" className="modal-card execution-mode-modal">
+        <div className="execution-mode-header">
+          <div>
+            <span className="execution-mode-kicker">RUN / BROWSER</span>
+            <strong>选择执行方式</strong>
+          </div>
+          <button aria-label="关闭执行弹窗" className="execution-mode-close" disabled={busy} onClick={onClose} type="button"><X size={18} /></button>
+        </div>
+        <div className="execution-mode-body">
+          <div className="execution-mode-summary">
+            <span className="execution-mode-play"><Play fill="currentColor" size={17} /></span>
+            <div><strong>{count}</strong><span>条测试用例等待启动</span></div>
+            <code>UI RUN</code>
+          </div>
+          <div className="execution-mode-options">
+            <button aria-pressed={!headless} className={!headless ? "execution-mode-option active" : "execution-mode-option"} onClick={() => setHeadless(false)} type="button">
+              <span className="execution-mode-radio" />
+              <span className="execution-mode-icon"><Monitor size={19} /></span>
+              <strong>有头执行</strong>
+              <span className="execution-mode-description">浏览器窗口保持可见，适合观察操作路径和定位失败步骤。</span>
+              <span className="execution-mode-preview headed-preview"><i /><i /><i /><b>browser://live-run</b></span>
+            </button>
+            <button aria-pressed={headless} className={headless ? "execution-mode-option active" : "execution-mode-option"} onClick={() => setHeadless(true)} type="button">
+              <span className="execution-mode-radio" />
+              <span className="execution-mode-icon"><EyeOff size={19} /></span>
+              <strong>无头执行</strong>
+              <span className="execution-mode-description">浏览器在后台运行，资源占用更低，适合日常回归任务。</span>
+              <span className="execution-mode-preview headless-preview"><b>&gt; chromium --headless</b><i /></span>
+            </button>
+          </div>
+        </div>
+        <div className="execution-mode-footer">
+          <span><i className="execution-mode-ready" />当前选择：{headless ? "无头执行" : "有头执行"}</span>
+          <div>
+            <button className="execution-mode-cancel" disabled={busy} onClick={onClose} type="button">取消</button>
+            <button className="execution-mode-confirm" disabled={busy} onClick={() => onSubmit(headless)} type="button"><Play fill="currentColor" size={14} />{busy ? "正在创建" : "开始执行"}</button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -461,7 +557,10 @@ function TestCaseModal({ busy, modal, onClose, onSubmit }) {
         : Promise.resolve({ items: [] }),
     [selectedProduct?.id, selectedModule?.id, selectedPage?.id]
   );
-  const stepOptions = pageItems(stepsData);
+  const stepOptions = [
+    ...(source?.steps || []).map((item) => ({ id: item.stepId, name: item.stepName })),
+    ...pageItems(stepsData)
+  ].filter((item, index, items) => items.findIndex((candidate) => String(candidate.id) === String(item.id)) === index);
 
   function toggleStep(id) {
     setForm((current) => ({

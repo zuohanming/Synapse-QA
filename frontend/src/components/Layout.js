@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, LogOut, Home, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, PanelLeftClose, Bell, CircleHelp, ClipboardCheck, BarChart3 } from "lucide-react";
+import { ChevronDown, ChevronRight, LogOut, Home, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, Bell, CircleHelp, ClipboardCheck, BarChart3 } from "lucide-react";
 import { menuData } from "../config/appConfig.js";
 import { useAuth } from "../hooks/useAuth.js";
 
@@ -29,10 +29,15 @@ const menuIcons = {
 export function Layout({ activePath, onNavigate, children }) {
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState("");
 
   function navigate(path) {
     onNavigate(path);
     setSidebarOpen(false);
+  }
+
+  function toggleGroup(title) {
+    setExpandedGroup((current) => current === title ? "" : title);
   }
 
   return (
@@ -44,32 +49,35 @@ export function Layout({ activePath, onNavigate, children }) {
           <div className="brand-copy"><strong>Synapse QA</strong><small>QUALITY CONSOLE</small></div>
         </div>
         <nav className="menu-tree">
-          {menuData.map((group) => (
-            <div className="menu-group" key={group.title}>
+          {menuData.map((group) => {
+            const expanded = expandedGroup === group.title;
+            return <div className="menu-group" key={group.title}>
               <button
-                className={activePath[0] === group.title ? "menu-button active" : "menu-button"}
-                onClick={() => navigate([group.title, group.children[0]])}
+                className={`${activePath[0] === group.title ? "menu-button active" : "menu-button"}${expanded ? " expanded" : ""}`}
+                onClick={() => toggleGroup(group.title)}
+                aria-expanded={expanded}
               >
                 {menuIcons[group.title]}
                 <span>{group.title}</span>
                 <ChevronDown className="menu-chevron" size={14} />
               </button>
-              <div className="menu-children">
-                {group.children.map((child) => (
+              <div className={`menu-children${expanded ? " open" : ""}`} aria-hidden={!expanded}>
+                <div className="menu-children-inner">{group.children.map((child) => (
                   <button
                     className={activePath[1] === child ? "menu-child active" : "menu-child"}
                     key={child}
                     onClick={() => navigate([group.title, child])}
+                    tabIndex={expanded ? 0 : -1}
                   >
                     {menuIcons[child]}
                     {child}
                   </button>
-                ))}
+                ))}</div>
               </div>
             </div>
-          ))}
+          })}
         </nav>
-        <div className="sidebar-footer"><PanelLeftClose size={16} /><span>测试工作台</span></div>
+        <div className="sidebar-footer"><Zap size={16} /><span>测试工作台</span></div>
       </aside>
       <main className="main">
         <header className="topbar">

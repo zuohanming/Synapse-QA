@@ -23,22 +23,26 @@ func NewExecutionRepository(db *sql.DB) *ExecutionRepository {
 
 // CreateRun 创建执行批次。
 func (r *ExecutionRepository) CreateRun(ctx context.Context, req model.ExecutionRunRequest, triggeredBy string) (model.ExecutionRun, error) {
-	caseIDsJSON, err := json.Marshal(req.CaseIDs)
-	if err != nil {
-		return model.ExecutionRun{}, err
-	}
 	row := r.db.QueryRowContext(ctx, `
-		insert into execution_runs(run_type, status, triggered_by, case_ids)
-		values($1, $2, $3, $4)
-		returning id, run_type, status, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
-	`, req.RunType, "pending", triggeredBy, caseIDsJSON)
+		insert into execution_runs(run_type, status, headless, triggered_by, case_ids)
+		values($1, $2, $3, $4, $5)
+		returning id, run_type, status, headless, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
+	`, req.RunType, "pending", req.Headless == nil || *req.Headless, triggeredBy, formatInt64Array(req.CaseIDs))
 	return scanExecutionRun(row)
+}
+
+func formatInt64Array(values []int64) string {
+	parts := make([]string, len(values))
+	for index, value := range values {
+		parts[index] = strconv.FormatInt(value, 10)
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 // GetRun 查询执行批次基础信息。
 func (r *ExecutionRepository) GetRun(ctx context.Context, id int64) (model.ExecutionRun, error) {
 	row := r.db.QueryRowContext(ctx, `
-		select id, run_type, status, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
+		select id, run_type, status, headless, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
 		from execution_runs
 		where id = $1
 	`, id)
@@ -75,7 +79,7 @@ func (r *ExecutionRepository) ListRuns(ctx context.Context, filter model.Executi
 	queryArgs := append([]any{}, args...)
 	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
-		select id, run_type, status, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
+		select id, run_type, status, headless, triggered_by, case_ids, summary, started_at, finished_at, created_at, updated_at
 		from execution_runs
 		where `+whereSQL+`
 		order by id desc
@@ -175,6 +179,16 @@ func (r *ExecutionRepository) ListTasksByRun(ctx context.Context, runID int64) (
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// CountActiveTasksByExecutor 返回平台已下发但尚未结束的任务数量。
+func (r *ExecutionRepository) CountActiveTasksByExecutor(ctx context.Context, executorID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `
+		select count(*) from execution_tasks
+		where executor_id = $1 and status in ('queued', 'running')
+	`, executorID).Scan(&count)
+	return count, err
 }
 
 // ListTasks 分页查询任务。
@@ -305,6 +319,7 @@ func scanExecutionRun(scanner executionRunScanner) (model.ExecutionRun, error) {
 		&item.ID,
 		&item.RunType,
 		&item.Status,
+		&item.Headless,
 		&item.TriggeredBy,
 		&caseIDsRaw,
 		&item.Summary,
@@ -323,7 +338,29 @@ func scanExecutionRun(scanner executionRunScanner) (model.ExecutionRun, error) {
 		item.FinishedAt = &finishedAt.Time
 	}
 	if len(caseIDsRaw) > 0 {
-		_ = json.Unmarshal(caseIDsRaw, &item.CaseIDs)
+		if err := json.Unmarshal(caseIDsRaw, &item.CaseIDs); err != nil {
+			arrayText := strings.TrimSpace(string(caseIDsRaw))
+			arrayText = strings.TrimPrefix(strings.TrimSuffix(arrayText, "}"), "{")
+			if arrayText != "" {
+				for _, value := range strings.Split(arrayText, ",") {
+					id, parseErr := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+					if parseErr == nil {
+						item.CaseIDs = append(item.CaseIDs, id)
+					}
+				}
+			}
+		}
+		// 兼容旧版本将 JSON 字节误写入 bigint[] 的历史数据。
+		if len(item.CaseIDs) >= 2 && item.CaseIDs[0] == '[' && item.CaseIDs[len(item.CaseIDs)-1] == ']' {
+			legacyJSON := make([]byte, len(item.CaseIDs))
+			for index, value := range item.CaseIDs {
+				legacyJSON[index] = byte(value)
+			}
+			var decoded []int64
+			if json.Unmarshal(legacyJSON, &decoded) == nil {
+				item.CaseIDs = decoded
+			}
+		}
 	}
 	if item.Summary == nil {
 		item.Summary = []byte("{}")

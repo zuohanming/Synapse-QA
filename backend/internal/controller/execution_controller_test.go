@@ -50,6 +50,14 @@ func (f *fakeExecutionService) CreateRun(ctx context.Context, actor string, req 
 	return f.detail, nil
 }
 
+func (f *fakeExecutionService) StartDebug(ctx context.Context, actor string, req model.ExecutionDebugRequest) (model.ExecutionDebugStart, error) {
+	return model.ExecutionDebugStart{TaskID: "debug-1", ExecutorID: "executor-1", Status: "queued"}, nil
+}
+
+func (f *fakeExecutionService) GetDebugTask(ctx context.Context, executorID, taskID string) (map[string]any, error) {
+	return map[string]any{"taskId": taskID, "status": "success"}, nil
+}
+
 func (f *fakeExecutionService) CancelRun(ctx context.Context, actor string, id int64) error {
 	if f.cancelErr {
 		return errControllerFake

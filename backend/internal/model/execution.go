@@ -9,6 +9,7 @@ import (
 type ExecutionRun struct {
 	ID          int64           `json:"id"`
 	RunType     string          `json:"runType"`
+	Headless    bool            `json:"headless"`
 	Status      string          `json:"status"`
 	TriggeredBy string          `json:"triggeredBy"`
 	CaseIDs     []int64         `json:"caseIds"`
@@ -54,8 +55,24 @@ type ExecutionRunDetail struct {
 
 // ExecutionRunRequest 创建执行批次请求。
 type ExecutionRunRequest struct {
-	RunType string  `json:"runType"`
-	CaseIDs []int64 `json:"caseIds"`
+	RunType  string  `json:"runType"`
+	CaseIDs  []int64 `json:"caseIds"`
+	Headless *bool   `json:"headless"`
+}
+
+// ExecutionDebugRequest 表示页面步骤工作台提交的即时调试任务。
+type ExecutionDebugRequest struct {
+	URL            string           `json:"url"`
+	Actions        []map[string]any `json:"actions"`
+	TimeoutSeconds int              `json:"timeoutSeconds"`
+	Headless       *bool            `json:"headless"`
+}
+
+// ExecutionDebugStart 返回调试任务的查询凭据。
+type ExecutionDebugStart struct {
+	TaskID     string `json:"taskId"`
+	ExecutorID string `json:"executorId"`
+	Status     string `json:"status"`
 }
 
 // ExecutionRunFilter 执行批次分页查询条件。
@@ -89,6 +106,8 @@ type ExecutionSummary struct {
 	Passed  int64 `json:"passed"`
 	Failed  int64 `json:"failed"`
 	Skipped int64 `json:"skipped"`
+	Waiting int64 `json:"waiting"`
+	Active  int64 `json:"active"`
 }
 
 // ExecutionLogCreateRequest 创建执行日志请求。

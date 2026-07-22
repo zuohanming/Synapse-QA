@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 import urllib.error
@@ -8,6 +9,9 @@ from importlib.util import find_spec
 from typing import Callable
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class HeartbeatClient:
@@ -23,6 +27,7 @@ class HeartbeatClient:
             return
         if self._thread and self._thread.is_alive():
             return
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, name="executor-heartbeat", daemon=True)
         self._thread.start()
 
@@ -76,7 +81,10 @@ class HeartbeatClient:
         )
         try:
             urllib.request.urlopen(request, timeout=5).close()
+        except urllib.error.HTTPError as error:
+            logger.warning("执行器心跳鉴权失败：path=%s status=%s", path, error.code)
         except (urllib.error.URLError, TimeoutError):
+            logger.warning("执行器无法连接平台：path=%s", path)
             # 平台短暂不可达时不影响本地任务执行，下一轮心跳会继续补报。
             return
 
