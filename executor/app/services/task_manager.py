@@ -1,5 +1,6 @@
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
+import logging
 from threading import Lock
 from uuid import uuid4
 
@@ -11,6 +12,9 @@ from app.runners.playwright_runner import PlaywrightRunner
 from app.runners.pytest_runner import PytestRunner
 from app.runners.script_runner import ScriptRunner
 from app.services.callback_client import notify_callback
+
+
+logger = logging.getLogger(__name__)
 
 
 class TaskManager:
@@ -37,6 +41,13 @@ class TaskManager:
         with self._lock:
             if task_id in self._tasks:
                 raise ValueError("任务 ID 已存在")
+            active_count = sum(
+                1 for item in self._tasks.values()
+                if item.status in (TaskStatus.queued, TaskStatus.running)
+            )
+            if active_count >= max(1, settings.max_workers * 2):
+                logger.warning("执行器队列已满：active=%s limit=%s", active_count, max(1, settings.max_workers * 2))
+                raise ValueError("执行器队列已满，请稍后重试")
             view = TaskView(
                 taskId=task_id,
                 type=task.type,
@@ -46,8 +57,10 @@ class TaskManager:
                 createdAt=datetime.now(),
             )
             self._tasks[task_id] = view
+            logger.info("收到任务：task_id=%s type=%s", task_id, task.type.value)
             future = self._executor.submit(self._execute, task_id, task)
             self._futures[task_id] = future
+            logger.info("任务已进入队列：task_id=%s", task_id)
             return view
 
     def list_tasks(self) -> list[TaskView]:
@@ -86,15 +99,24 @@ class TaskManager:
         """线程池中的执行入口，统一处理成功、失败和回调。"""
 
         self._mark_running(task_id)
+        logger.info("任务开始执行：task_id=%s type=%s", task_id, task.type.value)
         try:
             runner = self._runners[task.type]
-            result = runner.run(task)
+            if task.type == TaskType.ui:
+                result = runner.run(task, lambda output: self._update_progress(task_id, output))
+            else:
+                result = runner.run(task)
             status = TaskStatus.success if result.exit_code == 0 else TaskStatus.failed
         except Exception as error:
-            result = TaskResult(exitCode=1, error=str(error))
+            logger.exception("任务执行异常：task_id=%s", task_id)
+            result = TaskResult(exitCode=1, output=self._progress_output(task_id), error=str(error))
             status = TaskStatus.failed
         final_view = self._finish(task_id, status, result)
         if final_view:
+            if status == TaskStatus.success:
+                logger.info("任务执行成功：task_id=%s", task_id)
+            else:
+                logger.error("任务执行失败：task_id=%s error=%s", task_id, result.error or "未知错误")
             notify_callback(final_view)
 
     def _mark_running(self, task_id: str) -> None:
@@ -103,6 +125,20 @@ class TaskManager:
             if task.status != TaskStatus.canceled:
                 task.status = TaskStatus.running
                 task.started_at = datetime.now()
+
+    def _update_progress(self, task_id: str, output: str) -> None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status == TaskStatus.running:
+                task.result = TaskResult(exitCode=None, output=output)
+        latest_line = output.rsplit("\n", 1)[-1].strip()
+        if latest_line:
+            logger.info("任务步骤：task_id=%s %s", task_id, latest_line)
+
+    def _progress_output(self, task_id: str) -> str:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return task.result.output if task and task.result else ""
 
     def _finish(self, task_id: str, status: TaskStatus, result: TaskResult) -> TaskView | None:
         with self._lock:

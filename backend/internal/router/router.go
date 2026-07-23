@@ -9,12 +9,15 @@ import (
 )
 
 type Dependencies struct {
-	AuthController       *controller.AuthController
-	SystemController     *controller.SystemController
-	CatalogController    *controller.CatalogController
-	AutomationController *controller.AutomationController
-	ExecutorController   *controller.ExecutorController
-	AuthMiddleware       gin.HandlerFunc
+	AuthController         *controller.AuthController
+	SystemController       *controller.SystemController
+	CatalogController      *controller.CatalogController
+	AutomationController   *controller.AutomationController
+	ExecutorController     *controller.ExecutorController
+	TestCaseController     *controller.TestCaseController
+	ExecutionController    *controller.ExecutionController
+	NotificationController *controller.NotificationController
+	AuthMiddleware         gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -25,16 +28,46 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	})
 	api.POST("/executors/register", deps.ExecutorController.Register)
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
+	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
+	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
 	authed.GET("/executors", deps.ExecutorController.List)
+	authed.POST("/executors", deps.ExecutorController.Create)
+	authed.POST("/executors/:executorId/token", deps.ExecutorController.GenerateToken)
 
 	registerSystemRoutes(authed, deps)
 	registerConfigRoutes(authed, deps)
 	registerUIRoutes(authed, deps)
+	registerTestCaseRoutes(authed, deps)
+	registerExecutionRoutes(authed, deps)
+	registerNotificationRoutes(authed, deps)
+}
+
+func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/notifications", deps.NotificationController.List)
+	authed.GET("/notifications/unread-count", deps.NotificationController.Count)
+	authed.GET("/notifications/stream", deps.NotificationController.Stream)
+	authed.PATCH("/notifications/:id/read", deps.NotificationController.Read)
+	authed.POST("/notifications/read-all", deps.NotificationController.ReadAll)
+	authed.DELETE("/notifications/:id", deps.NotificationController.Delete)
+	authed.GET("/notifications/preferences", deps.NotificationController.Preferences)
+	authed.PATCH("/notifications/preferences", deps.NotificationController.UpdatePreferences)
+	authed.POST("/notifications/system", deps.NotificationController.System)
+}
+
+func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/executions", deps.ExecutionController.List)
+	authed.GET("/executions/statistics", deps.ExecutionController.Statistics)
+	authed.POST("/executions", deps.ExecutionController.Create)
+	authed.POST("/executions/debug", deps.ExecutionController.StartDebug)
+	authed.GET("/executions/debug/:taskId", deps.ExecutionController.GetDebug)
+	authed.GET("/executions/:id", deps.ExecutionController.Get)
+	authed.POST("/executions/:id/cancel", deps.ExecutionController.Cancel)
+	authed.GET("/executions/tasks/:taskId/logs", deps.ExecutionController.ListTaskLogs)
 }
 
 func registerSystemRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -77,6 +110,7 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	registerUIAssetRoutes(authed, "/ui/steps", "page_step", deps)
 	registerUIAssetRoutes(authed, "/ui/cases", "test_case", deps)
 	registerUIAssetRoutes(authed, "/ui/variables", "global_variable", deps)
+	registerUIAssetRoutes(authed, "/interfaces", "api_interface", deps)
 	authed.GET("/ui/page-elements", deps.AutomationController.ListPageElements)
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)
@@ -88,4 +122,18 @@ func registerUIAssetRoutes(authed *gin.RouterGroup, path string, assetType strin
 	authed.POST(path, deps.AutomationController.CreateUIAsset(assetType))
 	authed.PATCH(path+"/:id", deps.AutomationController.UpdateUIAsset(assetType))
 	authed.DELETE(path+"/:id", deps.AutomationController.DeleteUIAsset(assetType))
+}
+
+func registerTestCaseRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/test-cases", deps.TestCaseController.List)
+	authed.POST("/test-cases", deps.TestCaseController.Create)
+	authed.POST("/test-cases/import", deps.TestCaseController.Import)
+	authed.GET("/test-cases/export", deps.TestCaseController.Export)
+	authed.GET("/test-cases/:id", deps.TestCaseController.Get)
+	authed.PATCH("/test-cases/:id", deps.TestCaseController.Update)
+	authed.DELETE("/test-cases/:id", deps.TestCaseController.Delete)
+	authed.GET("/test-cases/:id/datasets", deps.TestCaseController.ListDatasets)
+	authed.POST("/test-cases/:id/datasets", deps.TestCaseController.CreateDataset)
+	authed.PATCH("/test-cases/:id/datasets/:datasetId", deps.TestCaseController.UpdateDataset)
+	authed.DELETE("/test-cases/:id/datasets/:datasetId", deps.TestCaseController.DeleteDataset)
 }

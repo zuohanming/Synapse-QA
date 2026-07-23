@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"synapseqa/backend/internal/model"
 )
@@ -16,6 +17,14 @@ type ExecutorRepository struct {
 
 func NewExecutorRepository(db *sql.DB) *ExecutorRepository {
 	return &ExecutorRepository{db: db}
+}
+
+func (r *ExecutorRepository) Create(ctx context.Context, req model.ExecutorCreateRequest) error {
+	_, err := r.db.ExecContext(ctx, `
+		insert into executors(executor_id, name, status)
+		values($1, $2, 'pending')
+	`, req.ExecutorID, req.Name)
+	return err
 }
 
 func (r *ExecutorRepository) UpsertRegister(ctx context.Context, req model.ExecutorRegisterRequest) (model.ExecutorView, error) {
@@ -63,6 +72,15 @@ func (r *ExecutorRepository) UpsertHeartbeat(ctx context.Context, req model.Exec
 	return scanExecutor(row)
 }
 
+func (r *ExecutorRepository) GetByID(ctx context.Context, executorID string) (model.ExecutorView, error) {
+	row := r.db.QueryRowContext(ctx, `
+		select executor_id, name, endpoint, status, version, max_workers, running_tasks, queued_tasks, supported_types, checks, last_heartbeat_at, updated_at, created_at
+		from executors
+		where executor_id = $1
+	`, executorID)
+	return scanExecutor(row)
+}
+
 func (r *ExecutorRepository) List(ctx context.Context) ([]model.ExecutorView, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		select executor_id, name, endpoint, status, version, max_workers, running_tasks, queued_tasks, supported_types, checks, last_heartbeat_at, updated_at, created_at
@@ -89,6 +107,22 @@ func (r *ExecutorRepository) GetSetting(ctx context.Context, key string) (string
 	var value string
 	err := r.db.QueryRowContext(ctx, `select value from platform_settings where key = $1`, key).Scan(&value)
 	return value, err
+}
+
+func (r *ExecutorRepository) GetExecutorToken(ctx context.Context, executorID string) (string, error) {
+	var token string
+	err := r.db.QueryRowContext(ctx, `select executor_token from executors where executor_id = $1`, executorID).Scan(&token)
+	return token, err
+}
+
+func (r *ExecutorRepository) UpdateExecutorToken(ctx context.Context, executorID, token string) (time.Time, error) {
+	var updatedAt time.Time
+	err := r.db.QueryRowContext(ctx, `
+		update executors set executor_token = $1, updated_at = now()
+		where executor_id = $2
+		returning updated_at
+	`, token, executorID).Scan(&updatedAt)
+	return updatedAt, err
 }
 
 type executorScanner interface {

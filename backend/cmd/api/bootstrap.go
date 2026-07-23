@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -157,6 +158,46 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			unique(product_id, env_name)
 		)`,
+		`create table if not exists test_cases (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			module_id bigint references product_modules(id),
+			page_id bigint references ui_assets(id),
+			name text not null,
+			case_type text not null default 'ui',
+			priority text not null default 'P2',
+			status text not null default 'draft',
+			owner text not null default '',
+			tags text not null default '',
+			description text not null default '',
+			preconditions text not null default '',
+			expected_result text not null default '',
+			data_enabled boolean not null default false,
+			created_by text not null default '',
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			created_at timestamptz not null default now(),
+			unique(product_id, name)
+		)`,
+		`create table if not exists test_case_steps (
+			id bigserial primary key,
+			case_id bigint not null references test_cases(id),
+			step_id bigint not null references ui_assets(id),
+			sort_order int not null default 1,
+			note text not null default '',
+			created_at timestamptz not null default now(),
+			unique(case_id, step_id)
+		)`,
+		`create table if not exists test_case_datasets (
+			id bigserial primary key,
+			case_id bigint not null references test_cases(id),
+			name text not null,
+			variables jsonb not null default '{}'::jsonb,
+			enabled boolean not null default true,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			unique(case_id, name)
+		)`,
 		`create table if not exists executors (
 			executor_id text primary key,
 			name text not null,
@@ -172,12 +213,77 @@ func (a *app) migrate(ctx context.Context) error {
 			updated_at timestamptz not null default now(),
 			created_at timestamptz not null default now()
 		)`,
+		`create table if not exists execution_runs (
+			id bigserial primary key,
+			run_type text not null default 'ui',
+			status text not null default 'pending',
+			headless boolean not null default true,
+			triggered_by text not null default '',
+			case_ids bigint[] not null default '{}',
+			summary jsonb not null default '{}'::jsonb,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists execution_tasks (
+			id bigserial primary key,
+			run_id bigint not null references execution_runs(id),
+			task_id text not null unique,
+			case_id bigint references test_cases(id),
+			executor_id text not null default '',
+			task_type text not null default 'ui',
+			payload jsonb not null default '{}'::jsonb,
+			callback_url text not null default '',
+			status text not null default 'queued',
+			result jsonb not null default '{}'::jsonb,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists execution_logs (
+			id bigserial primary key,
+			task_id bigint not null references execution_tasks(id),
+			level text not null default 'info',
+			message text not null default '',
+			created_at timestamptz not null default now()
+		)`,
 		`create table if not exists platform_settings (
 			key text primary key,
 			value text not null,
 			updated_at timestamptz not null default now(),
 			created_at timestamptz not null default now()
 		)`,
+		`create table if not exists notifications (
+			id bigserial primary key,
+			user_id bigint not null references users(id),
+			type text not null,
+			level text not null default 'info',
+			title text not null,
+			content text not null default '',
+			target_type text not null default '',
+			target_id text not null default '',
+			target_url text not null default '',
+			is_read boolean not null default false,
+			read_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists notification_preferences (
+			user_id bigint primary key references users(id),
+			execution_success boolean not null default true,
+			execution_failure boolean not null default true,
+			executor_alert boolean not null default true,
+			system_notice boolean not null default true,
+			updated_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_execution_tasks_run_id on execution_tasks(run_id)`,
+		`create index if not exists idx_execution_tasks_task_id on execution_tasks(task_id)`,
+		`create index if not exists idx_execution_logs_task_id on execution_logs(task_id)`,
+		`create index if not exists idx_execution_runs_status on execution_runs(status)`,
+		`create index if not exists idx_notifications_user_created on notifications(user_id, created_at desc)`,
+		`alter table execution_runs add column if not exists headless boolean not null default true`,
+		`alter table executors add column if not exists executor_token text not null default ''`,
 		`alter table roles add column if not exists updated_at timestamptz not null default now()`,
 		`alter table roles add column if not exists deleted_at timestamptz`,
 		`alter table users add column if not exists mcp_api_key text not null default ''`,
@@ -204,6 +310,19 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table test_objects add column if not exists write_enabled boolean not null default false`,
 		`alter table test_objects add column if not exists updated_at timestamptz not null default now()`,
 		`alter table test_objects add column if not exists deleted_at timestamptz`,
+		`alter table test_cases add column if not exists module_id bigint references product_modules(id)`,
+		`alter table test_cases add column if not exists page_id bigint references ui_assets(id)`,
+		`alter table test_cases add column if not exists case_type text not null default 'ui'`,
+		`alter table test_cases add column if not exists priority text not null default 'P2'`,
+		`alter table test_cases add column if not exists status text not null default 'draft'`,
+		`alter table test_cases add column if not exists owner text not null default ''`,
+		`alter table test_cases add column if not exists tags text not null default ''`,
+		`alter table test_cases add column if not exists preconditions text not null default ''`,
+		`alter table test_cases add column if not exists expected_result text not null default ''`,
+		`alter table test_cases add column if not exists data_enabled boolean not null default false`,
+		`alter table test_cases add column if not exists created_by text not null default ''`,
+		`alter table test_cases add column if not exists updated_at timestamptz not null default now()`,
+		`alter table test_cases add column if not exists deleted_at timestamptz`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {
@@ -279,9 +398,130 @@ func (a *app) seed(ctx context.Context) error {
 	if err := a.db.QueryRowContext(ctx, `insert into products(project_id, name, ui_type, api_type) values($1, 'Web 管理端', 'WEB', 'WEB') on conflict(project_id, name) do update set ui_type = excluded.ui_type, api_type = excluded.api_type, deleted_at = null, updated_at = now() returning id`, projectID).Scan(&productID); err != nil {
 		return err
 	}
+
+	// 添加更多产品数据
+	productNames := []string{"电商平台", "移动端应用", "后台管理系统", "支付网关", "数据分析平台",
+		"CRM系统", "OA办公", "即时通讯", "云存储", "AI助手",
+		"物流系统", "医疗系统", "教育平台", "金融服务", "社交平台",
+		"游戏平台", "视频网站", "音乐应用", "购物商城", "智能硬件"}
+	for _, name := range productNames {
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from products where project_id = $1 and name = $2)`, projectID, name).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := a.db.ExecContext(ctx, `insert into products(project_id, name, ui_type, api_type) values($1, $2, 'WEB', 'WEB')`, projectID, name); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 添加模块数据
+	a.db.ExecContext(ctx, `insert into product_modules(product_id, name) values($1, '登录模块') on conflict(product_id, name) do nothing`, productID)
+	var moduleID int64
+	a.db.QueryRowContext(ctx, `select id from product_modules where product_id = $1 and name = '登录模块' limit 1`, productID).Scan(&moduleID)
+	moduleNames := []string{"首页", "用户管理", "权限管理", "订单管理", "商品管理",
+		"数据报表", "系统设置", "日志管理", "通知中心", "帮助中心",
+		"营销活动", "会员管理", "支付管理", "库存管理", "物流配送",
+		"客服系统", "评论管理", "收藏夹", "购物车", "搜索模块"}
+	for _, name := range moduleNames {
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from product_modules where product_id = $1 and name = $2)`, productID, name).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := a.db.ExecContext(ctx, `insert into product_modules(product_id, name) values($1, $2)`, productID, name); err != nil {
+				return err
+			}
+		}
+	}
+
 	if _, err := a.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) values($1, '生产环境', 'https://qa.example.com', '生产环境', '界面自动化', 'admin', true, false) on conflict(product_id, env_name) do update set target = excluded.target, deploy_env = excluded.deploy_env, auto_type = excluded.auto_type, owner = excluded.owner, deleted_at = null, updated_at = now()`, productID); err != nil {
 		return err
 	}
+
+	// 添加测试对象数据
+	testEnvNames := []string{"预发环境", "测试环境", "开发环境", "UAT环境", "SIT环境",
+		"性能测试", "安全测试", "兼容性测试", "压力测试", "回归测试",
+		"自动化测试", "冒烟测试", "单元测试", "集成测试", "系统测试",
+		"验收测试", "探索测试", "A/B测试", "灰度测试", "Beta测试"}
+	for _, envName := range testEnvNames {
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from test_objects where product_id = $1 and env_name = $2)`, productID, envName).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			target := "https://" + strings.ToLower(strings.ReplaceAll(envName, " ", "-")) + ".example.com"
+			if _, err := a.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) values($1, $2, $3, '生产环境', '界面自动化', 'admin', true, false)`, productID, envName, target); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 添加页面元素数据
+	for i := 1; i <= 20; i++ {
+		name := fmt.Sprintf("测试页面 %02d", i)
+		category := "Synapse QA/电商平台"
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from ui_assets where name = $1 and asset_type = $2 and deleted_at is null)`, name, "page").Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			locator := fmt.Sprintf("https://example.com/page/%d", i)
+			description := fmt.Sprintf("这是第%d个测试页面，用于演示", i)
+			if _, err := a.db.ExecContext(ctx, `insert into ui_assets(asset_type, name, category, method, locator, description, status) values($1, $2, $3, '登录模块', $4, $5, 'active')`, "page", name, category, locator, description); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 添加页面步骤数据
+	for i := 1; i <= 20; i++ {
+		name := fmt.Sprintf("测试步骤 %02d", i)
+		category := "Synapse QA/电商平台"
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from ui_assets where name = $1 and asset_type = $2 and deleted_at is null)`, name, "step").Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			status := "active"
+			if i%3 == 0 {
+				status = "disabled"
+			}
+			description := fmt.Sprintf("这是第%d个测试步骤，用于演示", i)
+			if _, err := a.db.ExecContext(ctx, `insert into ui_assets(asset_type, name, category, method, locator, description, status) values($1, $2, $3, '登录模块', 'https://example.com/page/1', $4, $5)`, "step", name, category, description, status); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 查询一个页面ID用于测试用例
+	var pageID int64
+	if err := a.db.QueryRowContext(ctx, `select id from ui_assets where asset_type = 'page' and deleted_at is null limit 1`).Scan(&pageID); err != nil {
+		pageID = 0
+	}
+
+	// 添加测试用例数据
+	testCaseNames := []string{"登录功能测试", "注册功能测试", "忘记密码测试", "首页浏览测试", "商品搜索测试",
+		"购物车测试", "支付流程测试", "订单提交测试", "个人中心测试", "收藏功能测试",
+		"评论功能测试", "优惠券测试", "会员权益测试", "退款申请测试", "物流查询测试",
+		"客服咨询测试", "消息通知测试", "设置修改测试", "退出登录测试", "权限验证测试"}
+	priorities := []string{"P0", "P1", "P2", "P3"}
+	statuses := []string{"draft", "ready", "in_progress", "completed"}
+	for i, name := range testCaseNames {
+		var exists bool
+		if err := a.db.QueryRowContext(ctx, `select exists(select 1 from test_cases where product_id = $1 and name = $2)`, productID, name).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			priority := priorities[i%len(priorities)]
+			status := statuses[i%len(statuses)]
+			if _, err := a.db.ExecContext(ctx, `insert into test_cases(product_id, name, case_type, priority, status, description, owner) values($1, $2, 'ui', $3, $4, '这是一条自动生成的测试用例，用于演示系统功能', 'admin')`, productID, name, priority, status); err != nil {
+				return err
+			}
+		}
+	}
+
 	if _, err := a.db.ExecContext(ctx, `
 		insert into platform_settings(key, value)
 		values('executor_shared_token', $1)

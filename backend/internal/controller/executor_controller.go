@@ -55,6 +55,29 @@ func (ctl *ExecutorController) List(c *gin.Context) {
 	ok(c, items)
 }
 
+func (ctl *ExecutorController) Create(c *gin.Context) {
+	var req model.ExecutorCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求参数无效")
+		return
+	}
+	result, err := ctl.executorService.Create(c.Request.Context(), req)
+	if err != nil {
+		failExecutorError(c, err)
+		return
+	}
+	ok(c, result)
+}
+
+func (ctl *ExecutorController) GenerateToken(c *gin.Context) {
+	result, err := ctl.executorService.GenerateToken(c.Request.Context(), c.Param("executorId"))
+	if err != nil {
+		failExecutorError(c, err)
+		return
+	}
+	ok(c, result)
+}
+
 func failExecutorError(c *gin.Context, err error) {
 	if err.Error() == "执行器令牌无效" {
 		fail(c, http.StatusUnauthorized, err.Error())

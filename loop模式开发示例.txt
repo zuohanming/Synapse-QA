@@ -1,0 +1,95 @@
+你的项目是自动化测试平台，现在要实现测试用例模块（Test Case Module）。以下是从需求设计 → 编码 → 测试修复 → 上线的全流程，使用 Codex /goal 构建自治 Loop。
+1. 项目准备（10-15 分钟，一次性）
+在项目根目录执行以下操作：
+
+更新 Codex：Bashnpm install -g @openai/codex
+codex --version   # 确保 ≥ 0.128.0
+创建核心文件：
+SKILL.md（项目规范，必备）：Markdown# 测试用例模块开发 Skill
+
+## 技术栈
+- 语言： [你的语言，例如 TypeScript / Python]
+- 框架： [e.g. React / FastAPI / NestJS]
+- 测试框架： [Jest / pytest / Playwright 等]
+- 数据库： [MongoDB / PostgreSQL 等]
+
+## 编码规范
+- 必须为每个核心函数编写单元测试
+- 使用 git worktree 隔离所有变更
+- Lint 命令：npm run lint -- --fix 或 ruff check --fix
+- 测试命令：npm test -- test-case 或 pytest tests/test_case/
+- 安全要求：防止 SQL 注入、XSS，验证用户输入
+- 模块结构：src/test-case/ 下包含 model、service、controller、repository、dto
+
+## 验收标准
+- 所有新功能都有对应测试且通过
+- API 符合 OpenAPI/Swagger 规范
+- 覆盖率 ≥ 85%
+STATE.md（Loop 记忆文件，Codex 会自动读写）
+tasks/test-case-module.md（任务规格文档，建议先手动或让 Codex 完善）：Markdown# 测试用例模块需求
+核心功能：
+1. CRUD 操作（创建、读取、更新、删除测试用例）
+2. 支持参数化测试用例（variables / data-driven）
+3. 用例分组、标签、搜索、版本管理
+4. 执行历史记录与结果关联
+5. 导入/导出（JSON / YAML / CSV）
+6. 权限控制（项目级 / 团队级）
+
+技术约束：复用现有 auth、project、execution 模块。
+
+
+2. 启动完整 Loop（核心 /goal 命令）
+进入项目目录，运行 codex 进入交互模式，然后直接复制下面命令：
+text/goal 
+在自动化测试平台中完整实现「测试用例模块」。
+
+详细流程：
+1. 阅读 SKILL.md、tasks/test-case-module.md 和现有代码结构。
+2. 进行任务分解（Planning）：生成详细 SPEC.md（包含 API 设计、数据库 schema、关键流程图）。
+3. 在独立 git worktree 中开发（例如 ../test-case-module-dev）。
+4. 实现核心功能：Model + Service + Controller + Repository + DTO + 验证。
+5. 编写/补充完整单元测试 + 集成测试（覆盖 CRUD、参数化、边界案例、权限）。
+6. 运行测试循环：执行测试 → 分析失败 → 修复 Bug → 回归验证，直到全部通过。
+7. 执行 Lint + 覆盖率检查，生成 API 文档。
+8. 完成后生成 PR 描述、Changelog 和 SUMMARY.md。
+
+停止条件（必须全部满足才能结束 Loop）：
+- 所有 test-case 相关测试通过（退出码 0）
+- 覆盖率 ≥ 85%
+- 无 lint 错误
+- 只修改 src/test-case/ 目录及相关测试文件
+- 代码符合 SKILL.md 规范
+执行后：
+
+Codex 会自动进入 Planning → Coding → Test-Fix → Verify 循环。
+你可以随时输入 /goal 查看进度。
+输入 /goal pause / /goal resume 控制。
+
+3. 推荐拆分策略（如果一次 Goal 太大）
+如果模块功能很多，可以分阶段运行多个 Goal（Loop 之间共享 STATE.md）：
+
+第一阶段（规划 + Model）：text/goal 完成测试用例模块的 Model、DTO 和数据库 schema 设计，生成 SPEC.md 并编写对应测试。
+第二阶段（Service + CRUD）：text/goal 基于 SPEC.md 实现 Service 层和 CRUD API，支持参数化用例。
+第三阶段（测试 + 优化）：text/goal 为测试用例模块编写完整测试套件，运行测试并修复所有 Bug，直到覆盖率 ≥ 85%。
+最终阶段（PR）：text/goal 生成 PR 并准备上线材料。
+
+4. 上线流程（Human-in-the-Loop）
+
+Loop 完成后，Codex 会输出 diff / PR 描述。
+你 Review 变更（git diff 或打开 worktree）。
+运行全量测试 + CI。
+Merge 到 main 分支。
+（可选）在 Codex App 的 Automations 中设置定时 Review 或后续维护 Loop。
+
+5. 最佳实践 & 注意事项
+
+清晰停止条件 是 Loop 成功的关键（测试通过 + 覆盖率 + Lint）。
+Worktree 防止污染主分支：Codex 会自动处理或你手动 git worktree add。
+Token 控制：首次运行监控消耗，必要时加预算守卫。
+Sub-agents（进阶）：在 .codex/agents/ 下定义 planner、coder、reviewer 等角色。
+从小到大：先用简单 CRUD 测试 Loop 熟悉，再跑完整模块。
+
+现在就可以行动：
+把上面的 /goal 命令复制到你的 Codex 中直接运行（先完善 tasks/test-case-module.md 和 SKILL.md）。
+告诉我你的技术栈（语言、框架、前后端分离？）或其他具体需求（如支持 Playwright 执行、AI 生成用例等），我立刻帮你优化 Goal 命令和SPEC 模板！有任何运行日志也可以贴给我调试。🚀
+这个 Loop 设计好后，你就可以“下班让 Codex 开发，第二天 Review PR”了。
