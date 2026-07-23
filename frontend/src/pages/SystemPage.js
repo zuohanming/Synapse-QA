@@ -5,16 +5,22 @@ import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { systemService } from "../services/systemService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
+import { applyAppearance, readAppearance } from "../utils/appearance.js";
 
 export function SystemPage({ activePath }) {
   const section = activePath[1];
   const loaders = {
     配置管理: () => Promise.all([systemService.menus(), systemService.dictionaries()]),
+    外观设置: () => Promise.resolve(null),
     用户管理: () => systemService.users({ page: 1, pageSize: 20 }),
     角色管理: () => systemService.roles(),
     操作日志: () => systemService.logs()
   };
   const { data, loading, error } = useAsyncData(loaders[section] || loaders.配置管理, [section]);
+
+  if (section === "外观设置") {
+    return <AppearanceSettings />;
+  }
 
   if (section === "用户管理") {
     return <ResourceListPage title={section} description="维护平台用户与访问状态" panelTitle="用户列表" rows={pageItems(data)} columns={userColumns} loading={loading} error={error} />;
@@ -31,6 +37,51 @@ export function SystemPage({ activePath }) {
       <StateBlock loading={loading} error={error}><ConfigOverview data={data} /></StateBlock>
     </div>
   );
+}
+
+function AppearanceSettings() {
+  const [appearance, setAppearance] = useState(() => readAppearance());
+
+  function update(key, value) {
+    setAppearance((current) => applyAppearance({ ...current, [key]: value }));
+  }
+
+  return <div className="section-stack appearance-page">
+    <PageHeader title="外观设置" description="选择平台主题、字体和内容密度，修改后立即生效" />
+    <section className="resource-panel appearance-section">
+      <div className="appearance-section-heading"><LayoutTemplate size={18} /><div><strong>界面主题</strong><span>选择工作台的整体视觉风格</span></div></div>
+      <div className="theme-choice-grid">
+        <button className={appearance.theme === "blue" ? "theme-choice active" : "theme-choice"} onClick={() => update("theme", "blue")} type="button">
+          <span className="theme-preview theme-preview-blue"><i /><b /><em /></span><strong>科技蓝</strong><small>当前企业工作台风格</small>{appearance.theme === "blue" ? <Check size={16} /> : null}
+        </button>
+        <button className={appearance.theme === "codex" ? "theme-choice active" : "theme-choice"} onClick={() => update("theme", "codex")} type="button">
+          <span className="theme-preview theme-preview-codex"><i /><b /><em /></span><strong>Codex 浅色</strong><small>暖灰、黑白与轻量边框</small>{appearance.theme === "codex" ? <Check size={16} /> : null}
+        </button>
+        <button className={appearance.theme === "wechat" ? "theme-choice active" : "theme-choice"} onClick={() => update("theme", "wechat")} type="button">
+          <span className="theme-preview theme-preview-wechat"><i /><b /><em /></span><strong>微信清新</strong><small>柔和灰白与自然绿色强调</small>{appearance.theme === "wechat" ? <Check size={16} /> : null}
+        </button>
+        <button className={appearance.theme === "kimi" ? "theme-choice active" : "theme-choice"} onClick={() => update("theme", "kimi")} type="button">
+          <span className="theme-preview theme-preview-kimi"><i /><b /><em /></span><strong>Kimi 月紫</strong><small>冷白、月紫与轻盈渐变层次</small>{appearance.theme === "kimi" ? <Check size={16} /> : null}
+        </button>
+      </div>
+    </section>
+    <div className="appearance-settings-grid">
+      <section className="resource-panel appearance-section">
+        <div className="appearance-section-heading"><Type size={18} /><div><strong>界面字体</strong><span>用于导航、表单和正文</span></div></div>
+        <select className="text-input" onChange={(event) => update("uiFont", event.target.value)} value={appearance.uiFont}><option value="system">系统默认</option><option value="yahei">微软雅黑</option><option value="source">思源黑体</option></select>
+        <div className="font-sample">Synapse QA · 自动化测试工作台 · Aa 123</div>
+      </section>
+      <section className="resource-panel appearance-section">
+        <div className="appearance-section-heading"><Code2 size={18} /><div><strong>代码字体</strong><span>用于日志、SQL 和 Python 编辑器</span></div></div>
+        <select className="text-input" onChange={(event) => update("codeFont", event.target.value)} value={appearance.codeFont}><option value="consolas">Consolas</option><option value="cascadiacode">Cascadia Code</option><option value="jetbrains">JetBrains Mono</option></select>
+        <code className="code-font-sample">assert response.status == 200</code>
+      </section>
+    </div>
+    <section className="resource-panel appearance-section">
+      <div className="appearance-section-heading"><LayoutTemplate size={18} /><div><strong>显示密度</strong><span>控制表格、表单和工作区的间距</span></div></div>
+      <div className="density-options">{[["compact", "紧凑"], ["standard", "标准"], ["comfortable", "宽松"]].map(([value, label]) => <button className={appearance.density === value ? "active" : ""} key={value} onClick={() => update("density", value)} type="button">{label}</button>)}</div>
+    </section>
+  </div>;
 }
 
 const userColumns = [
@@ -68,3 +119,5 @@ function ConfigOverview({ data }) {
     </div>
   );
 }
+import { Check, Code2, LayoutTemplate, Type } from "lucide-react";
+import { useState } from "react";

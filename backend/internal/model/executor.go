@@ -12,6 +12,12 @@ type ExecutorRegisterRequest struct {
 	SupportedTypes []string `json:"supportedTypes"`
 }
 
+// ExecutorCreateRequest 是平台预先创建执行器身份的配置。
+type ExecutorCreateRequest struct {
+	ExecutorID string `json:"executorId"`
+	Name       string `json:"name"`
+}
+
 // ExecutorHeartbeatRequest 是执行器定时上报的运行状态。
 type ExecutorHeartbeatRequest struct {
 	ExecutorID     string          `json:"executorId"`
@@ -40,4 +46,11 @@ type ExecutorView struct {
 	LastHeartbeatAt time.Time       `json:"lastHeartbeatAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
 	CreatedAt       time.Time       `json:"createdAt"`
+}
+
+// ExecutorTokenResult 只在生成时返回一次执行器专属凭据。
+type ExecutorTokenResult struct {
+	ExecutorID string    `json:"executorId"`
+	Token      string    `json:"token"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }

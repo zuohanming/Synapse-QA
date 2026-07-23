@@ -44,6 +44,7 @@ func main() {
 	executorRepo := repository.NewExecutorRepository(db)
 	testCaseRepo := repository.NewTestCaseRepository(db)
 	executionRepo := repository.NewExecutionRepository(db)
+	notificationRepo := repository.NewNotificationRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -51,19 +52,23 @@ func main() {
 	executorService := service.NewExecutorService(executorRepo, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token"))
 	testCaseService := service.NewTestCaseService(testCaseRepo, systemRepo)
 	executionService := service.NewExecutionService(executionRepo, executorRepo, testCaseRepo, systemRepo, env("EXECUTION_CALLBACK_BASE", "http://127.0.0.1:8080"))
+	notificationService := service.NewNotificationService(notificationRepo)
+	executionService.SetNotifier(notificationService)
+	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(context.Background())
 
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
 	router.RegisterRoutes(engine, router.Dependencies{
-		AuthController:       controller.NewAuthController(systemService),
-		SystemController:     controller.NewSystemController(systemService),
-		CatalogController:    controller.NewCatalogController(catalogService),
-		AutomationController: controller.NewAutomationController(automationService),
-		ExecutorController:   controller.NewExecutorController(executorService),
-		TestCaseController:   controller.NewTestCaseController(testCaseService),
-		ExecutionController:  controller.NewExecutionController(executionService),
-		AuthMiddleware:       controller.AuthMiddleware(systemService),
+		AuthController:         controller.NewAuthController(systemService),
+		SystemController:       controller.NewSystemController(systemService),
+		CatalogController:      controller.NewCatalogController(catalogService),
+		AutomationController:   controller.NewAutomationController(automationService),
+		ExecutorController:     controller.NewExecutorController(executorService),
+		TestCaseController:     controller.NewTestCaseController(testCaseService),
+		ExecutionController:    controller.NewExecutionController(executionService),
+		NotificationController: controller.NewNotificationController(notificationService),
+		AuthMiddleware:         controller.AuthMiddleware(systemService),
 	})
 
 	addr := env("API_ADDR", "127.0.0.1:8080")

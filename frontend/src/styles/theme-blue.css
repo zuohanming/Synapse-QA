@@ -193,7 +193,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .report-task-list { display: grid; gap: 10px; padding: 0 20px 20px; }
 
 /* 登录页 */
-.login-view { display: grid; grid-template-columns: minmax(420px, 1.08fr) minmax(420px, .92fr); min-height: 100vh; background: #fff; }
+.login-view { display: grid; width: 100%; grid-template-columns: minmax(420px, 1.08fr) minmax(420px, .92fr); min-height: 100vh; align-items: stretch; justify-items: stretch; background: #fff; }
 .login-intro { position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 100vh; padding: 38px 54px; overflow: hidden; color: #fff; background: #102d57; }
 .login-intro::before { content: ""; position: absolute; inset: 0; opacity: .28; background-image: linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom right, #000, transparent 75%); }
 .login-intro::after { content: ""; position: absolute; right: -160px; bottom: -190px; width: 520px; height: 520px; border: 1px solid rgba(55,212,207,.35); border-radius: 50%; box-shadow: 0 0 0 70px rgba(55,212,207,.04), 0 0 0 140px rgba(55,212,207,.03); }

@@ -9,14 +9,15 @@ import (
 )
 
 type Dependencies struct {
-	AuthController       *controller.AuthController
-	SystemController     *controller.SystemController
-	CatalogController    *controller.CatalogController
-	AutomationController *controller.AutomationController
-	ExecutorController   *controller.ExecutorController
-	TestCaseController   *controller.TestCaseController
-	ExecutionController  *controller.ExecutionController
-	AuthMiddleware       gin.HandlerFunc
+	AuthController         *controller.AuthController
+	SystemController       *controller.SystemController
+	CatalogController      *controller.CatalogController
+	AutomationController   *controller.AutomationController
+	ExecutorController     *controller.ExecutorController
+	TestCaseController     *controller.TestCaseController
+	ExecutionController    *controller.ExecutionController
+	NotificationController *controller.NotificationController
+	AuthMiddleware         gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -35,16 +36,32 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
 	authed.GET("/executors", deps.ExecutorController.List)
+	authed.POST("/executors", deps.ExecutorController.Create)
+	authed.POST("/executors/:executorId/token", deps.ExecutorController.GenerateToken)
 
 	registerSystemRoutes(authed, deps)
 	registerConfigRoutes(authed, deps)
 	registerUIRoutes(authed, deps)
 	registerTestCaseRoutes(authed, deps)
 	registerExecutionRoutes(authed, deps)
+	registerNotificationRoutes(authed, deps)
+}
+
+func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/notifications", deps.NotificationController.List)
+	authed.GET("/notifications/unread-count", deps.NotificationController.Count)
+	authed.GET("/notifications/stream", deps.NotificationController.Stream)
+	authed.PATCH("/notifications/:id/read", deps.NotificationController.Read)
+	authed.POST("/notifications/read-all", deps.NotificationController.ReadAll)
+	authed.DELETE("/notifications/:id", deps.NotificationController.Delete)
+	authed.GET("/notifications/preferences", deps.NotificationController.Preferences)
+	authed.PATCH("/notifications/preferences", deps.NotificationController.UpdatePreferences)
+	authed.POST("/notifications/system", deps.NotificationController.System)
 }
 
 func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.GET("/executions", deps.ExecutionController.List)
+	authed.GET("/executions/statistics", deps.ExecutionController.Statistics)
 	authed.POST("/executions", deps.ExecutionController.Create)
 	authed.POST("/executions/debug", deps.ExecutionController.StartDebug)
 	authed.GET("/executions/debug/:taskId", deps.ExecutionController.GetDebug)
@@ -93,6 +110,7 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	registerUIAssetRoutes(authed, "/ui/steps", "page_step", deps)
 	registerUIAssetRoutes(authed, "/ui/cases", "test_case", deps)
 	registerUIAssetRoutes(authed, "/ui/variables", "global_variable", deps)
+	registerUIAssetRoutes(authed, "/interfaces", "api_interface", deps)
 	authed.GET("/ui/page-elements", deps.AutomationController.ListPageElements)
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)

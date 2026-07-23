@@ -18,6 +18,16 @@ def _environment_value(name: str, default: str) -> str:
     return default
 
 
+def save_executor_token(token: str) -> None:
+    os.environ["EXECUTOR_SHARED_TOKEN"] = token
+    settings.executor_shared_token = token
+    if os.name == "nt":
+        import winreg
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            winreg.SetValueEx(key, "EXECUTOR_SHARED_TOKEN", 0, winreg.REG_SZ, token)
+
+
 class Settings:
     app_name = "Synapse QA Executor"
     executor_id = os.getenv("EXECUTOR_ID", "local-python-executor")

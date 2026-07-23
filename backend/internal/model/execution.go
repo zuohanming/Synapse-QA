@@ -110,6 +110,27 @@ type ExecutionSummary struct {
 	Active  int64 `json:"active"`
 }
 
+type ExecutionTrendPoint struct {
+	Date     string  `json:"date"`
+	Runs     int64   `json:"runs"`
+	Cases    int64   `json:"cases"`
+	PassRate float64 `json:"passRate"`
+}
+
+type ExecutionStatistics struct {
+	TotalRuns      int64                 `json:"totalRuns"`
+	TotalCases     int64                 `json:"totalCases"`
+	PassedCases    int64                 `json:"passedCases"`
+	FailedCases    int64                 `json:"failedCases"`
+	FailedRuns     int64                 `json:"failedRuns"`
+	RunningRuns    int64                 `json:"runningRuns"`
+	PassRate       float64               `json:"passRate"`
+	RunChange      float64               `json:"runChange"`
+	CaseChange     float64               `json:"caseChange"`
+	PassRateChange float64               `json:"passRateChange"`
+	Trend          []ExecutionTrendPoint `json:"trend"`
+}
+
 // ExecutionLogCreateRequest 创建执行日志请求。
 type ExecutionLogCreateRequest struct {
 	Level   string `json:"level"`
