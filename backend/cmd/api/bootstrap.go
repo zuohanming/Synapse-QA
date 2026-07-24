@@ -323,6 +323,89 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table test_cases add column if not exists created_by text not null default ''`,
 		`alter table test_cases add column if not exists updated_at timestamptz not null default now()`,
 		`alter table test_cases add column if not exists deleted_at timestamptz`,
+		`create unique index if not exists uq_product_modules_id_product on product_modules(id, product_id)`,
+		`create table if not exists permissions (
+			id bigserial primary key,
+			code text not null unique,
+			name text not null,
+			description text not null default '',
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists role_permissions (
+			role_id bigint not null references roles(id),
+			permission_id bigint not null references permissions(id),
+			created_at timestamptz not null default now(),
+			primary key(role_id, permission_id)
+		)`,
+		`create table if not exists project_members (
+			user_id bigint not null references users(id),
+			project_id bigint not null references projects(id),
+			role_id bigint not null references roles(id),
+			created_at timestamptz not null default now(),
+			primary key(user_id, project_id)
+		)`,
+		`create table if not exists api_interfaces (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			module_id bigint,
+			name text not null,
+			method text not null,
+			path text not null,
+			normalized_path text not null,
+			protocol text not null default 'HTTP',
+			endpoint_type text not null default 'WEB',
+			lifecycle_status text not null default 'draft',
+			timeout_seconds int not null default 30 check(timeout_seconds between 1 and 300),
+			follow_redirects boolean not null default true,
+			configuration jsonb not null default '{}'::jsonb,
+			current_version int not null default 1,
+			revision bigint not null default 1,
+			last_debug_status text not null default '',
+			last_debug_duration_ms bigint,
+			last_debug_at timestamptz,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			foreign key(module_id, product_id) references product_modules(id, product_id)
+		)`,
+		`create unique index if not exists uq_api_interfaces_active_path on api_interfaces(product_id, method, normalized_path) where deleted_at is null`,
+		`create table if not exists api_interface_versions (
+			id bigserial primary key,
+			interface_id bigint not null references api_interfaces(id),
+			version int not null,
+			snapshot jsonb not null,
+			change_summary text not null default '',
+			created_by text not null,
+			created_at timestamptz not null default now(),
+			unique(interface_id, version)
+		)`,
+		`create table if not exists api_project_headers (
+			id bigserial primary key,
+			project_id bigint not null references projects(id),
+			header_name text not null,
+			header_name_normalized text not null,
+			header_value text not null default '',
+			description text not null default '',
+			enabled boolean not null default true,
+			sensitive boolean not null default false,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create unique index if not exists uq_api_project_headers_active_name on api_project_headers(project_id, header_name_normalized) where deleted_at is null`,
+		`create table if not exists api_legacy_migrations (
+			source_type text not null,
+			source_id bigint not null,
+			target_id bigint,
+			status text not null,
+			message text not null default '',
+			created_at timestamptz not null default now(),
+			primary key(source_type, source_id)
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {

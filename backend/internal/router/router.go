@@ -9,15 +9,16 @@ import (
 )
 
 type Dependencies struct {
-	AuthController         *controller.AuthController
-	SystemController       *controller.SystemController
-	CatalogController      *controller.CatalogController
-	AutomationController   *controller.AutomationController
-	ExecutorController     *controller.ExecutorController
-	TestCaseController     *controller.TestCaseController
-	ExecutionController    *controller.ExecutionController
-	NotificationController *controller.NotificationController
-	AuthMiddleware         gin.HandlerFunc
+	AuthController          *controller.AuthController
+	SystemController        *controller.SystemController
+	CatalogController       *controller.CatalogController
+	AutomationController    *controller.AutomationController
+	ExecutorController      *controller.ExecutorController
+	TestCaseController      *controller.TestCaseController
+	ExecutionController     *controller.ExecutionController
+	NotificationController  *controller.NotificationController
+	APIAutomationController *controller.APIAutomationController
+	AuthMiddleware          gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -45,6 +46,20 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerTestCaseRoutes(authed, deps)
 	registerExecutionRoutes(authed, deps)
 	registerNotificationRoutes(authed, deps)
+	registerAPIAutomationRoutes(authed, deps)
+}
+
+func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/api-automation")
+	group.GET("/interfaces", deps.APIAutomationController.ListInterfaces)
+	group.POST("/interfaces", deps.APIAutomationController.CreateInterface)
+	group.GET("/interfaces/:id", deps.APIAutomationController.GetInterface)
+	group.PATCH("/interfaces/:id", deps.APIAutomationController.UpdateInterface)
+	group.DELETE("/interfaces/:id", deps.APIAutomationController.DeleteInterface)
+	group.GET("/project-headers", deps.APIAutomationController.ListProjectHeaders)
+	group.POST("/project-headers", deps.APIAutomationController.CreateProjectHeader)
+	group.PATCH("/project-headers/:id", deps.APIAutomationController.UpdateProjectHeader)
+	group.DELETE("/project-headers/:id", deps.APIAutomationController.DeleteProjectHeader)
 }
 
 func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -110,7 +125,6 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	registerUIAssetRoutes(authed, "/ui/steps", "page_step", deps)
 	registerUIAssetRoutes(authed, "/ui/cases", "test_case", deps)
 	registerUIAssetRoutes(authed, "/ui/variables", "global_variable", deps)
-	registerUIAssetRoutes(authed, "/interfaces", "api_interface", deps)
 	authed.GET("/ui/page-elements", deps.AutomationController.ListPageElements)
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)

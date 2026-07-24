@@ -37,6 +37,9 @@ func main() {
 	if err := bootstrapApp.seed(ctx); err != nil {
 		log.Fatal(err)
 	}
+	if err := bootstrapApp.migrateLegacyAPIData(ctx); err != nil {
+		log.Fatal(err)
+	}
 
 	systemRepo := repository.NewSystemRepository(db)
 	catalogRepo := repository.NewCatalogRepository(db)
@@ -45,6 +48,7 @@ func main() {
 	testCaseRepo := repository.NewTestCaseRepository(db)
 	executionRepo := repository.NewExecutionRepository(db)
 	notificationRepo := repository.NewNotificationRepository(db)
+	apiAutomationRepo := repository.NewAPIAutomationRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -53,6 +57,7 @@ func main() {
 	testCaseService := service.NewTestCaseService(testCaseRepo, systemRepo)
 	executionService := service.NewExecutionService(executionRepo, executorRepo, testCaseRepo, systemRepo, env("EXECUTION_CALLBACK_BASE", "http://127.0.0.1:8080"))
 	notificationService := service.NewNotificationService(notificationRepo)
+	apiAutomationService := service.NewAPIAutomationService(apiAutomationRepo, systemRepo)
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(context.Background())
@@ -60,15 +65,16 @@ func main() {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
 	router.RegisterRoutes(engine, router.Dependencies{
-		AuthController:         controller.NewAuthController(systemService),
-		SystemController:       controller.NewSystemController(systemService),
-		CatalogController:      controller.NewCatalogController(catalogService),
-		AutomationController:   controller.NewAutomationController(automationService),
-		ExecutorController:     controller.NewExecutorController(executorService),
-		TestCaseController:     controller.NewTestCaseController(testCaseService),
-		ExecutionController:    controller.NewExecutionController(executionService),
-		NotificationController: controller.NewNotificationController(notificationService),
-		AuthMiddleware:         controller.AuthMiddleware(systemService),
+		AuthController:          controller.NewAuthController(systemService),
+		SystemController:        controller.NewSystemController(systemService),
+		CatalogController:       controller.NewCatalogController(catalogService),
+		AutomationController:    controller.NewAutomationController(automationService),
+		ExecutorController:      controller.NewExecutorController(executorService),
+		TestCaseController:      controller.NewTestCaseController(testCaseService),
+		ExecutionController:     controller.NewExecutionController(executionService),
+		NotificationController:  controller.NewNotificationController(notificationService),
+		APIAutomationController: controller.NewAPIAutomationController(apiAutomationService),
+		AuthMiddleware:          controller.AuthMiddleware(systemService),
 	})
 
 	addr := env("API_ADDR", "127.0.0.1:8080")
