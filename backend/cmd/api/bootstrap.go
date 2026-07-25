@@ -406,6 +406,50 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			primary key(source_type, source_id)
 		)`,
+		`create table if not exists api_temp_files (
+			id text primary key,
+			project_id bigint not null references projects(id),
+			owner_user_id bigint not null references users(id),
+			original_name text not null,
+			stored_path text not null,
+			mime_type text not null default 'application/octet-stream',
+			size_bytes bigint not null check(size_bytes >= 0),
+			sha256 text not null,
+			expires_at timestamptz not null,
+			created_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create index if not exists idx_api_temp_files_expiry on api_temp_files(expires_at) where deleted_at is null`,
+		`create table if not exists api_debug_runs (
+			id bigserial primary key,
+			task_id text not null unique,
+			interface_id bigint not null references api_interfaces(id),
+			project_id bigint not null references projects(id),
+			executor_id text not null references executors(executor_id),
+			status text not null default 'queued',
+			request_snapshot jsonb not null,
+			result jsonb not null default '{}'::jsonb,
+			error_message text not null default '',
+			triggered_by text not null,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_api_debug_runs_interface on api_debug_runs(interface_id, id desc)`,
+		`create table if not exists api_debug_events (
+			id bigserial primary key,
+			task_id text not null references api_debug_runs(task_id) on delete cascade,
+			sequence int not null,
+			event_type text not null,
+			stage text not null,
+			status text not null,
+			message text not null,
+			progress int not null default 0,
+			data jsonb not null default '{}'::jsonb,
+			created_at timestamptz not null default now(),
+			unique(task_id, sequence)
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {

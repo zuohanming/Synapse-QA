@@ -81,10 +81,10 @@ type APIProjectHeaderRequest struct {
 }
 
 type APIRequestPreviewRequest struct {
-	TestObjectID      int64                  `json:"testObjectId"`
-	Snapshot          *APIInterfaceRequest   `json:"snapshot"`
-	TemporaryVariables map[string]any         `json:"temporaryVariables"`
-	TemporaryHeaders   map[string]string      `json:"temporaryHeaders"`
+	TestObjectID       int64                `json:"testObjectId"`
+	Snapshot           *APIInterfaceRequest `json:"snapshot"`
+	TemporaryVariables map[string]any       `json:"temporaryVariables"`
+	TemporaryHeaders   map[string]string    `json:"temporaryHeaders"`
 }
 
 type APIRequestPreview struct {
@@ -93,4 +93,75 @@ type APIRequestPreview struct {
 	Headers  map[string]string `json:"headers"`
 	Body     string            `json:"body"`
 	Warnings []string          `json:"warnings"`
+}
+
+type APICurlParseRequest struct {
+	Curl string `json:"curl"`
+}
+
+type APICurlParseResult struct {
+	Method        string            `json:"method"`
+	URL           string            `json:"url"`
+	Protocol      string            `json:"protocol"`
+	Headers       map[string]string `json:"headers"`
+	Body          string            `json:"body"`
+	MaskedHeaders []string          `json:"maskedHeaders"`
+}
+
+type APICurlExportResult struct {
+	Curl string `json:"curl"`
+}
+
+type APITempFile struct {
+	ID           string    `json:"id"`
+	ProjectID    int64     `json:"projectId"`
+	OriginalName string    `json:"originalName"`
+	MIMEType     string    `json:"mimeType"`
+	SizeBytes    int64     `json:"sizeBytes"`
+	SHA256       string    `json:"sha256"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+type APIDebugStartRequest struct {
+	TestObjectID       int64                `json:"testObjectId"`
+	Snapshot           *APIInterfaceRequest `json:"snapshot"`
+	TemporaryVariables map[string]any       `json:"temporaryVariables"`
+	TemporaryHeaders   map[string]string    `json:"temporaryHeaders"`
+}
+
+type APIDebugRun struct {
+	ID           int64           `json:"id"`
+	TaskID       string          `json:"taskId"`
+	InterfaceID  int64           `json:"interfaceId"`
+	ProjectID    int64           `json:"projectId"`
+	ExecutorID   string          `json:"executorId"`
+	Status       string          `json:"status"`
+	Request      json.RawMessage `json:"request"`
+	Result       json.RawMessage `json:"result"`
+	ErrorMessage string          `json:"errorMessage"`
+	TriggeredBy  string          `json:"triggeredBy"`
+	StartedAt    *time.Time      `json:"startedAt"`
+	FinishedAt   *time.Time      `json:"finishedAt"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+}
+
+type APIDebugEvent struct {
+	ID        int64           `json:"id"`
+	TaskID    string          `json:"taskId"`
+	Sequence  int             `json:"sequence"`
+	Type      string          `json:"type"`
+	Stage     string          `json:"stage"`
+	Status    string          `json:"status"`
+	Message   string          `json:"message"`
+	Progress  int             `json:"progress"`
+	Data      json.RawMessage `json:"data"`
+	CreatedAt time.Time       `json:"timestamp"`
+}
+
+type APIDebugCallbackRequest struct {
+	TaskID string          `json:"taskId"`
+	Status string          `json:"status"`
+	Result json.RawMessage `json:"result"`
 }

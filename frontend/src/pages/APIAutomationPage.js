@@ -61,6 +61,33 @@ function InterfaceManagementPage() {
     try { await Promise.all(ids.map((id) => apiAutomationService.interfaces.remove(id))); setSelected([]); await reload(); setNotice("接口已删除。"); }
     catch (err) { setNotice(err.message || "删除接口失败"); } finally { setBusy(false); }
   }
+  async function importCurl() {
+    const command = window.prompt("请粘贴 cURL 命令");
+    if (!command) return;
+    setBusy(true); setNotice("");
+    try {
+      const parsed = await apiAutomationService.curl.parse(command);
+      setEditing(null);
+      setForm({
+        ...emptyForm,
+        productId: filters.productId,
+        method: parsed.method,
+        path: parsed.url,
+        protocol: parsed.protocol || "HTTP",
+        configuration: {
+          headers: JSON.stringify(parsed.headers || {}, null, 2),
+          params: "{}",
+          body: parsed.body || ""
+        }
+      });
+      setModal(true);
+      setNotice(parsed.maskedHeaders?.length ? `已识别敏感请求头：${parsed.maskedHeaders.join("、")}` : "cURL 已解析，请补充接口归属和名称。");
+    } catch (error) {
+      setNotice(error.message || "解析 cURL 失败");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const columns = [
     { key: "select", title: <input checked={pageRows.length > 0 && pageRows.every((row) => selected.includes(row.id))} onChange={(event) => setSelected(event.target.checked ? pageRows.map((row) => row.id) : [])} type="checkbox" />, render: (row) => <input checked={selected.includes(row.id)} onChange={() => setSelected((current) => current.includes(row.id) ? current.filter((id) => id !== row.id) : [...current, row.id])} type="checkbox" /> },
@@ -94,7 +121,7 @@ function InterfaceManagementPage() {
         <FilterSelect label="接口状态" value={filters.lifecycleStatus} onChange={(value) => setFilters({ ...filters, lifecycleStatus: value })} options={[{ value: "draft", label: "草稿" }, { value: "active", label: "启用" }, { value: "disabled", label: "停用" }, { value: "deprecated", label: "已废弃" }]} />
         <div className="api-filter-actions"><button className="primary-button compact-button" type="submit">搜索</button><button className="icon-text-button compact-button" onClick={() => { setFilters(initialFilters); setApplied(initialFilters); }} type="button">重置</button></div>
       </form>
-      <div className="api-list-toolbar"><div className="api-tabs"><button className="active" type="button">接口定义</button></div><div><button className="primary-button compact-button" onClick={openCreate} type="button"><Plus size={14} />新增</button><button className="icon-text-button compact-button" type="button"><Upload size={14} />导入 cURL</button><button className="danger-button compact-button" disabled={!selected.length || busy} onClick={() => removeRows(selected)} type="button">批量删除</button><button className="icon-text-button compact-button" onClick={reload} type="button"><RefreshCw size={14} /></button></div></div>
+      <div className="api-list-toolbar"><div className="api-tabs"><button className="active" type="button">接口定义</button></div><div><button className="primary-button compact-button" onClick={openCreate} type="button"><Plus size={14} />新增</button><button className="icon-text-button compact-button" disabled={busy} onClick={importCurl} type="button"><Upload size={14} />导入 cURL</button><button className="danger-button compact-button" disabled={!selected.length || busy} onClick={() => removeRows(selected)} type="button">批量删除</button><button className="icon-text-button compact-button" onClick={reload} type="button"><RefreshCw size={14} /></button></div></div>
       {notice ? <div className="inline-notice">{notice}</div> : null}
       <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={pageRows} emptyText="暂无接口数据" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
     </section>
@@ -104,6 +131,8 @@ function InterfaceManagementPage() {
 }
 
 const detailSections = [
+  ["variables", "临时变量", "仅用于本次预览与调试，优先级最高"],
+  ["auth", "认证", "配置 Bearer、Basic 或 API Key"],
   ["headers", "请求头", "维护接口请求 Headers"],
   ["params", "参数", "维护查询参数"],
   ["body", "请求体", "维护 Body 配置"],
@@ -115,6 +144,11 @@ const detailSections = [
 
 function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   const saved = row.configuration || {};
+  const { data: testObjectsData } = useAsyncData(
+    () => configService.testObjects.list({ productId: row.productId, page: 1, pageSize: 200 }),
+    [row.productId]
+  );
+  const testObjects = pageItems(testObjectsData);
   const { data: defaultHeadersData } = useAsyncData(
     () => projectId ? apiAutomationService.requestHeaders.list({ projectId }) : Promise.resolve({ items: [] }),
     [projectId]
@@ -126,9 +160,11 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   ), [defaultHeadersData]);
   const [active, setActive] = useState("headers");
   const [config, setConfig] = useState({
+    auth: JSON.stringify(saved.auth || { type: "none" }, null, 2),
     headers: saved.headers || "{\n  \"Content-Type\": \"application/json\"\n}",
     params: saved.params || "{\n  \n}",
     body: saved.body || "{\n  \n}",
+    bodyType: saved.bodyType || "json",
     jsonpath: saved.jsonpath || "[]",
     regex: saved.regex || "[]",
     script: saved.script || "",
@@ -139,49 +175,186 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [testObjectId, setTestObjectId] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [temporaryVariables, setTemporaryVariables] = useState("{\n  \n}");
+  const [temporaryFiles, setTemporaryFiles] = useState(saved.temporaryFiles || []);
+  const [debugEvents, setDebugEvents] = useState([]);
+  const [activeTaskId, setActiveTaskId] = useState("");
+
+  function configurationPayload() {
+    return {
+      ...saved,
+      ...config,
+      auth: JSON.parse(config.auth || "{\"type\":\"none\"}"),
+      temporaryFiles
+    };
+  }
+
+  async function uploadTemporaryFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy(true); setNotice("");
+    try {
+      const uploaded = await apiAutomationService.tempFiles.upload(row.projectId, file);
+      setTemporaryFiles((current) => [...current, uploaded]);
+      setNotice(`临时文件 ${uploaded.originalName} 已上传，1 小时后自动过期。`);
+    } catch (error) {
+      setNotice(error.message || "上传临时文件失败");
+    } finally {
+      event.target.value = "";
+      setBusy(false);
+    }
+  }
+
+  async function removeTemporaryFile(file) {
+    setBusy(true); setNotice("");
+    try {
+      await apiAutomationService.tempFiles.remove(file.id);
+      setTemporaryFiles((current) => current.filter((item) => item.id !== file.id));
+      setNotice("临时文件已删除。");
+    } catch (error) {
+      setNotice(error.message || "删除临时文件失败");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveConfiguration() {
     setBusy(true); setNotice("");
     try {
-      await apiAutomationService.interfaces.update(row.id, { productId: row.productId, moduleId: row.moduleId, name: row.name, method, path: url, protocol: row.protocol, endpointType: row.endpointType, lifecycleStatus: row.lifecycleStatus, timeoutSeconds: row.timeoutSeconds, followRedirects: row.followRedirects, configuration: { ...saved, ...config }, revision: row.revision });
+      await apiAutomationService.interfaces.update(row.id, { productId: row.productId, moduleId: row.moduleId, name: row.name, method, path: url, protocol: row.protocol, endpointType: row.endpointType, lifecycleStatus: row.lifecycleStatus, timeoutSeconds: row.timeoutSeconds, followRedirects: row.followRedirects, configuration: configurationPayload(), revision: row.revision });
       setNotice("接口配置已保存。");
     } catch (error) { setNotice(error.message || "保存接口配置失败"); } finally { setBusy(false); }
   }
 
   async function execute() {
     setBusy(true); setNotice("");
-    const started = performance.now();
+    const streamController = new AbortController();
     try {
-      const interfaceHeaders = JSON.parse(config.headers || "{}");
-      const headers = { ...defaultHeaders, ...interfaceHeaders };
-      const params = JSON.parse(config.params || "{}");
-      const target = new URL(url, window.location.origin);
-      Object.entries(params).forEach(([key, value]) => target.searchParams.set(key, String(value)));
-      const options = { method, headers };
-      if (!["GET", "HEAD"].includes(method)) options.body = config.body || undefined;
-      const response = await fetch(target, options);
-      const body = await response.text();
-      setResult({ status: response.status, duration: performance.now() - started, ok: response.ok, headers: Object.fromEntries(response.headers.entries()), body, request: { url: target.toString(), method, headers, body: options.body || "" } });
+      setDebugEvents([]);
+      const run = await apiAutomationService.debug.start(row.id, previewPayload());
+      setActiveTaskId(run.taskId);
+      setNotice(`任务已下发至执行器 ${run.executorId}。`);
+      let sequence = 0;
+      let terminalEventReceived = false;
+      const consumeEvents = async () => {
+        while (!streamController.signal.aborted && !terminalEventReceived) {
+          try {
+            await apiAutomationService.debug.stream(run.taskId, sequence, (event) => {
+              if (event.sequence <= sequence) return;
+              sequence = event.sequence;
+              terminalEventReceived = ["success", "failed", "canceled"].includes(event.status);
+              setDebugEvents((current) => [...current, event]);
+            }, streamController.signal);
+          } catch (error) {
+            if (error.name === "AbortError") return;
+          }
+          if (!terminalEventReceived && !streamController.signal.aborted) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+        }
+      };
+      const eventStream = consumeEvents();
+      const deadline = Date.now() + (Number(row.timeoutSeconds || 30) + 15) * 1000;
+      while (Date.now() < deadline) {
+        const current = await apiAutomationService.debug.get(run.taskId);
+        if (["success", "failed", "canceled"].includes(current.status)) {
+          streamController.abort();
+          await eventStream;
+          const taskResult = current.result || {};
+          let response = {};
+          try { response = JSON.parse(taskResult.output || "{}"); } catch { response = { body: taskResult.output || taskResult.error || "" }; }
+          setResult({
+            status: response.statusCode ?? "-",
+            duration: response.durationMs || 0,
+            ok: current.status === "success",
+            headers: response.headers || {},
+            body: response.body || taskResult.error || current.errorMessage || "",
+            request: current.request
+          });
+          setNotice(current.status === "success" ? "执行器调试完成。" : current.errorMessage || taskResult.error || "执行器调试失败。");
+          setActiveTaskId("");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error("等待执行器结果超时");
     } catch (error) {
-      setResult({ status: "-", duration: performance.now() - started, ok: false, headers: {}, body: error.message, request: { url, method } });
-    } finally { setBusy(false); }
+      setResult({ status: "-", duration: 0, ok: false, headers: {}, body: error.message, request: { url, method } });
+      setNotice(error.message || "执行器调试失败");
+    } finally { streamController.abort(); setActiveTaskId(""); setBusy(false); }
+  }
+
+  async function cancelDebug() {
+    if (!activeTaskId) return;
+    try {
+      await apiAutomationService.debug.cancel(activeTaskId);
+      setNotice("正在取消执行器任务。");
+    } catch (error) {
+      setNotice(error.message || "取消调试失败");
+    }
+  }
+
+  async function previewRequest() {
+    setBusy(true); setNotice("");
+    try {
+      const response = await apiAutomationService.interfaces.preview(row.id, previewPayload());
+      setPreview(response);
+      setNotice("最终请求已构建，敏感请求头已脱敏。");
+    } catch (error) {
+      setNotice(error.message || "构建最终请求失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function previewPayload() {
+    return {
+      testObjectId: Number(testObjectId || 0),
+      snapshot: {
+        productId: row.productId, moduleId: row.moduleId, name: row.name, method, path: url,
+        protocol: row.protocol, endpointType: row.endpointType, lifecycleStatus: row.lifecycleStatus,
+        timeoutSeconds: row.timeoutSeconds, followRedirects: row.followRedirects,
+        configuration: configurationPayload(), revision: row.revision
+      },
+      temporaryVariables: JSON.parse(temporaryVariables || "{}"),
+      temporaryHeaders: {}
+    };
+  }
+
+  async function exportCurl() {
+    setBusy(true); setNotice("");
+    try {
+      const response = await apiAutomationService.interfaces.exportCurl(row.id, previewPayload());
+      await navigator.clipboard?.writeText(response.curl);
+      setNotice("脱敏 cURL 已复制到剪贴板。");
+    } catch (error) {
+      setNotice(error.message || "导出 cURL 失败");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return <div className="api-detail-page">
-    <header className="api-detail-header"><div><span>接口配置工作台 / #{row.id}</span><h2>{row.name}</h2><p>维护请求配置、后置处理、断言和最近一次响应结果</p></div><div><button className="success-button compact-button" disabled={busy} onClick={execute} type="button"><Play size={14} />执行</button><button className="icon-text-button compact-button" onClick={onBack} type="button"><ArrowLeft size={14} />返回</button></div></header>
+    <header className="api-detail-header"><div><span>接口配置工作台 / #{row.id}</span><h2>{row.name}</h2><p>维护请求配置、预览最终请求和查看最近一次响应结果</p></div><div><button className="primary-button compact-button" disabled={busy} onClick={previewRequest} type="button"><Braces size={14} />预览请求</button><button className="icon-text-button compact-button" disabled={busy} onClick={exportCurl} type="button"><Clipboard size={14} />复制 cURL</button>{activeTaskId ? <button className="danger-button compact-button" onClick={cancelDebug} type="button">取消</button> : <button className="success-button compact-button" disabled={busy} onClick={execute} type="button"><Play size={14} />执行</button>}<button className="icon-text-button compact-button" onClick={onBack} type="button"><ArrowLeft size={14} />返回</button></div></header>
     {notice ? <div className="inline-notice">{notice}</div> : null}
     <div className="api-detail-layout">
       <aside className="api-detail-nav"><div><strong>配置项</strong><span>按执行链路维护接口配置</span></div>{detailSections.map(([key, title, description]) => <button className={active === key ? "active" : ""} key={key} onClick={() => setActive(key)} type="button"><strong>{title}</strong><span>{description}</span></button>)}</aside>
       <main className="api-detail-editor">
-        <div className="api-request-line"><select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}>{["GET", "POST", "PUT", "DELETE", "PATCH"].map((item) => <option key={item}>{item}</option>)}</select><input className="text-input" value={url} onChange={(event) => setUrl(event.target.value)} /><button className="primary-button compact-button" disabled={busy} onClick={saveConfiguration} type="button"><Save size={14} />保存</button></div>
+        <div className="api-request-line"><select className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}>{["GET", "POST", "PUT", "DELETE", "PATCH"].map((item) => <option key={item}>{item}</option>)}</select><input className="text-input" value={url} onChange={(event) => setUrl(event.target.value)} /><select aria-label="测试环境" className="text-input" value={testObjectId} onChange={(event) => setTestObjectId(event.target.value)}><option value="">选择测试环境</option>{testObjects.map((item) => <option key={item.id} value={item.id}>{item.envName}</option>)}</select><button className="primary-button compact-button" disabled={busy} onClick={saveConfiguration} type="button"><Save size={14} />保存</button></div>
         <div className="api-editor-heading"><strong>{detailSections.find(([key]) => key === active)?.[1]}</strong><span>{detailSections.find(([key]) => key === active)?.[2]}</span></div>
-        <div className="api-editor-tip">{active === "headers" ? `已加载 ${Object.keys(defaultHeaders).length} 个项目默认请求头；接口内同名请求头优先。` : "请输入合法 JSON；后置脚本支持普通文本配置，保存后用于执行阶段处理。"}</div>
-        <textarea className="api-config-editor" spellCheck="false" value={config[active]} onChange={(event) => setConfig({ ...config, [active]: event.target.value })} />
+        <div className="api-editor-tip">{active === "headers" ? `已加载 ${Object.keys(defaultHeaders).length} 个项目默认请求头；接口内同名请求头优先。` : active === "variables" ? "临时变量不会保存到接口，覆盖同名的环境级和项目级全局变量。" : "请输入合法 JSON；后置脚本支持普通文本配置，保存后用于执行阶段处理。"}</div>
+        {active === "body" ? <label className="form-field"><span>Body 类型</span><select className="text-input" value={config.bodyType} onChange={(event) => setConfig({ ...config, bodyType: event.target.value })}><option value="none">无</option><option value="json">JSON</option><option value="form_data">form-data</option><option value="urlencoded">x-www-form-urlencoded</option><option value="raw">Raw 文本</option></select></label> : null}
+        {active === "body" && config.bodyType === "form_data" ? <div className="api-temp-files"><label className="icon-text-button compact-button">上传临时文件<input disabled={busy} hidden onChange={uploadTemporaryFile} type="file" /></label>{temporaryFiles.map((file) => <span key={file.id}>{file.originalName}（{Math.ceil(file.sizeBytes / 1024)} KB）<button className="link-button danger-link" onClick={() => removeTemporaryFile(file)} type="button">删除</button></span>)}</div> : null}
+        <textarea className="api-config-editor" spellCheck="false" value={active === "variables" ? temporaryVariables : config[active]} onChange={(event) => active === "variables" ? setTemporaryVariables(event.target.value) : setConfig({ ...config, [active]: event.target.value })} />
       </main>
       <aside className="api-result-panel">
         <div className="api-result-heading"><div><strong>调用结果</strong><span>执行后固定展示最近一次响应</span></div><button className="success-button compact-button" disabled={busy} onClick={execute} type="button"><Play size={14} />{busy ? "执行中" : "执行"}</button></div>
         <div className="api-result-summary"><div><span>状态码</span><strong>{result?.status ?? "-"}</strong></div><div><span>响应时间</span><strong>{result ? `${(result.duration / 1000).toFixed(2)} 秒` : "-"}</strong></div><div><span>执行状态</span><strong className={result?.ok ? "success" : result ? "danger" : ""}>{result ? result.ok ? "调用完成" : "调用失败" : "等待执行"}</strong></div></div>
         <div className="api-result-tabs"><span className="active">响应</span><span>请求</span><span>缓存</span></div>
+        {debugEvents.length ? <ResultBlock label="实时执行日志" value={debugEvents.map((event) => `[${event.progress}%] ${event.message}`).join("\n")} /> : null}
+        {preview ? <ResultBlock label="最终请求预览" value={JSON.stringify(preview, null, 2)} /> : null}
         <ResultBlock label="响应头" value={result ? JSON.stringify(result.headers, null, 2) : ""} />
         <ResultBlock label="响应体" value={result?.body || ""} />
         {result ? <ResultBlock label="实际请求" value={JSON.stringify(result.request, null, 2)} /> : null}

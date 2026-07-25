@@ -586,3 +586,21 @@ html[data-density="comfortable"] .text-input { min-height: 42px; }
   .report-footer > span { display: none; }
   .report-footer { justify-content: flex-end; }
 }
+
+.api-temp-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.api-temp-files > span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--line) 28%, var(--panel));
+}

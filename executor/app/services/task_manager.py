@@ -1,7 +1,7 @@
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 import logging
-from threading import Lock
+from threading import Event, Lock
 from uuid import uuid4
 
 from app.core.config import settings
@@ -11,7 +11,7 @@ from app.runners.noop_runner import NoopRunner
 from app.runners.playwright_runner import PlaywrightRunner
 from app.runners.pytest_runner import PytestRunner
 from app.runners.script_runner import ScriptRunner
-from app.services.callback_client import notify_callback
+from app.services.callback_client import notify_callback, notify_event
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class TaskManager:
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers)
         self._tasks: dict[str, TaskView] = {}
         self._futures: dict[str, Future] = {}
+        self._cancel_events: dict[str, Event] = {}
         self._lock = Lock()
         self._runners = {
             TaskType.noop: NoopRunner(),
@@ -54,9 +55,11 @@ class TaskManager:
                 status=TaskStatus.queued,
                 payload=task.payload,
                 callbackUrl=task.callback_url,
+                eventUrl=task.event_url,
                 createdAt=datetime.now(),
             )
             self._tasks[task_id] = view
+            self._cancel_events[task_id] = Event()
             logger.info("收到任务：task_id=%s type=%s", task_id, task.type.value)
             future = self._executor.submit(self._execute, task_id, task)
             self._futures[task_id] = future
@@ -92,7 +95,12 @@ class TaskManager:
                 task.finished_at = datetime.now()
                 task.result = TaskResult(exitCode=None, error="任务已取消")
             elif task.status == TaskStatus.running:
-                task.result = TaskResult(exitCode=None, error="任务正在运行，当前 Runner 不支持强制中断")
+                cancel_event = self._cancel_events.get(task_id)
+                if cancel_event:
+                    cancel_event.set()
+                task.status = TaskStatus.canceled
+                task.finished_at = datetime.now()
+                task.result = TaskResult(exitCode=None, error="任务取消请求已生效")
             return task
 
     def _execute(self, task_id: str, task: TaskCreate) -> None:
@@ -104,6 +112,13 @@ class TaskManager:
             runner = self._runners[task.type]
             if task.type == TaskType.ui:
                 result = runner.run(task, lambda output: self._update_progress(task_id, output))
+            elif task.type == TaskType.api:
+                cancel_event = self._cancel_events[task_id]
+                result = runner.run(
+                    task,
+                    lambda event_type, stage, message, progress, data=None: self._notify_api_event(task_id, event_type, stage, message, progress, data),
+                    cancel_event.is_set,
+                )
             else:
                 result = runner.run(task)
             status = TaskStatus.success if result.exit_code == 0 else TaskStatus.failed
@@ -139,6 +154,15 @@ class TaskManager:
         with self._lock:
             task = self._tasks.get(task_id)
             return task.result.output if task and task.result else ""
+
+    def _notify_api_event(self, task_id: str, event_type: str, stage: str, message: str, progress: int, data: dict | None = None) -> None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            sequence = int((data or {}).pop("sequence", 0)) or max(2, progress)
+        logger.info("API 调试步骤：task_id=%s type=%s message=%s", task_id, event_type, message)
+        notify_event(task, sequence, event_type, stage, message, progress, data)
 
     def _finish(self, task_id: str, status: TaskStatus, result: TaskResult) -> TaskView | None:
         with self._lock:

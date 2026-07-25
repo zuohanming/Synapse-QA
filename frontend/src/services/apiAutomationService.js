@@ -1,12 +1,58 @@
-import { request, toQuery } from "./httpClient.js";
+import { API_BASE } from "../config/appConfig.js";
+import { getToken, request, toQuery } from "./httpClient.js";
+
+async function streamDebugEvents(taskId, after, onEvent, signal) {
+  const response = await fetch(`${API_BASE}/api-automation/debug/${encodeURIComponent(taskId)}/events/stream${toQuery({ after })}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+    signal
+  });
+  if (!response.ok || !response.body) throw new Error("连接实时事件流失败");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done }).replace(/\r\n/g, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+      if (data) onEvent(JSON.parse(data));
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (done) return;
+  }
+}
 
 export const apiAutomationService = {
   interfaces: {
     list: (params = {}) => request(`/api-automation/interfaces${toQuery(params)}`),
     get: (id) => request(`/api-automation/interfaces/${id}`),
+    preview: (id, body) => request(`/api-automation/interfaces/${id}/preview`, { method: "POST", body: JSON.stringify(body) }),
+    exportCurl: (id, body) => request(`/api-automation/interfaces/${id}/curl`, { method: "POST", body: JSON.stringify(body) }),
     create: (body) => request("/api-automation/interfaces", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => request(`/api-automation/interfaces/${id}`, { method: "PATCH", headers: { "If-Match": String(body.revision || "") }, body: JSON.stringify(body) }),
     remove: (id) => request(`/api-automation/interfaces/${id}`, { method: "DELETE" })
+  },
+  curl: {
+    parse: (curl) => request("/api-automation/curl/parse", { method: "POST", body: JSON.stringify({ curl }) })
+  },
+  tempFiles: {
+    upload: (projectId, file) => {
+      const body = new FormData();
+      body.append("projectId", String(projectId));
+      body.append("file", file);
+      return request("/api-automation/temp-files", { method: "POST", body });
+    },
+    remove: (id) => request(`/api-automation/temp-files/${encodeURIComponent(id)}`, { method: "DELETE" })
+  },
+  debug: {
+    start: (id, body) => request(`/api-automation/interfaces/${id}/debug`, { method: "POST", body: JSON.stringify(body) }),
+    get: (taskId) => request(`/api-automation/debug/${encodeURIComponent(taskId)}`),
+    events: (taskId, after = 0) => request(`/api-automation/debug/${encodeURIComponent(taskId)}/events${toQuery({ after })}`),
+    stream: streamDebugEvents,
+    cancel: (taskId) => request(`/api-automation/debug/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
   },
   requestHeaders: {
     list: (params = {}) => request(`/api-automation/project-headers${toQuery(params)}`),

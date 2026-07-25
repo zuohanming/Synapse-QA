@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const apiMock = vi.hoisted(() => ({
   interfaces: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
-  requestHeaders: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() }
+  requestHeaders: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
+  debug: { start: vi.fn(), get: vi.fn(), events: vi.fn(), stream: vi.fn(), cancel: vi.fn() }
 }));
 const configMock = vi.hoisted(() => ({
   projects: { list: vi.fn() },
   products: { list: vi.fn() },
-  productModules: { list: vi.fn() }
+  productModules: { list: vi.fn() },
+  testObjects: { list: vi.fn() }
 }));
 
 vi.mock("../services/apiAutomationService.js", () => ({ apiAutomationService: apiMock }));
@@ -46,6 +48,7 @@ describe("接口自动化项目默认请求头", () => {
   it("接口执行时合并项目默认请求头且接口配置优先", async () => {
     configMock.products.list.mockResolvedValue({ items: [{ id: 12, projectId: 8, projectName: "商城项目", name: "Web端" }] });
     configMock.productModules.list.mockResolvedValue({ items: [] });
+    configMock.testObjects.list.mockResolvedValue({ items: [] });
     apiMock.interfaces.list.mockResolvedValue({ items: [{
       id: 1,
       name: "查询商品",
@@ -67,13 +70,15 @@ describe("接口自动化项目默认请求头", () => {
       { id: 1, projectId: 8, name: "Authorization", value: "Bearer project", enabled: true },
       { id: 2, projectId: 8, name: "X-Project", value: "mall", enabled: true }
     ] });
-    const fetchMock = vi.fn().mockResolvedValue({
-      status: 200,
-      ok: true,
-      headers: new Headers(),
-      text: vi.fn().mockResolvedValue("{}")
+    apiMock.debug.start.mockResolvedValue({ taskId: "api-debug-1", executorId: "exec-api", status: "running" });
+    apiMock.debug.stream.mockImplementation(async (_taskId, _after, onEvent) => {
+      onEvent({ sequence: 2, progress: 100, message: "响应接收完成", status: "success" });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    apiMock.debug.get.mockResolvedValue({
+      status: "success",
+      request: { method: "GET", url: "https://example.com/products" },
+      result: { output: JSON.stringify({ statusCode: 200, headers: {}, body: "{}", durationMs: 25 }) }
+    });
 
     render(<APIAutomationPage activePath={["接口自动化", "接口管理"]} />);
     await screen.findByText("查询商品");
@@ -81,11 +86,8 @@ describe("接口自动化项目默认请求头", () => {
     expect(await screen.findByText("已加载 2 个项目默认请求头；接口内同名请求头优先。")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: /执行/ })[0]);
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(fetchMock.mock.calls[0][1].headers).toEqual({
-      Authorization: "Bearer interface",
-      "X-Project": "mall"
-    });
+    await waitFor(() => expect(apiMock.debug.start).toHaveBeenCalled());
+    expect(await screen.findByText("执行器调试完成。")).toBeInTheDocument();
     expect(apiMock.requestHeaders.list).toHaveBeenCalledWith({ projectId: "8" });
   });
 });

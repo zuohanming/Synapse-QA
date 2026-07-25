@@ -54,6 +54,161 @@ func (r *APIAutomationRepository) TestObject(ctx context.Context, id, productID 
 	return item, err
 }
 
+func (r *APIAutomationRepository) GlobalVariables(ctx context.Context, productID int64, envName string) ([]model.UIAsset, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id, asset_type, name, category, method, locator, action, value,
+		       description, status, created_by, created_at, updated_at
+		from ui_assets
+		where asset_type = 'global_variable'
+		  and deleted_at is null
+		  and status = 'active'
+		  and action = $1
+		  and (method = 'project' or (method = 'environment' and locator = $2))
+		order by case when method = 'project' then 0 else 1 end, id
+	`, strconv.FormatInt(productID, 10), envName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.UIAsset
+	for rows.Next() {
+		var item model.UIAsset
+		if err := rows.Scan(
+			&item.ID, &item.AssetType, &item.Name, &item.Category, &item.Method,
+			&item.Locator, &item.Action, &item.Value, &item.Description, &item.Status,
+			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *APIAutomationRepository) CreateTempFile(ctx context.Context, item model.APITempFile, ownerUserID int64, storedPath string) error {
+	_, err := r.db.ExecContext(ctx, `
+		insert into api_temp_files(id, project_id, owner_user_id, original_name, stored_path, mime_type, size_bytes, sha256, expires_at)
+		values($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, item.ID, item.ProjectID, ownerUserID, item.OriginalName, storedPath, item.MIMEType, item.SizeBytes, item.SHA256, item.ExpiresAt)
+	return err
+}
+
+func (r *APIAutomationRepository) DeleteTempFile(ctx context.Context, id string, userID int64) (string, int64, error) {
+	var path string
+	var projectID int64
+	err := r.db.QueryRowContext(ctx, `
+		update api_temp_files
+		set deleted_at = now()
+		where id = $1 and owner_user_id = $2 and deleted_at is null and expires_at > now()
+		returning stored_path, project_id
+	`, id, userID).Scan(&path, &projectID)
+	return path, projectID, err
+}
+
+func (r *APIAutomationRepository) ExpiredTempFiles(ctx context.Context) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		update api_temp_files set deleted_at = now()
+		where deleted_at is null and expires_at <= now()
+		returning stored_path
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
+}
+
+func (r *APIAutomationRepository) CreateDebugRun(ctx context.Context, taskID string, interfaceID, projectID int64, executorID, actor string, request json.RawMessage) (model.APIDebugRun, error) {
+	row := r.db.QueryRowContext(ctx, `
+		insert into api_debug_runs(task_id, interface_id, project_id, executor_id, request_snapshot, triggered_by)
+		values($1, $2, $3, $4, $5, $6)
+		returning id, task_id, interface_id, project_id, executor_id, status, request_snapshot,
+		          result, error_message, triggered_by, started_at, finished_at, created_at, updated_at
+	`, taskID, interfaceID, projectID, executorID, request, actor)
+	return scanAPIDebugRun(row)
+}
+
+func (r *APIAutomationRepository) GetDebugRun(ctx context.Context, taskID string) (model.APIDebugRun, error) {
+	row := r.db.QueryRowContext(ctx, `
+		select id, task_id, interface_id, project_id, executor_id, status, request_snapshot,
+		       result, error_message, triggered_by, started_at, finished_at, created_at, updated_at
+		from api_debug_runs where task_id = $1
+	`, taskID)
+	return scanAPIDebugRun(row)
+}
+
+func (r *APIAutomationRepository) UpdateDebugRun(ctx context.Context, taskID, status string, result json.RawMessage, errorMessage string) error {
+	_, err := r.db.ExecContext(ctx, `
+		update api_debug_runs
+		set status = $2,
+		    result = $3,
+		    error_message = $4,
+		    started_at = case when $2 = 'running' then coalesce(started_at, now()) else started_at end,
+		    finished_at = case when $2 in ('success','failed','canceled') then coalesce(finished_at, now()) else finished_at end,
+		    updated_at = now()
+		where task_id = $1
+	`, taskID, status, result, errorMessage)
+	return err
+}
+
+func (r *APIAutomationRepository) UpdateInterfaceDebugSummary(ctx context.Context, interfaceID int64, status string, durationMS int64) error {
+	_, err := r.db.ExecContext(ctx, `
+		update api_interfaces
+		set last_debug_status = $2, last_debug_duration_ms = $3, last_debug_at = now()
+		where id = $1
+	`, interfaceID, status, durationMS)
+	return err
+}
+
+func (r *APIAutomationRepository) CreateDebugEvent(ctx context.Context, event model.APIDebugEvent) error {
+	_, err := r.db.ExecContext(ctx, `
+		insert into api_debug_events(task_id, sequence, event_type, stage, status, message, progress, data)
+		values($1, $2, $3, $4, $5, $6, $7, $8)
+		on conflict(task_id, sequence) do nothing
+	`, event.TaskID, event.Sequence, event.Type, event.Stage, event.Status, event.Message, event.Progress, event.Data)
+	return err
+}
+
+func (r *APIAutomationRepository) ListDebugEvents(ctx context.Context, taskID string, after int) ([]model.APIDebugEvent, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id, task_id, sequence, event_type, stage, status, message, progress, data, created_at
+		from api_debug_events
+		where task_id = $1 and sequence > $2
+		order by sequence
+	`, taskID, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.APIDebugEvent
+	for rows.Next() {
+		var item model.APIDebugEvent
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.Sequence, &item.Type, &item.Stage, &item.Status, &item.Message, &item.Progress, &item.Data, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanAPIDebugRun(scanner interface{ Scan(...any) error }) (model.APIDebugRun, error) {
+	var item model.APIDebugRun
+	err := scanner.Scan(
+		&item.ID, &item.TaskID, &item.InterfaceID, &item.ProjectID, &item.ExecutorID,
+		&item.Status, &item.Request, &item.Result, &item.ErrorMessage, &item.TriggeredBy,
+		&item.StartedAt, &item.FinishedAt, &item.CreatedAt, &item.UpdatedAt,
+	)
+	return item, err
+}
+
 func (r *APIAutomationRepository) ListInterfaces(ctx context.Context, userID int64, filter model.APIInterfaceFilter, page, pageSize int) ([]model.APIInterface, int64, error) {
 	where := []string{"i.deleted_at is null", "p.deleted_at is null", "pr.deleted_at is null", `(exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$1 and ro.code='admin') or exists(select 1 from project_members pm where pm.user_id=$1 and pm.project_id=pr.id))`}
 	args := []any{userID}

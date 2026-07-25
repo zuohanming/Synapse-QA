@@ -15,18 +15,33 @@ import (
 )
 
 type APIAutomationService struct {
-	repo       *repository.APIAutomationRepository
-	systemRepo OperationLogger
+	repo         *repository.APIAutomationRepository
+	systemRepo   OperationLogger
+	secretKey    []byte
+	executorRepo *repository.ExecutorRepository
+	callbackBase string
 }
 
-func NewAPIAutomationService(repo *repository.APIAutomationRepository, systemRepo OperationLogger) *APIAutomationService {
-	return &APIAutomationService{repo: repo, systemRepo: systemRepo}
+func NewAPIAutomationService(repo *repository.APIAutomationRepository, systemRepo OperationLogger, secretKey ...[]byte) *APIAutomationService {
+	key := []byte("synapse-api-automation-local-secret")
+	if len(secretKey) > 0 && len(secretKey[0]) > 0 {
+		key = secretKey[0]
+	}
+	return &APIAutomationService{repo: repo, systemRepo: systemRepo, secretKey: key}
+}
+
+func (s *APIAutomationService) ConfigureDebug(executorRepo *repository.ExecutorRepository, callbackBase string) {
+	s.executorRepo = executorRepo
+	s.callbackBase = strings.TrimRight(callbackBase, "/")
 }
 
 func (s *APIAutomationService) ListInterfaces(ctx context.Context, userID int64, filter model.APIInterfaceFilter, page, pageSize int) (model.PageResult, error) {
 	page, pageSize = normalizePage(page, pageSize)
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
 	items, total, err := s.repo.ListInterfaces(ctx, userID, filter, page, pageSize)
+	for index := range items {
+		items[index].Configuration = maskAPIConfiguration(items[index].Configuration)
+	}
 	return model.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, err
 }
 
@@ -35,6 +50,7 @@ func (s *APIAutomationService) GetInterface(ctx context.Context, userID, id int6
 	if errors.Is(err, sql.ErrNoRows) {
 		return item, errors.New("接口不存在或无权访问")
 	}
+	item.Configuration = maskAPIConfiguration(item.Configuration)
 	return item, err
 }
 
@@ -59,6 +75,7 @@ func (s *APIAutomationService) UpdateInterface(ctx context.Context, userID int64
 	if err != nil {
 		return errors.New("接口不存在或无权访问")
 	}
+	req.Configuration = preserveMaskedAPIAuth(req.Configuration, current.Configuration)
 	req, normalized, projectID, err := s.normalizeInterface(ctx, req)
 	if err != nil {
 		return err
@@ -174,6 +191,11 @@ func (s *APIAutomationService) normalizeInterface(ctx context.Context, req model
 	if !json.Valid(req.Configuration) {
 		return req, "", 0, errors.New("接口配置格式无效")
 	}
+	protected, err := s.protectAPIConfiguration(req.Configuration)
+	if err != nil {
+		return req, "", 0, errors.New("认证密钥加密失败")
+	}
+	req.Configuration = protected
 	if req.ProductID <= 0 || req.Name == "" || req.Path == "" {
 		return req, "", 0, errors.New("项目/产品、接口名称和路径不能为空")
 	}
