@@ -30,12 +30,68 @@ func (ctl *APIAutomationController) ListInterfaces(c *gin.Context) {
 	result, err := ctl.service.ListInterfaces(c.Request.Context(), claims.UserID, model.APIInterfaceFilter{
 		ProjectID: c.Query("projectId"), ProductID: c.Query("productId"), ModuleID: c.Query("moduleId"),
 		Keyword: c.Query("keyword"), Method: c.Query("method"), LifecycleStatus: c.Query("lifecycleStatus"),
+		IncludeDeleted: c.Query("includeDeleted") == "true", DeletedOnly: c.Query("deletedOnly") == "true",
 	}, page, pageSize)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "查询接口失败")
 		return
 	}
 	ok(c, result)
+}
+
+func (ctl *APIAutomationController) RestoreInterface(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	if err := ctl.service.RestoreInterface(c.Request.Context(), claims.UserID, claims.Username, id); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, map[string]string{"message": "接口已恢复"})
+}
+
+func (ctl *APIAutomationController) BatchDeleteInterfaces(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.APIInterfaceBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		fail(c, http.StatusBadRequest, "请选择接口")
+		return
+	}
+	ok(c, ctl.service.BatchDeleteInterfaces(c.Request.Context(), claims.UserID, claims.Username, req.IDs))
+}
+
+func (ctl *APIAutomationController) BatchUpdateInterfaceStatus(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.APIInterfaceBatchStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		fail(c, http.StatusBadRequest, "请选择接口")
+		return
+	}
+	ok(c, ctl.service.BatchUpdateInterfaceStatus(c.Request.Context(), claims.UserID, claims.Username, req.IDs, req.Status))
+}
+
+func (ctl *APIAutomationController) BatchMoveInterfaces(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.APIInterfaceBatchMoveRequest
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		fail(c, http.StatusBadRequest, "请选择接口")
+		return
+	}
+	ok(c, ctl.service.BatchMoveInterfaces(c.Request.Context(), claims.UserID, claims.Username, req.IDs, req.ProductID, req.ModuleID))
 }
 
 func (ctl *APIAutomationController) GetInterface(c *gin.Context) {
@@ -327,6 +383,142 @@ func (ctl *APIAutomationController) CancelDebug(c *gin.Context) {
 		return
 	}
 	ok(c, map[string]string{"message": "调试任务已取消"})
+}
+
+func (ctl *APIAutomationController) ListInterfaceDebugRuns(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	filter := model.APIDebugRunFilter{Status: c.Query("status"), ExecutorID: c.Query("executorId")}
+	filter.Limit, _ = strconv.Atoi(c.Query("limit"))
+	if value := c.Query("dateFrom"); value != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, value)
+		if parseErr != nil {
+			fail(c, http.StatusBadRequest, "开始时间格式应为 RFC3339")
+			return
+		}
+		filter.DateFrom = &parsed
+	}
+	if value := c.Query("dateTo"); value != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, value)
+		if parseErr != nil {
+			fail(c, http.StatusBadRequest, "结束时间格式应为 RFC3339")
+			return
+		}
+		filter.DateTo = &parsed
+	}
+	items, err := ctl.service.ListInterfaceDebugRuns(c.Request.Context(), claims.UserID, id, filter)
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, items)
+}
+
+func (ctl *APIAutomationController) GetDebugRunDetail(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	item, err := ctl.service.GetDebugRunDetail(c.Request.Context(), claims.UserID, id)
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, item)
+}
+
+func (ctl *APIAutomationController) ListInterfaceVersions(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	items, err := ctl.service.ListInterfaceVersions(c.Request.Context(), claims.UserID, id)
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, items)
+}
+
+func (ctl *APIAutomationController) GetInterfaceVersion(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	version, err := strconv.Atoi(c.Param("version"))
+	if err != nil || version <= 0 {
+		fail(c, http.StatusBadRequest, "版本号无效")
+		return
+	}
+	item, err := ctl.service.GetInterfaceVersion(c.Request.Context(), claims.UserID, id, version)
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, item)
+}
+
+func (ctl *APIAutomationController) DiffInterfaceVersions(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	source, sourceErr := strconv.Atoi(c.Param("version"))
+	target, targetErr := strconv.Atoi(c.Query("targetVersion"))
+	if sourceErr != nil || targetErr != nil || source <= 0 || target <= 0 {
+		fail(c, http.StatusBadRequest, "版本号无效")
+		return
+	}
+	diff, err := ctl.service.DiffInterfaceVersions(c.Request.Context(), claims.UserID, id, source, target)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, diff)
+}
+
+func (ctl *APIAutomationController) RestoreInterfaceVersion(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	version, err := strconv.Atoi(c.Param("version"))
+	if err != nil || version <= 0 {
+		fail(c, http.StatusBadRequest, "版本号无效")
+		return
+	}
+	newVersion, err := ctl.service.RestoreInterfaceVersion(c.Request.Context(), claims.UserID, claims.Username, id, version)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, map[string]any{"message": "版本已回滚", "version": newVersion})
 }
 
 func (ctl *APIAutomationController) DebugCallback(c *gin.Context) {

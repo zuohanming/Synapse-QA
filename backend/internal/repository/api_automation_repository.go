@@ -209,8 +209,116 @@ func scanAPIDebugRun(scanner interface{ Scan(...any) error }) (model.APIDebugRun
 	return item, err
 }
 
+func (r *APIAutomationRepository) ListDebugRuns(ctx context.Context, interfaceID int64, filter model.APIDebugRunFilter) ([]model.APIDebugRun, error) {
+	where := []string{"interface_id = $1"}
+	args := []any{interfaceID}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if filter.ExecutorID != "" {
+		args = append(args, filter.ExecutorID)
+		where = append(where, fmt.Sprintf("executor_id = $%d", len(args)))
+	}
+	if filter.DateFrom != nil {
+		args = append(args, *filter.DateFrom)
+		where = append(where, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if filter.DateTo != nil {
+		args = append(args, *filter.DateTo)
+		where = append(where, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	if filter.Limit <= 0 || filter.Limit > 200 {
+		filter.Limit = 20
+	}
+	args = append(args, filter.Limit)
+	rows, err := r.db.QueryContext(ctx, `
+		select id, task_id, interface_id, project_id, executor_id, status, request_snapshot,
+		       result, error_message, triggered_by, started_at, finished_at, created_at, updated_at
+		from api_debug_runs
+		where `+strings.Join(where, " and ")+`
+		order by id desc
+		limit $`+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.APIDebugRun
+	for rows.Next() {
+		item, err := scanAPIDebugRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *APIAutomationRepository) GetDebugRunByID(ctx context.Context, id int64) (model.APIDebugRun, error) {
+	row := r.db.QueryRowContext(ctx, `
+		select id, task_id, interface_id, project_id, executor_id, status, request_snapshot,
+		       result, error_message, triggered_by, started_at, finished_at, created_at, updated_at
+		from api_debug_runs where id = $1
+	`, id)
+	return scanAPIDebugRun(row)
+}
+
+func (r *APIAutomationRepository) ReplaceDebugAssertions(ctx context.Context, runID int64, items []model.APIDebugAssertion) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `delete from api_debug_assertions where debug_run_id = $1`, runID); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx, `
+			insert into api_debug_assertions(
+				debug_run_id, assertion_index, assertion_type, expression, operator,
+				expected_value, actual_value, passed, error_message
+			) values($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		`, runID, item.Index, item.Type, item.Expression, item.Operator, item.Expected, item.Actual, item.Passed, item.ErrorMessage); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *APIAutomationRepository) ListDebugAssertions(ctx context.Context, runID int64) ([]model.APIDebugAssertion, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id, debug_run_id, assertion_index, assertion_type, expression, operator,
+		       expected_value, actual_value, passed, error_message, created_at
+		from api_debug_assertions
+		where debug_run_id = $1
+		order by assertion_index
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.APIDebugAssertion
+	for rows.Next() {
+		var item model.APIDebugAssertion
+		if err := rows.Scan(
+			&item.ID, &item.DebugRunID, &item.Index, &item.Type, &item.Expression,
+			&item.Operator, &item.Expected, &item.Actual, &item.Passed,
+			&item.ErrorMessage, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *APIAutomationRepository) ListInterfaces(ctx context.Context, userID int64, filter model.APIInterfaceFilter, page, pageSize int) ([]model.APIInterface, int64, error) {
-	where := []string{"i.deleted_at is null", "p.deleted_at is null", "pr.deleted_at is null", `(exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$1 and ro.code='admin') or exists(select 1 from project_members pm where pm.user_id=$1 and pm.project_id=pr.id))`}
+	where := []string{"p.deleted_at is null", "pr.deleted_at is null", `(exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$1 and ro.code='admin') or exists(select 1 from project_members pm where pm.user_id=$1 and pm.project_id=pr.id))`}
+	if filter.DeletedOnly {
+		where = append(where, "i.deleted_at is not null")
+	} else if !filter.IncludeDeleted {
+		where = append(where, "i.deleted_at is null")
+	}
 	args := []any{userID}
 	addID := func(column, value string) error {
 		if value == "" {
@@ -256,7 +364,7 @@ func (r *APIAutomationRepository) ListInterfaces(ctx context.Context, userID int
 		select i.id, i.product_id, pr.id, pr.name, p.name, coalesce(i.module_id,0), coalesce(pm.name,''),
 			i.name, i.method, i.path, i.protocol, i.endpoint_type, i.lifecycle_status, i.timeout_seconds,
 			i.follow_redirects, i.configuration, i.revision, i.last_debug_status, i.last_debug_duration_ms,
-			i.last_debug_at, i.created_by, i.updated_by, i.created_at, i.updated_at
+			i.last_debug_at, i.created_by, i.updated_by, i.created_at, i.updated_at, i.deleted_at
 		from api_interfaces i
 		join products p on p.id=i.product_id
 		join projects pr on pr.id=p.project_id
@@ -273,10 +381,11 @@ func (r *APIAutomationRepository) ListInterfaces(ctx context.Context, userID int
 		var item model.APIInterface
 		var duration sql.NullInt64
 		var debugAt sql.NullTime
+		var deletedAt sql.NullTime
 		if err := rows.Scan(&item.ID, &item.ProductID, &item.ProjectID, &item.ProjectName, &item.ProductName, &item.ModuleID, &item.ModuleName,
 			&item.Name, &item.Method, &item.Path, &item.Protocol, &item.EndpointType, &item.LifecycleStatus, &item.TimeoutSeconds,
 			&item.FollowRedirects, &item.Configuration, &item.Revision, &item.LastDebugStatus, &duration, &debugAt,
-			&item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt, &deletedAt); err != nil {
 			return nil, 0, err
 		}
 		if duration.Valid {
@@ -285,9 +394,25 @@ func (r *APIAutomationRepository) ListInterfaces(ctx context.Context, userID int
 		if debugAt.Valid {
 			item.LastDebugAt = &debugAt.Time
 		}
+		if deletedAt.Valid {
+			item.DeletedAt = &deletedAt.Time
+		}
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func (r *APIAutomationRepository) GetInterfaceIncludingDeleted(ctx context.Context, userID, id int64) (model.APIInterface, error) {
+	items, _, err := r.ListInterfaces(ctx, userID, model.APIInterfaceFilter{IncludeDeleted: true}, 1, 10000)
+	if err != nil {
+		return model.APIInterface{}, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return model.APIInterface{}, sql.ErrNoRows
 }
 
 func (r *APIAutomationRepository) GetInterface(ctx context.Context, userID, id int64) (model.APIInterface, error) {
@@ -362,6 +487,78 @@ func (r *APIAutomationRepository) DeleteInterface(ctx context.Context, id int64)
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+func (r *APIAutomationRepository) RestoreInterface(ctx context.Context, id int64) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `update api_interfaces set deleted_at=null,updated_at=now() where id=$1 and deleted_at is not null`, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *APIAutomationRepository) ListInterfaceVersions(ctx context.Context, interfaceID int64) ([]model.APIInterfaceVersion, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id, interface_id, version, snapshot, change_summary, created_by, created_at
+		from api_interface_versions
+		where interface_id = $1
+		order by version desc
+	`, interfaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.APIInterfaceVersion
+	for rows.Next() {
+		var item model.APIInterfaceVersion
+		if err := rows.Scan(&item.ID, &item.InterfaceID, &item.Version, &item.Snapshot, &item.ChangeSummary, &item.CreatedBy, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *APIAutomationRepository) GetInterfaceVersion(ctx context.Context, interfaceID int64, version int) (model.APIInterfaceVersion, error) {
+	var item model.APIInterfaceVersion
+	err := r.db.QueryRowContext(ctx, `
+		select id, interface_id, version, snapshot, change_summary, created_by, created_at
+		from api_interface_versions
+		where interface_id = $1 and version = $2
+	`, interfaceID, version).Scan(
+		&item.ID, &item.InterfaceID, &item.Version, &item.Snapshot,
+		&item.ChangeSummary, &item.CreatedBy, &item.CreatedAt,
+	)
+	return item, err
+}
+
+func (r *APIAutomationRepository) RestoreInterfaceVersion(ctx context.Context, id int64, req model.APIInterfaceRequest, normalizedPath, actor string, sourceVersion int) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	follow := req.FollowRedirects == nil || *req.FollowRedirects
+	var version int
+	err = tx.QueryRowContext(ctx, `
+		update api_interfaces set product_id=$1,module_id=nullif($2,0),name=$3,method=$4,path=$5,normalized_path=$6,
+			protocol=$7,endpoint_type=$8,lifecycle_status=$9,timeout_seconds=$10,follow_redirects=$11,configuration=$12,
+			current_version=current_version+1,revision=revision+1,updated_by=$13,updated_at=now()
+		where id=$14 and revision=$15 and deleted_at is null returning current_version
+	`, req.ProductID, req.ModuleID, req.Name, req.Method, req.Path, normalizedPath, req.Protocol, req.EndpointType,
+		req.LifecycleStatus, req.TimeoutSeconds, follow, req.Configuration, actor, id, req.Revision).Scan(&version)
+	if err != nil {
+		return 0, err
+	}
+	snapshot, _ := json.Marshal(req)
+	summary := fmt.Sprintf("回滚至 V%d", sourceVersion)
+	if _, err = tx.ExecContext(ctx, `
+		insert into api_interface_versions(interface_id,version,snapshot,change_summary,created_by)
+		values($1,$2,$3,$4,$5)
+	`, id, version, snapshot, summary, actor); err != nil {
+		return 0, err
+	}
+	return version, tx.Commit()
 }
 
 func (r *APIAutomationRepository) ListProjectHeaders(ctx context.Context, projectID int64, keyword string) ([]model.APIProjectHeader, error) {

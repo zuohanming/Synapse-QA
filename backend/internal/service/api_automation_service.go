@@ -109,6 +109,95 @@ func (s *APIAutomationService) DeleteInterface(ctx context.Context, userID int64
 	return nil
 }
 
+func (s *APIAutomationService) RestoreInterface(ctx context.Context, userID int64, actor string, id int64) error {
+	item, err := s.repo.GetInterfaceIncludingDeleted(ctx, userID, id)
+	if err != nil || item.DeletedAt == nil || !s.repo.CanAccessProject(ctx, userID, item.ProjectID) {
+		return errors.New("已删除的接口不存在或无权访问")
+	}
+	rows, err := s.repo.RestoreInterface(ctx, id)
+	if err != nil {
+		return errors.New("恢复失败，当前产品下可能已存在相同方法和路径的接口")
+	}
+	if rows == 0 {
+		return errors.New("接口未处于已删除状态")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "恢复接口", item.Name)
+	return nil
+}
+
+func (s *APIAutomationService) BatchDeleteInterfaces(ctx context.Context, userID int64, actor string, ids []int64) model.APIInterfaceBatchResult {
+	return s.runInterfaceBatch(ids, func(id int64) error {
+		return s.DeleteInterface(ctx, userID, actor, id)
+	})
+}
+
+func (s *APIAutomationService) BatchUpdateInterfaceStatus(ctx context.Context, userID int64, actor string, ids []int64, status string) model.APIInterfaceBatchResult {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "active" && status != "disabled" && status != "deprecated" {
+		return batchFailure(ids, "状态仅支持 active、disabled 或 deprecated")
+	}
+	return s.runInterfaceBatch(ids, func(id int64) error {
+		item, err := s.repo.GetInterface(ctx, userID, id)
+		if err != nil {
+			return errors.New("接口不存在或无权访问")
+		}
+		req := interfaceUpdateRequest(item)
+		req.LifecycleStatus = status
+		return s.UpdateInterface(ctx, userID, actor, id, req)
+	})
+}
+
+func (s *APIAutomationService) BatchMoveInterfaces(ctx context.Context, userID int64, actor string, ids []int64, productID, moduleID int64) model.APIInterfaceBatchResult {
+	if productID <= 0 {
+		return batchFailure(ids, "请选择目标产品")
+	}
+	return s.runInterfaceBatch(ids, func(id int64) error {
+		item, err := s.repo.GetInterface(ctx, userID, id)
+		if err != nil {
+			return errors.New("接口不存在或无权访问")
+		}
+		req := interfaceUpdateRequest(item)
+		req.ProductID = productID
+		req.ModuleID = moduleID
+		return s.UpdateInterface(ctx, userID, actor, id, req)
+	})
+}
+
+func (s *APIAutomationService) runInterfaceBatch(ids []int64, operation func(int64) error) model.APIInterfaceBatchResult {
+	result := model.APIInterfaceBatchResult{Succeeded: []int64{}, Failed: []model.APIInterfaceBatchError{}}
+	seen := map[int64]bool{}
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if err := operation(id); err != nil {
+			result.Failed = append(result.Failed, model.APIInterfaceBatchError{ID: id, Message: err.Error()})
+		} else {
+			result.Succeeded = append(result.Succeeded, id)
+		}
+	}
+	return result
+}
+
+func batchFailure(ids []int64, message string) model.APIInterfaceBatchResult {
+	result := model.APIInterfaceBatchResult{Succeeded: []int64{}, Failed: []model.APIInterfaceBatchError{}}
+	for _, id := range ids {
+		result.Failed = append(result.Failed, model.APIInterfaceBatchError{ID: id, Message: message})
+	}
+	return result
+}
+
+func interfaceUpdateRequest(item model.APIInterface) model.APIInterfaceRequest {
+	follow := item.FollowRedirects
+	return model.APIInterfaceRequest{
+		ProductID: item.ProductID, ModuleID: item.ModuleID, Name: item.Name, Method: item.Method,
+		Path: item.Path, Protocol: item.Protocol, EndpointType: item.EndpointType,
+		LifecycleStatus: item.LifecycleStatus, TimeoutSeconds: item.TimeoutSeconds,
+		FollowRedirects: &follow, Configuration: item.Configuration, Revision: item.Revision,
+	}
+}
+
 func (s *APIAutomationService) ListProjectHeaders(ctx context.Context, userID, projectID int64, keyword string) (model.PageResult, error) {
 	if projectID <= 0 {
 		return model.PageResult{}, errors.New("请选择项目")

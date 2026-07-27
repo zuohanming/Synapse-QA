@@ -32,6 +32,14 @@ func (s *APIAutomationService) StartDebug(ctx context.Context, userID, interface
 	if err != nil {
 		return model.APIDebugRun{}, err
 	}
+	processingConfig := item.Configuration
+	if req.Snapshot != nil && len(req.Snapshot.Configuration) > 0 {
+		processingConfig = req.Snapshot.Configuration
+	}
+	extractors, assertions, err := parseAPIProcessingConfiguration(processingConfig)
+	if err != nil {
+		return model.APIDebugRun{}, err
+	}
 	taskID := fmt.Sprintf("api-debug-%d", time.Now().UnixNano())
 	requestSnapshot, _ := json.Marshal(preview)
 	run, err := s.repo.CreateDebugRun(ctx, taskID, interfaceID, item.ProjectID, executor.ExecutorID, actor, maskDebugRequest(requestSnapshot))
@@ -46,6 +54,8 @@ func (s *APIAutomationService) StartDebug(ctx context.Context, userID, interface
 		"method": preview.Method, "url": preview.URL, "headers": preview.Headers, "body": preview.Body,
 		"timeoutSeconds": item.TimeoutSeconds, "maxResponseBytes": 20 << 20,
 	}
+	payload["extractors"] = extractors
+	payload["assertions"] = assertions
 	callbackURL := s.callbackBase + "/api/api-automation/debug/" + taskID + "/callback"
 	eventURL := s.callbackBase + "/api/api-automation/debug/" + taskID + "/events/callback"
 	if err := submitAPIDebugTask(ctx, executor.Endpoint, taskID, payload, callbackURL, eventURL); err != nil {
@@ -59,6 +69,54 @@ func (s *APIAutomationService) StartDebug(ctx context.Context, userID, interface
 	_ = s.repo.UpdateDebugRun(ctx, taskID, "running", json.RawMessage(`{}`), "")
 	run.Status = "running"
 	return run, nil
+}
+
+func parseAPIProcessingConfiguration(raw json.RawMessage) ([]map[string]any, []map[string]any, error) {
+	var config map[string]any
+	if len(raw) == 0 {
+		return []map[string]any{}, []map[string]any{}, nil
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, nil, errors.New("响应处理配置格式无效")
+	}
+	parseRules := func(key string) ([]map[string]any, error) {
+		value := config[key]
+		if text, ok := value.(string); ok {
+			if strings.TrimSpace(text) == "" {
+				return []map[string]any{}, nil
+			}
+			var rules []map[string]any
+			if err := json.Unmarshal([]byte(text), &rules); err != nil {
+				return nil, fmt.Errorf("%s 配置必须是 JSON 数组", key)
+			}
+			return rules, nil
+		}
+		rawValue, _ := json.Marshal(value)
+		var rules []map[string]any
+		if string(rawValue) == "null" {
+			return []map[string]any{}, nil
+		}
+		if err := json.Unmarshal(rawValue, &rules); err != nil {
+			return nil, fmt.Errorf("%s 配置必须是 JSON 数组", key)
+		}
+		return rules, nil
+	}
+	jsonPathRules, err := parseRules("jsonpath")
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, rule := range jsonPathRules {
+		rule["type"] = "jsonpath"
+	}
+	regexRules, err := parseRules("regex")
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, rule := range regexRules {
+		rule["type"] = "regex"
+	}
+	assertions, err := parseRules("assertions")
+	return append(jsonPathRules, regexRules...), assertions, err
 }
 
 func (s *APIAutomationService) GetDebug(ctx context.Context, userID int64, taskID string) (model.APIDebugRun, error) {
@@ -98,11 +156,31 @@ func (s *APIAutomationService) CompleteDebug(ctx context.Context, taskID, status
 		Output string `json:"output"`
 	}
 	var responseResult struct {
-		DurationMS int64 `json:"durationMs"`
+		DurationMS int64            `json:"durationMs"`
+		Assertions []map[string]any `json:"assertions"`
 	}
 	if json.Unmarshal(result, &taskResult) == nil {
 		_ = json.Unmarshal([]byte(taskResult.Output), &responseResult)
 	}
+	assertionItems := make([]model.APIDebugAssertion, 0, len(responseResult.Assertions))
+	for index, assertion := range responseResult.Assertions {
+		itemIndex := index + 1
+		if value, ok := assertion["index"].(float64); ok {
+			itemIndex = int(value)
+		}
+		assertionItems = append(assertionItems, model.APIDebugAssertion{
+			DebugRunID:   run.ID,
+			Index:        itemIndex,
+			Type:         fmt.Sprint(assertion["type"]),
+			Expression:   fmt.Sprint(assertion["expression"]),
+			Operator:     fmt.Sprint(assertion["operator"]),
+			Expected:     printableAssertionValue(assertion["expected"]),
+			Actual:       printableAssertionValue(assertion["actual"]),
+			Passed:       assertion["passed"] == true,
+			ErrorMessage: assertionString(assertion["error"]),
+		})
+	}
+	_ = s.repo.ReplaceDebugAssertions(ctx, run.ID, assertionItems)
 	_ = s.repo.UpdateInterfaceDebugSummary(ctx, run.InterfaceID, status, responseResult.DurationMS)
 	events, _ := s.repo.ListDebugEvents(ctx, taskID, 0)
 	sequence := len(events) + 1
@@ -117,6 +195,49 @@ func (s *APIAutomationService) CompleteDebug(ctx context.Context, taskID, status
 		TaskID: taskID, Sequence: sequence, Type: eventType, Stage: "terminal",
 		Status: status, Message: message, Progress: 100, Data: json.RawMessage(`{}`),
 	})
+}
+
+func assertionString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func (s *APIAutomationService) ListInterfaceDebugRuns(ctx context.Context, userID, interfaceID int64, filter model.APIDebugRunFilter) ([]model.APIDebugRun, error) {
+	item, err := s.repo.GetInterface(ctx, userID, interfaceID)
+	if err != nil || !s.repo.CanAccessProject(ctx, userID, item.ProjectID) {
+		return nil, errors.New("接口不存在或无权访问")
+	}
+	filter.Status = strings.ToLower(strings.TrimSpace(filter.Status))
+	filter.ExecutorID = strings.TrimSpace(filter.ExecutorID)
+	return s.repo.ListDebugRuns(ctx, interfaceID, filter)
+}
+
+func (s *APIAutomationService) GetDebugRunDetail(ctx context.Context, userID, id int64) (model.APIDebugRunDetail, error) {
+	run, err := s.repo.GetDebugRunByID(ctx, id)
+	if err != nil || !s.repo.CanAccessProject(ctx, userID, run.ProjectID) {
+		return model.APIDebugRunDetail{}, errors.New("调试记录不存在或无权访问")
+	}
+	assertions, err := s.repo.ListDebugAssertions(ctx, run.ID)
+	if err != nil {
+		return model.APIDebugRunDetail{}, errors.New("读取断言明细失败")
+	}
+	return model.APIDebugRunDetail{APIDebugRun: run, Assertions: assertions}, nil
+}
+
+func printableAssertionValue(value any) string {
+	if value == nil {
+		return "<null>"
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	encoded, err := json.Marshal(value)
+	if err == nil {
+		return string(encoded)
+	}
+	return fmt.Sprint(value)
 }
 
 func (s *APIAutomationService) CancelDebug(ctx context.Context, userID int64, taskID string) error {

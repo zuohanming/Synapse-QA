@@ -33,7 +33,11 @@ export const apiAutomationService = {
     exportCurl: (id, body) => request(`/api-automation/interfaces/${id}/curl`, { method: "POST", body: JSON.stringify(body) }),
     create: (body) => request("/api-automation/interfaces", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => request(`/api-automation/interfaces/${id}`, { method: "PATCH", headers: { "If-Match": String(body.revision || "") }, body: JSON.stringify(body) }),
-    remove: (id) => request(`/api-automation/interfaces/${id}`, { method: "DELETE" })
+    remove: (id) => request(`/api-automation/interfaces/${id}`, { method: "DELETE" }),
+    restore: (id) => request(`/api-automation/interfaces/${id}/restore`, { method: "POST" }),
+    batchDelete: (ids) => request("/api-automation/interfaces/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+    batchStatus: (ids, status) => request("/api-automation/interfaces/batch-status", { method: "POST", body: JSON.stringify({ ids, status }) }),
+    batchMove: (ids, productId, moduleId = 0) => request("/api-automation/interfaces/batch-move", { method: "POST", body: JSON.stringify({ ids, productId, moduleId }) })
   },
   curl: {
     parse: (curl) => request("/api-automation/curl/parse", { method: "POST", body: JSON.stringify({ curl }) })
@@ -52,7 +56,15 @@ export const apiAutomationService = {
     get: (taskId) => request(`/api-automation/debug/${encodeURIComponent(taskId)}`),
     events: (taskId, after = 0) => request(`/api-automation/debug/${encodeURIComponent(taskId)}/events${toQuery({ after })}`),
     stream: streamDebugEvents,
-    cancel: (taskId) => request(`/api-automation/debug/${encodeURIComponent(taskId)}/cancel`, { method: "POST" })
+    cancel: (taskId) => request(`/api-automation/debug/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }),
+    history: (interfaceId, params = {}) => request(`/api-automation/interfaces/${interfaceId}/debug-runs${toQuery(params)}`),
+    historyDetail: (id) => request(`/api-automation/debug-runs/${id}`)
+  },
+  versions: {
+    list: (interfaceId) => request(`/api-automation/interfaces/${interfaceId}/versions`),
+    get: (interfaceId, version) => request(`/api-automation/interfaces/${interfaceId}/versions/${version}`),
+    diff: (interfaceId, version, targetVersion) => request(`/api-automation/interfaces/${interfaceId}/versions/${version}/diff${toQuery({ targetVersion })}`),
+    restore: (interfaceId, version) => request(`/api-automation/interfaces/${interfaceId}/versions/${version}/restore`, { method: "POST" })
   },
   requestHeaders: {
     list: (params = {}) => request(`/api-automation/project-headers${toQuery(params)}`),

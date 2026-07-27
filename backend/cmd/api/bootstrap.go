@@ -450,6 +450,20 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			unique(task_id, sequence)
 		)`,
+		`create table if not exists api_debug_assertions (
+			id bigserial primary key,
+			debug_run_id bigint not null references api_debug_runs(id) on delete cascade,
+			assertion_index int not null,
+			assertion_type text not null,
+			expression text not null default '',
+			operator text not null,
+			expected_value text not null default '',
+			actual_value text not null default '',
+			passed boolean not null,
+			error_message text not null default '',
+			created_at timestamptz not null default now(),
+			unique(debug_run_id, assertion_index)
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {
