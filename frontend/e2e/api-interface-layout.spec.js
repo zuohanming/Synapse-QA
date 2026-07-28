@@ -76,11 +76,11 @@ test("接口管理在桌面端保持单行搜索且列表无横向溢出", async
 
   const updatedHeader = page.getByRole("columnheader", { name: "最近修改" });
   await expect(updatedHeader).toBeVisible();
-  await expect(updatedHeader).toBeInViewport();
+  await expect(updatedHeader).toBeInViewport({ ratio: 1 });
   expect(await updatedHeader.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 
   const operationsHeader = page.getByRole("columnheader", { name: "操作" });
   await expect(operationsHeader).toBeVisible();
-  await expect(operationsHeader).toBeInViewport();
+  await expect(operationsHeader).toBeInViewport({ ratio: 1 });
   expect(await operationsHeader.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
