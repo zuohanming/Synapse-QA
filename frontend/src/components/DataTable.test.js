@@ -5,6 +5,21 @@ import { DataTable } from "./DataTable.js";
 describe("DataTable 容器适配模式", () => {
   afterEach(cleanup);
 
+  it("默认模式为百分比列宽使用默认像素最小宽度", () => {
+    const { container } = render(
+      <DataTable
+        columns={[{ key: "name", title: "名称", width: "20%" }]}
+        rows={[{ id: "row-1", name: "接口 A" }]}
+      />
+    );
+
+    const table = container.querySelector("table");
+    const column = container.querySelector("col");
+
+    expect(table).toHaveStyle({ minWidth: "160px" });
+    expect(column).toHaveStyle({ width: "20%" });
+  });
+
   it("启用 fitContainer 时使用百分比列宽且不设置表格最小宽度", () => {
     const { container } = render(
       <DataTable

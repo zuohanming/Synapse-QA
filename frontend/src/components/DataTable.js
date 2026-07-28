@@ -10,7 +10,10 @@ const defaultColumnWidths = {
 };
 
 export function DataTable({ columns, rows, rowKey = "id", emptyText = "暂无数据", fitContainer = false }) {
-  const tableWidth = fitContainer ? null : columns.reduce((total, column) => total + Number(column.width || defaultColumnWidths[column.key] || 160), 0);
+  const tableWidth = fitContainer ? null : columns.reduce((total, column) => {
+    const width = column.width || defaultColumnWidths[column.key] || 160;
+    return total + (typeof width === "string" && width.endsWith("%") ? defaultColumnWidths[column.key] || 160 : Number(width));
+  }, 0);
   return (
     <div className={fitContainer ? "table-wrap table-wrap-fit" : "table-wrap"}>
       <table className="data-table" data-fit-container={fitContainer ? "true" : undefined} style={fitContainer ? undefined : { minWidth: `${tableWidth}px` }}>
