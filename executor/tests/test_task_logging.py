@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from unittest.mock import Mock, patch
 
@@ -67,3 +68,27 @@ def test_task_manager_rejects_when_queue_is_full():
         assert False, "队列已满时应拒绝任务"
     except ValueError as error:
         assert "队列已满" in str(error)
+
+
+def test_running_api_task_can_be_canceled():
+    manager = TaskManager()
+    manager._runners[TaskType.api] = Mock()
+
+    def wait_for_cancel(_task, _progress, canceled):
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if canceled():
+                raise InterruptedError("任务已取消")
+            time.sleep(0.01)
+        return TaskResult(exitCode=0)
+
+    manager._runners[TaskType.api].run.side_effect = wait_for_cancel
+    view = manager.submit(TaskCreate(taskId="cancel-api", type="api", payload={"url": "https://example.com"}))
+    deadline = time.time() + 1
+    while manager.get(view.task_id).status != "running" and time.time() < deadline:
+        time.sleep(0.01)
+    canceled = manager.cancel(view.task_id)
+    manager._futures[view.task_id].result(timeout=2)
+
+    assert canceled.status == "canceled"
+    assert manager.get(view.task_id).status == "canceled"

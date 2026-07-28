@@ -459,6 +459,10 @@ export function UIAutomationPage({ activePath }) {
     return <TestCasesPage />;
   }
 
+  if (section === "全局变量") {
+    return <GlobalVariablesPage />;
+  }
+
   const resource = listSectionMap[section] || uiAutomationService.elements;
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
@@ -482,6 +486,120 @@ export function UIAutomationPage({ activePath }) {
     />
   );
 }
+
+const emptyVariableForm = { name: "", value: "", category: "string", method: "project", action: "", locator: "", description: "", status: "active" };
+
+function GlobalVariablesPage() {
+  const [form, setForm] = useState(emptyVariableForm);
+  const [query, setQuery] = useState("");
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data, loading, error, reload } = useAsyncData(() => uiAutomationService.variables.list({ page: 1, pageSize: 100 }), []);
+  const { data: productsData, loading: productsLoading } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
+  const productOptions = useMemo(() => pageItems(productsData).map((item) => ({ value: String(item.id), label: `${item.projectName}/${item.name}` })), [productsData]);
+  const { data: environmentsData, loading: environmentsLoading } = useAsyncData(
+    () => form.method === "environment" && form.action ? configService.testObjects.list({ productId: form.action, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] }),
+    [form.method, form.action]
+  );
+  const environmentOptions = useMemo(() => pageItems(environmentsData).map((item) => ({ value: item.envName, label: item.envName })), [environmentsData]);
+  const rows = pageItems(data).filter((row) => !query || [row.name, row.action, row.locator, row.description].some((value) => String(value || "").toLowerCase().includes(query.toLowerCase())));
+
+  function openCreate() {
+    setEditing(null);
+    setForm(emptyVariableForm);
+    setModal(true);
+  }
+
+  function openEdit(row) {
+    setEditing(row);
+    setForm({ name: row.name, value: row.value, category: row.category || "string", method: row.method || "project", action: row.action || "", locator: row.locator || "", description: row.description || "", status: row.status || "active" });
+    setModal(true);
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(form.name)) {
+      setNotice("变量名必须以字母或下划线开头，只能包含字母、数字、点、横线和下划线。");
+      return;
+    }
+    if (!form.action) {
+      setNotice("请选择变量所属的项目/产品。");
+      return;
+    }
+    if (form.method === "environment" && !form.locator) {
+      setNotice("请选择环境级变量所属的环境。");
+      return;
+    }
+    if (form.category === "json") {
+      try { JSON.parse(form.value); } catch { setNotice("变量值不是有效的 JSON。"); return; }
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      if (editing) await uiAutomationService.variables.update(editing.id, form);
+      else await uiAutomationService.variables.create(form);
+      await reload();
+      setModal(false);
+      setNotice(editing ? "全局变量已更新。" : "全局变量已创建。");
+    } catch (err) {
+      setNotice(err.message || "保存全局变量失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(row) {
+    if (!window.confirm(`确认删除变量“${row.name}”吗？`)) return;
+    setBusy(true);
+    try {
+      await uiAutomationService.variables.remove(row.id);
+      await reload();
+      setNotice("全局变量已删除。");
+    } catch (err) {
+      setNotice(err.message || "删除全局变量失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const columns = [
+    { key: "name", title: "变量名称", render: (row) => <div className="variable-name-cell"><code>{row.name}</code><button onClick={() => navigator.clipboard?.writeText(`\${${row.name}}`)} type="button">复制引用</button></div> },
+    { key: "value", title: "变量值", render: (row) => <code className="variable-value">{formatVariableValue(row)}</code> },
+    { key: "category", title: "类型", render: (row) => variableTypeLabel(row.category) },
+    { key: "method", title: "作用域", render: (row) => row.method === "environment" ? "环境级" : "项目级" },
+    { key: "action", title: "项目/产品", render: (row) => productOptions.find((item) => item.value === String(row.action))?.label || row.action || "-" },
+    { key: "locator", title: "环境", render: (row) => row.method === "environment" ? row.locator || "-" : "-" },
+    { key: "status", title: "状态", render: (row) => <span className={`status-badge ${row.status === "active" ? "status-passed" : ""}`}>{row.status === "active" ? "启用" : "停用"}</span> },
+    { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) },
+    { key: "operation", title: "操作", render: (row) => <div className="action-links"><button className="link-button" onClick={() => openEdit(row)} type="button">编辑</button><button className="link-button danger-link" onClick={() => remove(row)} type="button">删除</button></div> }
+  ];
+
+  return <div className="section-stack global-variable-page">
+    <PageHeader title="全局变量" description="集中维护界面自动化执行过程中复用的项目与环境参数" />
+    <section className="variable-overview"><div><span>变量总数</span><strong>{pageItems(data).length}</strong></div><div><span>已启用</span><strong>{pageItems(data).filter((row) => row.status === "active").length}</strong></div><div><span>环境变量</span><strong>{pageItems(data).filter((row) => row.method === "environment").length}</strong></div><div className="variable-syntax"><span>引用语法</span><strong>{"${variable_name}"}</strong></div></section>
+    <section className="resource-panel">
+      <div className="panel-header"><strong>变量列表</strong><button className="primary-button compact-button" onClick={openCreate} type="button">新增变量</button></div>
+      <div className="variable-toolbar"><input className="text-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索变量名称、项目或环境" /><span>优先级：用例变量 ＞ 环境变量 ＞ 项目变量</span></div>
+      {notice ? <div className="inline-notice">{notice}</div> : null}
+      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={rows} emptyText="暂无全局变量，请先新增变量" /></TablePanel></StateBlock>
+    </section>
+    {modal ? <div className="modal-backdrop"><form className="modal-card variable-modal" onSubmit={save}><div className="modal-header"><strong>{editing ? "编辑全局变量" : "新增全局变量"}</strong><button className="modal-close" onClick={() => setModal(false)} type="button">×</button></div><div className="variable-form-grid">
+      <label className="form-field"><span>变量名称</span><input className="text-input" disabled={Boolean(editing)} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如 base_url" /></label>
+      <label className="form-field"><span>变量类型</span><select className="text-input" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="string">文本</option><option value="number">数字</option><option value="boolean">布尔值</option><option value="json">JSON</option></select></label>
+      <label className="form-field"><span>作用域</span><select className="text-input" value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value, locator: "" })}><option value="project">项目级</option><option value="environment">环境级</option></select></label>
+      <label className="form-field"><span>项目/产品</span><select className="text-input" disabled={productsLoading} value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value, locator: "" })}><option value="">{productsLoading ? "正在加载项目/产品" : "请选择项目/产品"}</option>{productOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+      {form.method === "environment" ? <label className="form-field"><span>环境名称</span><select className="text-input" disabled={!form.action || environmentsLoading} value={form.locator} onChange={(event) => setForm({ ...form, locator: event.target.value })}><option value="">{!form.action ? "请先选择项目/产品" : environmentsLoading ? "正在加载环境" : "请选择环境"}</option>{environmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label> : null}
+      <label className="form-field variable-value-field"><span>变量值</span><textarea className="text-area" rows="4" value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} placeholder="请输入变量值" /></label>
+      <label className="form-field variable-value-field"><span>描述</span><textarea className="text-area" rows="2" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="说明变量用途" /></label>
+      <label className="form-field"><span>状态</span><select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="active">启用</option><option value="disabled">停用</option></select></label>
+    </div><div className="variable-reference-preview"><span>使用方式</span><code>{form.name ? `\${${form.name}}` : "${variable_name}"}</code></div><div className="modal-actions"><button className="icon-text-button compact-button" onClick={() => setModal(false)} type="button">取消</button><button className="primary-button compact-button" disabled={busy} type="submit">{busy ? "保存中" : "保存变量"}</button></div></form></div> : null}
+  </div>;
+}
+
+function variableTypeLabel(value) { return { string: "文本", number: "数字", boolean: "布尔值", json: "JSON" }[value] || "文本"; }
+function formatVariableValue(row) { const value = String(row.value || ""); return value.length > 48 ? `${value.slice(0, 48)}…` : value || "-"; }
 
 function PageStepsPage() {
   const [form, setForm] = useState(initialStepFilters);

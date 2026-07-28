@@ -54,6 +54,17 @@ type ExecutionService struct {
 	httpClient    *http.Client
 	wakeScheduler chan struct{}
 	dispatchMu    sync.Mutex
+	notifier      interface {
+		Create(context.Context, model.NotificationCreate) error
+	}
+	notifiedRuns sync.Map
+	queueAlerts  sync.Map
+}
+
+func (s *ExecutionService) SetNotifier(notifier interface {
+	Create(context.Context, model.NotificationCreate) error
+}) {
+	s.notifier = notifier
 }
 
 const executionDispatchBatchSize = 20
@@ -180,6 +191,11 @@ func (s *ExecutionService) dispatchRun(ctx context.Context, run model.ExecutionR
 	queueLimit := maxWorkers * 2
 	slots := queueLimit - active
 	if slots <= 0 {
+		if s.notifier != nil {
+			if _, loaded := s.queueAlerts.LoadOrStore(run.ID, true); !loaded {
+				_ = s.notifier.Create(ctx, model.NotificationCreate{Username: run.TriggeredBy, Type: "queue.congested", Level: "warning", Title: "执行队列正在等待", Content: "执行器容量已满，剩余用例将分批执行。", TargetType: "execution", TargetID: strconv.FormatInt(run.ID, 10), TargetURL: "#/执行中心/执行记录"})
+			}
+		}
 		return nil
 	}
 	if slots > executionDispatchBatchSize {
@@ -775,7 +791,19 @@ func (s *ExecutionService) aggregateRunStatus(ctx context.Context, runID int64) 
 	} else if skipped > 0 && passed == 0 {
 		status = "canceled"
 	}
-	return s.executionRepo.UpdateRunStatus(ctx, runID, status, summaryJSON(model.ExecutionSummary{Total: total, Passed: passed, Failed: failed, Skipped: skipped}))
+	if err := s.executionRepo.UpdateRunStatus(ctx, runID, status, summaryJSON(model.ExecutionSummary{Total: total, Passed: passed, Failed: failed, Skipped: skipped})); err != nil {
+		return err
+	}
+	if s.notifier != nil {
+		if _, loaded := s.notifiedRuns.LoadOrStore(runID, true); !loaded {
+			level, title, notificationType := "success", "测试执行完成", "execution.success"
+			if status == "failed" {
+				level, title, notificationType = "error", "测试执行失败", "execution.failure"
+			}
+			_ = s.notifier.Create(ctx, model.NotificationCreate{Username: run.TriggeredBy, Type: notificationType, Level: level, Title: title, Content: fmt.Sprintf("批次 #%d：通过 %d，失败 %d。", runID, passed, failed), TargetType: "execution", TargetID: strconv.FormatInt(runID, 10), TargetURL: "#/执行中心/执行记录"})
+		}
+	}
+	return nil
 }
 
 func normalizeExecutionRunRequest(req model.ExecutionRunRequest) (model.ExecutionRunRequest, error) {

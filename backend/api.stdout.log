@@ -1,0 +1,241 @@
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /api/health               --> synapseqa/backend/internal/router.RegisterRoutes.func1 (4 handlers)
+[GIN-debug] POST   /api/executors/register   --> synapseqa/backend/internal/controller.(*ExecutorController).Register-fm (4 handlers)
+[GIN-debug] POST   /api/executors/heartbeat  --> synapseqa/backend/internal/controller.(*ExecutorController).Heartbeat-fm (4 handlers)
+[GIN-debug] POST   /api/executions/tasks/:taskId/callback --> synapseqa/backend/internal/controller.(*ExecutionController).Callback-fm (4 handlers)
+[GIN-debug] POST   /api/api-automation/debug/:taskId/callback --> synapseqa/backend/internal/controller.(*APIAutomationController).DebugCallback-fm (4 handlers)
+[GIN-debug] POST   /api/api-automation/debug/:taskId/events/callback --> synapseqa/backend/internal/controller.(*APIAutomationController).DebugEventCallback-fm (4 handlers)
+[GIN-debug] POST   /api/auth/login           --> synapseqa/backend/internal/controller.(*AuthController).Login-fm (4 handlers)
+[GIN-debug] POST   /api/auth/register        --> synapseqa/backend/internal/controller.(*AuthController).Register-fm (4 handlers)
+[GIN-debug] GET    /api/auth/me              --> synapseqa/backend/internal/controller.(*AuthController).Me-fm (5 handlers)
+[GIN-debug] GET    /api/executors            --> synapseqa/backend/internal/controller.(*ExecutorController).List-fm (5 handlers)
+[GIN-debug] POST   /api/executors            --> synapseqa/backend/internal/controller.(*ExecutorController).Create-fm (5 handlers)
+[GIN-debug] POST   /api/executors/:executorId/token --> synapseqa/backend/internal/controller.(*ExecutorController).GenerateToken-fm (5 handlers)
+[GIN-debug] GET    /api/system/overview      --> synapseqa/backend/internal/controller.(*SystemController).Overview-fm (5 handlers)
+[GIN-debug] GET    /api/system/users         --> synapseqa/backend/internal/controller.(*SystemController).ListUsers-fm (5 handlers)
+[GIN-debug] PATCH  /api/system/users/:id     --> synapseqa/backend/internal/controller.(*SystemController).UpdateUser-fm (5 handlers)
+[GIN-debug] DELETE /api/system/users/:id     --> synapseqa/backend/internal/controller.(*SystemController).DeleteUser-fm (5 handlers)
+[GIN-debug] GET    /api/system/roles         --> synapseqa/backend/internal/controller.(*SystemController).ListRoles-fm (5 handlers)
+[GIN-debug] POST   /api/system/roles         --> synapseqa/backend/internal/controller.(*SystemController).CreateRole-fm (5 handlers)
+[GIN-debug] PATCH  /api/system/roles/:id     --> synapseqa/backend/internal/controller.(*SystemController).UpdateRole-fm (5 handlers)
+[GIN-debug] DELETE /api/system/roles/:id     --> synapseqa/backend/internal/controller.(*SystemController).DeleteRole-fm (5 handlers)
+[GIN-debug] GET    /api/system/menus         --> synapseqa/backend/internal/controller.(*CatalogController).ListMenus-fm (5 handlers)
+[GIN-debug] GET    /api/system/dictionaries  --> synapseqa/backend/internal/controller.(*CatalogController).ListDictionaries-fm (5 handlers)
+[GIN-debug] GET    /api/system/logs          --> synapseqa/backend/internal/controller.(*CatalogController).ListLogs-fm (5 handlers)
+[GIN-debug] GET    /api/config/executor-token --> synapseqa/backend/internal/controller.(*CatalogController).GetExecutorToken-fm (5 handlers)
+[GIN-debug] POST   /api/config/executor-token/generate --> synapseqa/backend/internal/controller.(*CatalogController).GenerateExecutorToken-fm (5 handlers)
+[GIN-debug] GET    /api/config/projects      --> synapseqa/backend/internal/controller.(*CatalogController).ListProjects-fm (5 handlers)
+[GIN-debug] POST   /api/config/projects      --> synapseqa/backend/internal/controller.(*CatalogController).CreateProject-fm (5 handlers)
+[GIN-debug] PATCH  /api/config/projects/:id  --> synapseqa/backend/internal/controller.(*CatalogController).UpdateProject-fm (5 handlers)
+[GIN-debug] DELETE /api/config/projects/:id  --> synapseqa/backend/internal/controller.(*CatalogController).DeleteProject-fm (5 handlers)
+[GIN-debug] GET    /api/config/products      --> synapseqa/backend/internal/controller.(*CatalogController).ListProducts-fm (5 handlers)
+[GIN-debug] POST   /api/config/products      --> synapseqa/backend/internal/controller.(*CatalogController).CreateProduct-fm (5 handlers)
+[GIN-debug] PATCH  /api/config/products/:id  --> synapseqa/backend/internal/controller.(*CatalogController).UpdateProduct-fm (5 handlers)
+[GIN-debug] DELETE /api/config/products/:id  --> synapseqa/backend/internal/controller.(*CatalogController).DeleteProduct-fm (5 handlers)
+[GIN-debug] GET    /api/config/product-modules --> synapseqa/backend/internal/controller.(*CatalogController).ListProductModules-fm (5 handlers)
+[GIN-debug] POST   /api/config/product-modules --> synapseqa/backend/internal/controller.(*CatalogController).CreateProductModule-fm (5 handlers)
+[GIN-debug] PATCH  /api/config/product-modules/:id --> synapseqa/backend/internal/controller.(*CatalogController).UpdateProductModule-fm (5 handlers)
+[GIN-debug] DELETE /api/config/product-modules/:id --> synapseqa/backend/internal/controller.(*CatalogController).DeleteProductModule-fm (5 handlers)
+[GIN-debug] GET    /api/config/test-objects  --> synapseqa/backend/internal/controller.(*AutomationController).ListTestObjects-fm (5 handlers)
+[GIN-debug] POST   /api/config/test-objects  --> synapseqa/backend/internal/controller.(*AutomationController).CreateTestObject-fm (5 handlers)
+[GIN-debug] PATCH  /api/config/test-objects/:id --> synapseqa/backend/internal/controller.(*AutomationController).UpdateTestObject-fm (5 handlers)
+[GIN-debug] DELETE /api/config/test-objects/:id --> synapseqa/backend/internal/controller.(*AutomationController).DeleteTestObject-fm (5 handlers)
+[GIN-debug] GET    /api/ui/elements          --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).ListUIAssets.func1 (5 handlers)
+[GIN-debug] POST   /api/ui/elements          --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).CreateUIAsset.func2 (5 handlers)
+[GIN-debug] PATCH  /api/ui/elements/:id      --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).UpdateUIAsset.func3 (5 handlers)
+[GIN-debug] DELETE /api/ui/elements/:id      --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).DeleteUIAsset.func4 (5 handlers)
+[GIN-debug] GET    /api/ui/steps             --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).ListUIAssets.func1 (5 handlers)
+[GIN-debug] POST   /api/ui/steps             --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).CreateUIAsset.func2 (5 handlers)
+[GIN-debug] PATCH  /api/ui/steps/:id         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).UpdateUIAsset.func3 (5 handlers)
+[GIN-debug] DELETE /api/ui/steps/:id         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).DeleteUIAsset.func4 (5 handlers)
+[GIN-debug] GET    /api/ui/cases             --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).ListUIAssets.func1 (5 handlers)
+[GIN-debug] POST   /api/ui/cases             --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).CreateUIAsset.func2 (5 handlers)
+[GIN-debug] PATCH  /api/ui/cases/:id         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).UpdateUIAsset.func3 (5 handlers)
+[GIN-debug] DELETE /api/ui/cases/:id         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).DeleteUIAsset.func4 (5 handlers)
+[GIN-debug] GET    /api/ui/variables         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).ListUIAssets.func1 (5 handlers)
+[GIN-debug] POST   /api/ui/variables         --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).CreateUIAsset.func2 (5 handlers)
+[GIN-debug] PATCH  /api/ui/variables/:id     --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).UpdateUIAsset.func3 (5 handlers)
+[GIN-debug] DELETE /api/ui/variables/:id     --> synapseqa/backend/internal/router.registerUIAssetRoutes.(*AutomationController).DeleteUIAsset.func4 (5 handlers)
+[GIN-debug] GET    /api/ui/page-elements     --> synapseqa/backend/internal/controller.(*AutomationController).ListPageElements-fm (5 handlers)
+[GIN-debug] POST   /api/ui/page-elements     --> synapseqa/backend/internal/controller.(*AutomationController).CreatePageElement-fm (5 handlers)
+[GIN-debug] PATCH  /api/ui/page-elements/:id --> synapseqa/backend/internal/controller.(*AutomationController).UpdatePageElement-fm (5 handlers)
+[GIN-debug] DELETE /api/ui/page-elements/:id --> synapseqa/backend/internal/controller.(*AutomationController).DeletePageElement-fm (5 handlers)
+[GIN-debug] GET    /api/test-cases           --> synapseqa/backend/internal/controller.(*TestCaseController).List-fm (5 handlers)
+[GIN-debug] POST   /api/test-cases           --> synapseqa/backend/internal/controller.(*TestCaseController).Create-fm (5 handlers)
+[GIN-debug] POST   /api/test-cases/import    --> synapseqa/backend/internal/controller.(*TestCaseController).Import-fm (5 handlers)
+[GIN-debug] GET    /api/test-cases/export    --> synapseqa/backend/internal/controller.(*TestCaseController).Export-fm (5 handlers)
+[GIN-debug] GET    /api/test-cases/:id       --> synapseqa/backend/internal/controller.(*TestCaseController).Get-fm (5 handlers)
+[GIN-debug] PATCH  /api/test-cases/:id       --> synapseqa/backend/internal/controller.(*TestCaseController).Update-fm (5 handlers)
+[GIN-debug] DELETE /api/test-cases/:id       --> synapseqa/backend/internal/controller.(*TestCaseController).Delete-fm (5 handlers)
+[GIN-debug] GET    /api/test-cases/:id/datasets --> synapseqa/backend/internal/controller.(*TestCaseController).ListDatasets-fm (5 handlers)
+[GIN-debug] POST   /api/test-cases/:id/datasets --> synapseqa/backend/internal/controller.(*TestCaseController).CreateDataset-fm (5 handlers)
+[GIN-debug] PATCH  /api/test-cases/:id/datasets/:datasetId --> synapseqa/backend/internal/controller.(*TestCaseController).UpdateDataset-fm (5 handlers)
+[GIN-debug] DELETE /api/test-cases/:id/datasets/:datasetId --> synapseqa/backend/internal/controller.(*TestCaseController).DeleteDataset-fm (5 handlers)
+[GIN-debug] GET    /api/executions           --> synapseqa/backend/internal/controller.(*ExecutionController).List-fm (5 handlers)
+[GIN-debug] GET    /api/executions/statistics --> synapseqa/backend/internal/controller.(*ExecutionController).Statistics-fm (5 handlers)
+[GIN-debug] POST   /api/executions           --> synapseqa/backend/internal/controller.(*ExecutionController).Create-fm (5 handlers)
+[GIN-debug] POST   /api/executions/debug     --> synapseqa/backend/internal/controller.(*ExecutionController).StartDebug-fm (5 handlers)
+[GIN-debug] GET    /api/executions/debug/:taskId --> synapseqa/backend/internal/controller.(*ExecutionController).GetDebug-fm (5 handlers)
+[GIN-debug] GET    /api/executions/:id       --> synapseqa/backend/internal/controller.(*ExecutionController).Get-fm (5 handlers)
+[GIN-debug] POST   /api/executions/:id/cancel --> synapseqa/backend/internal/controller.(*ExecutionController).Cancel-fm (5 handlers)
+[GIN-debug] GET    /api/executions/tasks/:taskId/logs --> synapseqa/backend/internal/controller.(*ExecutionController).ListTaskLogs-fm (5 handlers)
+[GIN-debug] GET    /api/notifications        --> synapseqa/backend/internal/controller.(*NotificationController).List-fm (5 handlers)
+[GIN-debug] GET    /api/notifications/unread-count --> synapseqa/backend/internal/controller.(*NotificationController).Count-fm (5 handlers)
+[GIN-debug] GET    /api/notifications/stream --> synapseqa/backend/internal/controller.(*NotificationController).Stream-fm (5 handlers)
+[GIN-debug] PATCH  /api/notifications/:id/read --> synapseqa/backend/internal/controller.(*NotificationController).Read-fm (5 handlers)
+[GIN-debug] POST   /api/notifications/read-all --> synapseqa/backend/internal/controller.(*NotificationController).ReadAll-fm (5 handlers)
+[GIN-debug] DELETE /api/notifications/:id    --> synapseqa/backend/internal/controller.(*NotificationController).Delete-fm (5 handlers)
+[GIN-debug] GET    /api/notifications/preferences --> synapseqa/backend/internal/controller.(*NotificationController).Preferences-fm (5 handlers)
+[GIN-debug] PATCH  /api/notifications/preferences --> synapseqa/backend/internal/controller.(*NotificationController).UpdatePreferences-fm (5 handlers)
+[GIN-debug] POST   /api/notifications/system --> synapseqa/backend/internal/controller.(*NotificationController).System-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces --> synapseqa/backend/internal/controller.(*APIAutomationController).ListInterfaces-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/interfaces --> synapseqa/backend/internal/controller.(*APIAutomationController).CreateInterface-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).GetInterface-fm (5 handlers)
+[GIN-debug] PATCH  /api/api-automation/interfaces/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).UpdateInterface-fm (5 handlers)
+[GIN-debug] DELETE /api/api-automation/interfaces/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).DeleteInterface-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/interfaces/:id/preview --> synapseqa/backend/internal/controller.(*APIAutomationController).PreviewRequest-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/interfaces/:id/debug --> synapseqa/backend/internal/controller.(*APIAutomationController).StartDebug-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces/:id/debug-runs --> synapseqa/backend/internal/controller.(*APIAutomationController).ListInterfaceDebugRuns-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces/:id/versions --> synapseqa/backend/internal/controller.(*APIAutomationController).ListInterfaceVersions-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces/:id/versions/:version --> synapseqa/backend/internal/controller.(*APIAutomationController).GetInterfaceVersion-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/interfaces/:id/versions/:version/diff --> synapseqa/backend/internal/controller.(*APIAutomationController).DiffInterfaceVersions-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/interfaces/:id/versions/:version/restore --> synapseqa/backend/internal/controller.(*APIAutomationController).RestoreInterfaceVersion-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/interfaces/:id/curl --> synapseqa/backend/internal/controller.(*APIAutomationController).ExportCurl-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/curl/parse --> synapseqa/backend/internal/controller.(*APIAutomationController).ParseCurl-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/temp-files --> synapseqa/backend/internal/controller.(*APIAutomationController).UploadTempFile-fm (5 handlers)
+[GIN-debug] DELETE /api/api-automation/temp-files/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).DeleteTempFile-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/debug/:taskId --> synapseqa/backend/internal/controller.(*APIAutomationController).GetDebug-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/debug/:taskId/events --> synapseqa/backend/internal/controller.(*APIAutomationController).ListDebugEvents-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/debug/:taskId/events/stream --> synapseqa/backend/internal/controller.(*APIAutomationController).StreamDebugEvents-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/debug/:taskId/cancel --> synapseqa/backend/internal/controller.(*APIAutomationController).CancelDebug-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/debug-runs/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).GetDebugRunDetail-fm (5 handlers)
+[GIN-debug] GET    /api/api-automation/project-headers --> synapseqa/backend/internal/controller.(*APIAutomationController).ListProjectHeaders-fm (5 handlers)
+[GIN-debug] POST   /api/api-automation/project-headers --> synapseqa/backend/internal/controller.(*APIAutomationController).CreateProjectHeader-fm (5 handlers)
+[GIN-debug] PATCH  /api/api-automation/project-headers/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).UpdateProjectHeader-fm (5 handlers)
+[GIN-debug] DELETE /api/api-automation/project-headers/:id --> synapseqa/backend/internal/controller.(*APIAutomationController).DeleteProjectHeader-fm (5 handlers)
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.
+[GIN-debug] Listening and serving HTTP on :8080
+[GIN] 2026/07/27 - 09:06:32 | 200 |     14.8199ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:06:42 | 200 |      3.2158ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:06:52 | 200 |      2.3312ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:06:59 | 200 |            0s |       127.0.0.1 | GET      "/api/health"
+[GIN] 2026/07/27 - 09:06:59 | 200 |       5.345ms |       127.0.0.1 | POST     "/api/auth/login"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      1.3276ms |       127.0.0.1 | GET      "/api/config/products?page=1&pageSize=1"
+[GIN] 2026/07/27 - 09:06:59 | 201 |      4.7151ms |       127.0.0.1 | POST     "/api/api-automation/interfaces"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      3.9188ms |       127.0.0.1 | GET      "/api/api-automation/interfaces/7"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      7.5483ms |       127.0.0.1 | PATCH    "/api/api-automation/interfaces/7"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      3.9824ms |       127.0.0.1 | GET      "/api/api-automation/interfaces/7/versions/1/diff?targetVersion=2"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      4.9095ms |       127.0.0.1 | POST     "/api/api-automation/interfaces/7/versions/1/restore"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      2.2283ms |       127.0.0.1 | GET      "/api/api-automation/interfaces/7"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      1.5144ms |       127.0.0.1 | GET      "/api/api-automation/interfaces/7/versions"
+[GIN] 2026/07/27 - 09:06:59 | 200 |      2.6325ms |       127.0.0.1 | DELETE   "/api/api-automation/interfaces/7"
+[GIN] 2026/07/27 - 09:07:02 | 200 |       2.529ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:07:12 | 200 |      2.9672ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:07:22 | 200 |            0s |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:07:32 | 200 |      1.3869ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:07:42 | 200 |      2.0427ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:07:52 | 200 |      1.6266ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:02 | 200 |      1.3193ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:12 | 200 |      1.2732ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:22 | 200 |       512.1µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:32 | 200 |      1.0456ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:42 | 200 |      3.4518ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:08:52 | 200 |      2.8788ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:02 | 200 |            0s |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:12 | 200 |      1.1293ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:22 | 200 |       506.9µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:32 | 200 |      1.0375ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:42 | 200 |       4.361ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:09:52 | 200 |      3.7318ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:02 | 200 |      2.6375ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:12 | 200 |      2.7623ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:22 | 200 |      2.4695ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:32 | 200 |      2.7371ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:42 | 200 |      2.1701ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:10:52 | 200 |      5.1546ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:02 | 200 |     11.2891ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:12 | 200 |      3.1621ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:23 | 200 |      1.9525ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:33 | 200 |      1.1321ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:43 | 200 |      3.0747ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:11:53 | 200 |      2.6565ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:03 | 200 |      6.3674ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:13 | 200 |      2.1617ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:23 | 200 |      3.0148ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:33 | 200 |      2.0942ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:43 | 200 |      3.0889ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:12:53 | 200 |      3.2617ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:03 | 200 |      3.1785ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:13 | 200 |      2.6828ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:23 | 200 |       3.499ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:33 | 200 |      3.6388ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:43 | 200 |      4.8061ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:13:53 | 200 |       2.153ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:03 | 200 |      2.1972ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:13 | 200 |      1.6301ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:23 | 200 |       2.913ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:33 | 200 |       508.7µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:43 | 200 |      3.1233ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:14:53 | 200 |      2.8012ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:03 | 200 |      2.4999ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:13 | 200 |      2.2985ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:23 | 200 |      2.0848ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:33 | 200 |      2.3823ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:43 | 200 |      2.9971ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:15:53 | 200 |      2.0413ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:03 | 200 |      9.9105ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:14 | 200 |       6.661ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:24 | 200 |         509µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:34 | 200 |      5.0247ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:44 | 200 |      5.0953ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:16:54 | 200 |       525.2µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:04 | 200 |      9.1263ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:14 | 200 |       531.2µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:24 | 200 |       985.7µs |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:34 | 200 |      2.7768ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:44 | 200 |      2.6554ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:17:54 | 200 |      3.1007ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:04 | 200 |      3.6083ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:14 | 200 |       2.127ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:24 | 200 |       3.931ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:34 | 200 |      2.1953ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:44 | 200 |      2.4293ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:18:54 | 200 |      2.6771ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:04 | 200 |      2.5148ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:14 | 200 |      2.0905ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:24 | 200 |      2.5708ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:34 | 200 |      2.6292ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:44 | 200 |      1.6124ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:19:54 | 200 |      2.2314ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:04 | 200 |      3.7329ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:14 | 200 |      2.0487ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:24 | 200 |      3.2875ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:34 | 200 |      3.9685ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:44 | 200 |      2.0842ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:20:54 | 200 |      2.0589ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:04 | 200 |      2.0359ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:14 | 200 |        2.57ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:24 | 200 |      10.849ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:34 | 200 |       4.123ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:44 | 200 |      5.1102ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:21:54 | 200 |      3.8707ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:04 | 200 |      4.1861ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:15 | 200 |      2.5061ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:25 | 200 |      4.8515ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:28 | 401 |            0s |       127.0.0.1 | GET      "/api/notifications?page=1&pageSize=50"
+[GIN] 2026/07/27 - 09:22:28 | 401 |            0s |       127.0.0.1 | GET      "/api/notifications/unread-count"
+[GIN] 2026/07/27 - 09:22:35 | 200 |     16.3503ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:45 | 200 |      2.7092ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:22:55 | 200 |      2.1315ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:05 | 200 |      2.5194ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:15 | 200 |      2.1679ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:25 | 200 |      2.5105ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:35 | 200 |      2.3268ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:45 | 200 |      2.9132ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:23:55 | 200 |      2.0383ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:24:05 | 200 |      3.1982ms |       127.0.0.1 | POST     "/api/executors/heartbeat"
+[GIN] 2026/07/27 - 09:24:15 | 200 |      2.5446ms |       127.0.0.1 | POST     "/api/executors/heartbeat"

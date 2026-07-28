@@ -1,11 +1,12 @@
-import { Copy, KeyRound, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { Activity, Copy, KeyRound, Plus, RefreshCw, Server, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
+import { executionService } from "../services/executionService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
 
@@ -993,68 +994,134 @@ function uniqueValues(rows, key) {
   return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
 }
 
+function executorStatusMeta(status) {
+  if (status === "online") return { className: "is-online", label: "在线" };
+  if (status === "pending" || status === "registered") return { className: "is-pending", label: "待连接" };
+  if (status === "suspect") return { className: "is-pending", label: "连接异常" };
+  return { className: "is-offline", label: "离线" };
+}
+
 function ExecutorConfigPage() {
-  const { data, loading, error, reload } = useAsyncData(() => configService.executorToken.get(), []);
-  const [generated, setGenerated] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const {
+    data: executors,
+    loading: executorsLoading,
+    error: executorsError,
+    reload: reloadExecutors
+  } = useAsyncData(() => executionService.executors(), []);
+  const [generatedTokens, setGeneratedTokens] = useState({});
+  const [busyExecutorId, setBusyExecutorId] = useState("");
   const [notice, setNotice] = useState("");
+  const [createModal, setCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({ executorId: "", name: "" });
 
-  const token = generated?.token || "";
-  const envText = token ? `EXECUTOR_SHARED_TOKEN=${token}` : "EXECUTOR_SHARED_TOKEN=请先生成 Token";
+  const executorRows = Array.isArray(executors) ? executors : [];
+  const onlineCount = executorRows.filter((item) => item.status === "online").length;
 
-  async function handleGenerate() {
-    setBusy(true);
+  useEffect(() => {
+    const timer = window.setInterval(() => reloadExecutors({ silent: true }), 10000);
+    return () => window.clearInterval(timer);
+  }, [reloadExecutors]);
+
+  async function handleGenerate(executorId) {
+    setBusyExecutorId(executorId);
     setNotice("");
     try {
-      const result = await configService.executorToken.generate();
-      setGenerated(result);
-      await reload();
-      setNotice("Token 已生成，请及时配置到执行器环境变量。");
+      const result = await executionService.generateExecutorToken(executorId);
+      setGeneratedTokens((current) => ({ ...current, [executorId]: result.token }));
+      setNotice(`已为执行器 ${executorId} 生成专属 Token，旧 Token 已失效。`);
     } catch (err) {
       setNotice(err.message);
     } finally {
-      setBusy(false);
+      setBusyExecutorId("");
     }
   }
 
-  async function handleCopy() {
-    if (!token) {
-      setNotice("请先生成 Token");
-      return;
+  async function handleCopy(executorId) {
+    const token = generatedTokens[executorId];
+    await navigator.clipboard.writeText(`EXECUTOR_ID=${executorId}\nEXECUTOR_SHARED_TOKEN=${token}`);
+    setNotice(`已复制执行器 ${executorId} 的专属配置。`);
+  }
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    setBusyExecutorId("__create__");
+    setNotice("");
+    try {
+      const result = await executionService.createExecutor({ executorId: createForm.executorId.trim(), name: createForm.name.trim() });
+      setGeneratedTokens((current) => ({ ...current, [result.executorId]: result.token }));
+      await reloadExecutors();
+      setCreateModal(false);
+      setCreateForm({ executorId: "", name: "" });
+      setNotice(`执行器 ${result.executorId} 已创建，请复制专属 Token 完成连接。`);
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusyExecutorId("");
     }
-    await navigator.clipboard.writeText(envText);
-    setNotice("已复制环境变量配置");
   }
 
   return (
     <>
-      <PageHeader title="执行器配置" description="维护平台与执行器之间的连接凭据" />
-      <StateBlock loading={loading} error={error}>
-        <div className="settings-panel">
-          <div className="settings-row">
-            <div>
-              <div className="settings-title">
-                <KeyRound size={18} />
-                执行器共享 Token
-              </div>
-              <p>当前 Token：{generated?.maskedToken || data?.maskedToken || "未生成"}</p>
-              <p>更新时间：{formatTime(generated?.updatedAt || data?.updatedAt)}</p>
-            </div>
-            <div className="settings-actions">
-              <button className="icon-text-button" disabled={busy} onClick={handleGenerate} type="button">
-                <RefreshCw size={16} />
-                {busy ? "生成中" : "生成 Token"}
-              </button>
-              <button className="icon-text-button" onClick={handleCopy} type="button">
-                <Copy size={16} />
-                复制配置
-              </button>
-            </div>
+      <PageHeader title="执行器配置" description="每个执行器使用独立凭据，状态和权限互不影响" />
+      <section className="resource-panel executor-status-panel">
+        <div className="panel-header">
+          <div>
+            <div className="settings-title"><Activity size={18} />执行器运行状态</div>
+            <p className="panel-description">在线 {onlineCount} / 共 {executorRows.length} 个，状态每 10 秒自动更新</p>
           </div>
-          <pre className="token-output">{envText}</pre>
-          {notice ? <div className="inline-notice">{notice}</div> : null}
+          <div className="settings-actions">
+            <button className="icon-text-button compact-button" onClick={() => setCreateModal(true)} type="button"><Plus size={15} />新增执行器</button>
+            <button className="icon-text-button compact-button" disabled={executorsLoading} onClick={() => reloadExecutors()} type="button"><RefreshCw className={executorsLoading ? "spin-icon" : ""} size={15} />刷新状态</button>
+          </div>
         </div>
-      </StateBlock>
+        <StateBlock loading={executorsLoading} error={executorsError}>
+          {executorRows.length ? <div className="executor-card-grid">
+            {executorRows.map((item) => {
+              const statusMeta = executorStatusMeta(item.status);
+              return <article className={`executor-card ${statusMeta.className}`} key={item.executorId}>
+                <div className="executor-card-head">
+                  <div className="executor-name-cell"><span className="executor-icon"><Server size={17} /></span><div><strong>{item.name || item.executorId}</strong><small>{item.executorId}</small></div></div>
+                  <span className={`executor-state ${statusMeta.className}`}><i />{statusMeta.label}</span>
+                </div>
+                <div className="executor-load-grid">
+                  <div><span>运行中</span><strong>{item.runningTasks || 0}</strong></div>
+                  <div><span>排队中</span><strong>{item.queuedTasks || 0}</strong></div>
+                  <div><span>最大并发</span><strong>{item.maxWorkers || 1}</strong></div>
+                </div>
+                <div className="executor-card-detail">
+                  <div><span>服务地址</span><code className="executor-endpoint">{item.endpoint || "-"}</code></div>
+                  <div><span>最后心跳</span><strong>{formatTime(item.lastHeartbeatAt)}</strong></div>
+                </div>
+                <div className="executor-card-footer">
+                  <span>支持类型</span>
+                  <div className="executor-capabilities">{(item.supportedTypes || []).map((type) => <span key={type}>{type.toUpperCase()}</span>)}</div>
+                </div>
+                <div className="executor-token-zone">
+                  <div className="executor-token-actions">
+                    <span><KeyRound size={14} />专属 Token</span>
+                    <button className="link-button" disabled={Boolean(busyExecutorId)} onClick={() => handleGenerate(item.executorId)} type="button">
+                      {busyExecutorId === item.executorId ? "生成中" : generatedTokens[item.executorId] ? "重新生成" : "生成 Token"}
+                    </button>
+                  </div>
+                  {generatedTokens[item.executorId] ? <div className="executor-token-result"><code>{generatedTokens[item.executorId]}</code><button aria-label={`复制 ${item.executorId} 配置`} onClick={() => handleCopy(item.executorId)} type="button"><Copy size={14} /></button></div> : <small>Token 仅在生成后显示一次，请立即复制到对应执行器。</small>}
+                </div>
+              </article>;
+            })}
+          </div> : <div className="executor-empty">暂无已注册执行器，请启动执行器并确认 Token 配置正确。</div>}
+        </StateBlock>
+        {notice ? <div className="inline-notice">{notice}</div> : null}
+      </section>
+      {createModal ? <div className="modal-backdrop">
+        <section aria-label="新增执行器" className="modal-card executor-create-modal">
+          <div className="modal-header"><div><strong>新增执行器</strong><p>创建独立身份并生成一对一连接 Token</p></div><button aria-label="关闭新增执行器" className="modal-close" onClick={() => setCreateModal(false)} type="button"><X size={17} /></button></div>
+          <form onSubmit={handleCreate}>
+            <label className="form-field"><span>执行器 ID</span><input className="text-input" onChange={(event) => setCreateForm((current) => ({ ...current, executorId: event.target.value }))} placeholder="例如 executor-beijing-01" required value={createForm.executorId} /></label>
+            <label className="form-field"><span>执行器名称</span><input className="text-input" onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} placeholder="例如 北京 UI 执行器" required value={createForm.name} /></label>
+            <div className="executor-create-hint"><KeyRound size={15} /><span>创建后 Token 仅显示一次，需要粘贴到对应执行器登录页。</span></div>
+            <div className="modal-actions"><button className="icon-text-button compact-button" onClick={() => setCreateModal(false)} type="button">取消</button><button className="primary-button compact-button" disabled={busyExecutorId === "__create__"} type="submit">{busyExecutorId === "__create__" ? "创建中" : "创建并生成 Token"}</button></div>
+          </form>
+        </section>
+      </div> : null}
     </>
   );
 }

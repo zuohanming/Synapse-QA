@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -80,6 +82,102 @@ func (ctl *ExecutionController) List(c *gin.Context) {
 		return
 	}
 	ok(c, result)
+}
+
+func (ctl *ExecutionController) Statistics(c *gin.Context) {
+	if _, exists := claimsFromContext(c); !exists {
+		return
+	}
+	runs := make([]model.ExecutionRun, 0)
+	for page := 1; ; page++ {
+		result, err := ctl.executionService.ListRuns(c.Request.Context(), model.ExecutionRunFilter{}, page, 100)
+		if err != nil {
+			fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		items, valid := result.Items.([]model.ExecutionRun)
+		if !valid {
+			fail(c, http.StatusInternalServerError, "执行统计数据格式错误")
+			return
+		}
+		runs = append(runs, items...)
+		if int64(len(runs)) >= result.Total || len(items) == 0 {
+			break
+		}
+	}
+	ok(c, buildExecutionStatistics(runs, time.Now()))
+}
+
+func buildExecutionStatistics(runs []model.ExecutionRun, now time.Time) model.ExecutionStatistics {
+	result := model.ExecutionStatistics{Trend: make([]model.ExecutionTrendPoint, 14)}
+	start := dayStart(now).AddDate(0, 0, -13)
+	currentStart := dayStart(now).AddDate(0, 0, -6)
+	previousStart := currentStart.AddDate(0, 0, -7)
+	var currentRuns, previousRuns, currentCases, previousCases, currentPassed, previousPassed int64
+	for index := range result.Trend {
+		result.Trend[index].Date = start.AddDate(0, 0, index).Format("01-02")
+	}
+	for _, run := range runs {
+		var summary model.ExecutionSummary
+		_ = json.Unmarshal(run.Summary, &summary)
+		result.TotalRuns++
+		result.TotalCases += summary.Total
+		result.PassedCases += summary.Passed
+		result.FailedCases += summary.Failed
+		if run.Status == "failed" {
+			result.FailedRuns++
+		}
+		if run.Status == "pending" || run.Status == "queued" || run.Status == "running" {
+			result.RunningRuns++
+		}
+		created := run.CreatedAt
+		if !created.Before(currentStart) {
+			currentRuns++
+			currentCases += summary.Total
+			currentPassed += summary.Passed
+		} else if !created.Before(previousStart) {
+			previousRuns++
+			previousCases += summary.Total
+			previousPassed += summary.Passed
+		}
+		dayIndex := int(dayStart(created).Sub(start).Hours() / 24)
+		if dayIndex >= 0 && dayIndex < len(result.Trend) {
+			point := &result.Trend[dayIndex]
+			point.Runs++
+			point.Cases += summary.Total
+			point.PassRate += float64(summary.Passed)
+		}
+	}
+	result.PassRate = percent(result.PassedCases, result.TotalCases)
+	result.RunChange = changeRate(currentRuns, previousRuns)
+	result.CaseChange = changeRate(currentCases, previousCases)
+	result.PassRateChange = percent(currentPassed, currentCases) - percent(previousPassed, previousCases)
+	for index := range result.Trend {
+		result.Trend[index].PassRate = percent(int64(result.Trend[index].PassRate), result.Trend[index].Cases)
+	}
+	return result
+}
+
+func dayStart(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+}
+
+func percent(value, total int64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(value) * 100 / float64(total)
+}
+
+func changeRate(current, previous int64) float64 {
+	if previous == 0 {
+		if current > 0 {
+			return 100
+		}
+		return 0
+	}
+	return float64(current-previous) * 100 / float64(previous)
 }
 
 // Get 查询执行批次详情。

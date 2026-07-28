@@ -33,6 +33,7 @@ class TaskCreate(BaseModel):
     # payload 由具体 Runner 解释，执行器只负责透传和基础调度。
     payload: dict[str, Any] = Field(default_factory=dict)
     callback_url: str | None = Field(default=None, alias="callbackUrl")
+    event_url: str | None = Field(default=None, alias="eventUrl")
 
     model_config = {"populate_by_name": True}
 
@@ -56,6 +57,7 @@ class TaskView(BaseModel):
     status: TaskStatus
     payload: dict[str, Any]
     callback_url: str | None = Field(default=None, alias="callbackUrl")
+    event_url: str | None = Field(default=None, alias="eventUrl")
     result: TaskResult | None = None
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(default=None, alias="startedAt")

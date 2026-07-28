@@ -37,6 +37,9 @@ func main() {
 	if err := bootstrapApp.seed(ctx); err != nil {
 		log.Fatal(err)
 	}
+	if err := bootstrapApp.migrateLegacyAPIData(ctx); err != nil {
+		log.Fatal(err)
+	}
 
 	systemRepo := repository.NewSystemRepository(db)
 	catalogRepo := repository.NewCatalogRepository(db)
@@ -44,6 +47,8 @@ func main() {
 	executorRepo := repository.NewExecutorRepository(db)
 	testCaseRepo := repository.NewTestCaseRepository(db)
 	executionRepo := repository.NewExecutionRepository(db)
+	notificationRepo := repository.NewNotificationRepository(db)
+	apiAutomationRepo := repository.NewAPIAutomationRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -51,19 +56,26 @@ func main() {
 	executorService := service.NewExecutorService(executorRepo, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token"))
 	testCaseService := service.NewTestCaseService(testCaseRepo, systemRepo)
 	executionService := service.NewExecutionService(executionRepo, executorRepo, testCaseRepo, systemRepo, env("EXECUTION_CALLBACK_BASE", "http://127.0.0.1:8080"))
+	notificationService := service.NewNotificationService(notificationRepo)
+	apiAutomationService := service.NewAPIAutomationService(apiAutomationRepo, systemRepo, bootstrapApp.jwtSecret)
+	apiAutomationService.ConfigureDebug(executorRepo, env("EXECUTOR_CALLBACK_BASE", "http://127.0.0.1:8080"))
+	executionService.SetNotifier(notificationService)
+	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(context.Background())
 
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
 	router.RegisterRoutes(engine, router.Dependencies{
-		AuthController:       controller.NewAuthController(systemService),
-		SystemController:     controller.NewSystemController(systemService),
-		CatalogController:    controller.NewCatalogController(catalogService),
-		AutomationController: controller.NewAutomationController(automationService),
-		ExecutorController:   controller.NewExecutorController(executorService),
-		TestCaseController:   controller.NewTestCaseController(testCaseService),
-		ExecutionController:  controller.NewExecutionController(executionService),
-		AuthMiddleware:       controller.AuthMiddleware(systemService),
+		AuthController:          controller.NewAuthController(systemService),
+		SystemController:        controller.NewSystemController(systemService),
+		CatalogController:       controller.NewCatalogController(catalogService),
+		AutomationController:    controller.NewAutomationController(automationService),
+		ExecutorController:      controller.NewExecutorController(executorService),
+		TestCaseController:      controller.NewTestCaseController(testCaseService),
+		ExecutionController:     controller.NewExecutionController(executionService),
+		NotificationController:  controller.NewNotificationController(notificationService),
+		APIAutomationController: controller.NewAPIAutomationController(apiAutomationService),
+		AuthMiddleware:          controller.AuthMiddleware(systemService),
 	})
 
 	addr := env("API_ADDR", "127.0.0.1:8080")
@@ -75,7 +87,7 @@ func main() {
 func ginCORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, If-Match, X-Request-ID")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

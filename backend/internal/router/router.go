@@ -9,14 +9,16 @@ import (
 )
 
 type Dependencies struct {
-	AuthController       *controller.AuthController
-	SystemController     *controller.SystemController
-	CatalogController    *controller.CatalogController
-	AutomationController *controller.AutomationController
-	ExecutorController   *controller.ExecutorController
-	TestCaseController   *controller.TestCaseController
-	ExecutionController  *controller.ExecutionController
-	AuthMiddleware       gin.HandlerFunc
+	AuthController          *controller.AuthController
+	SystemController        *controller.SystemController
+	CatalogController       *controller.CatalogController
+	AutomationController    *controller.AutomationController
+	ExecutorController      *controller.ExecutorController
+	TestCaseController      *controller.TestCaseController
+	ExecutionController     *controller.ExecutionController
+	NotificationController  *controller.NotificationController
+	APIAutomationController *controller.APIAutomationController
+	AuthMiddleware          gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -29,22 +31,75 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
 	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
 	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
+	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
+	api.POST("/api-automation/debug/:taskId/events/callback", deps.APIAutomationController.DebugEventCallback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
 	authed.GET("/executors", deps.ExecutorController.List)
+	authed.POST("/executors", deps.ExecutorController.Create)
+	authed.POST("/executors/:executorId/token", deps.ExecutorController.GenerateToken)
 
 	registerSystemRoutes(authed, deps)
 	registerConfigRoutes(authed, deps)
 	registerUIRoutes(authed, deps)
 	registerTestCaseRoutes(authed, deps)
 	registerExecutionRoutes(authed, deps)
+	registerNotificationRoutes(authed, deps)
+	registerAPIAutomationRoutes(authed, deps)
+}
+
+func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/api-automation")
+	group.GET("/interfaces", deps.APIAutomationController.ListInterfaces)
+	group.POST("/interfaces", deps.APIAutomationController.CreateInterface)
+	group.GET("/interfaces/:id", deps.APIAutomationController.GetInterface)
+	group.PATCH("/interfaces/:id", deps.APIAutomationController.UpdateInterface)
+	group.PATCH("/interfaces/:id/configuration", deps.APIAutomationController.UpdateInterfaceConfiguration)
+	group.DELETE("/interfaces/:id", deps.APIAutomationController.DeleteInterface)
+	group.POST("/interfaces/:id/restore", deps.APIAutomationController.RestoreInterface)
+	group.POST("/interfaces/batch-delete", deps.APIAutomationController.BatchDeleteInterfaces)
+	group.POST("/interfaces/batch-status", deps.APIAutomationController.BatchUpdateInterfaceStatus)
+	group.POST("/interfaces/batch-move", deps.APIAutomationController.BatchMoveInterfaces)
+	group.POST("/interfaces/:id/preview", deps.APIAutomationController.PreviewRequest)
+	group.POST("/interfaces/:id/debug", deps.APIAutomationController.StartDebug)
+	group.GET("/interfaces/:id/debug-runs", deps.APIAutomationController.ListInterfaceDebugRuns)
+	group.GET("/interfaces/:id/versions", deps.APIAutomationController.ListInterfaceVersions)
+	group.GET("/interfaces/:id/versions/:version", deps.APIAutomationController.GetInterfaceVersion)
+	group.GET("/interfaces/:id/versions/:version/diff", deps.APIAutomationController.DiffInterfaceVersions)
+	group.POST("/interfaces/:id/versions/:version/restore", deps.APIAutomationController.RestoreInterfaceVersion)
+	group.POST("/interfaces/:id/curl", deps.APIAutomationController.ExportCurl)
+	group.POST("/curl/parse", deps.APIAutomationController.ParseCurl)
+	group.POST("/temp-files", deps.APIAutomationController.UploadTempFile)
+	group.DELETE("/temp-files/:id", deps.APIAutomationController.DeleteTempFile)
+	group.GET("/debug/:taskId", deps.APIAutomationController.GetDebug)
+	group.GET("/debug/:taskId/events", deps.APIAutomationController.ListDebugEvents)
+	group.GET("/debug/:taskId/events/stream", deps.APIAutomationController.StreamDebugEvents)
+	group.POST("/debug/:taskId/cancel", deps.APIAutomationController.CancelDebug)
+	group.GET("/debug-runs/:id", deps.APIAutomationController.GetDebugRunDetail)
+	group.GET("/project-headers", deps.APIAutomationController.ListProjectHeaders)
+	group.POST("/project-headers", deps.APIAutomationController.CreateProjectHeader)
+	group.PATCH("/project-headers/:id", deps.APIAutomationController.UpdateProjectHeader)
+	group.DELETE("/project-headers/:id", deps.APIAutomationController.DeleteProjectHeader)
+}
+
+func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/notifications", deps.NotificationController.List)
+	authed.GET("/notifications/unread-count", deps.NotificationController.Count)
+	authed.GET("/notifications/stream", deps.NotificationController.Stream)
+	authed.PATCH("/notifications/:id/read", deps.NotificationController.Read)
+	authed.POST("/notifications/read-all", deps.NotificationController.ReadAll)
+	authed.DELETE("/notifications/:id", deps.NotificationController.Delete)
+	authed.GET("/notifications/preferences", deps.NotificationController.Preferences)
+	authed.PATCH("/notifications/preferences", deps.NotificationController.UpdatePreferences)
+	authed.POST("/notifications/system", deps.NotificationController.System)
 }
 
 func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.GET("/executions", deps.ExecutionController.List)
+	authed.GET("/executions/statistics", deps.ExecutionController.Statistics)
 	authed.POST("/executions", deps.ExecutionController.Create)
 	authed.POST("/executions/debug", deps.ExecutionController.StartDebug)
 	authed.GET("/executions/debug/:taskId", deps.ExecutionController.GetDebug)

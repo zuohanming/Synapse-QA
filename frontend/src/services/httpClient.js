@@ -14,7 +14,9 @@ export function clearToken() {
 
 export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set("Content-Type", "application/json");
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const token = getToken();
   if (token) {
@@ -28,7 +30,9 @@ export async function request(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(payload.error || "请求失败");
+    const error = new Error(payload.error || "请求失败");
+    error.status = response.status;
+    throw error;
   }
 
   return payload.data;
