@@ -33,6 +33,7 @@ export const apiAutomationService = {
     exportCurl: (id, body) => request(`/api-automation/interfaces/${id}/curl`, { method: "POST", body: JSON.stringify(body) }),
     create: (body) => request("/api-automation/interfaces", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => request(`/api-automation/interfaces/${id}`, { method: "PATCH", headers: { "If-Match": String(body.revision || "") }, body: JSON.stringify(body) }),
+    saveConfiguration: (id, body) => request(`/api-automation/interfaces/${id}/configuration`, { method: "PATCH", headers: { "If-Match": String(body.revision || "") }, body: JSON.stringify(body) }),
     remove: (id) => request(`/api-automation/interfaces/${id}`, { method: "DELETE" }),
     restore: (id) => request(`/api-automation/interfaces/${id}/restore`, { method: "POST" }),
     batchDelete: (ids) => request("/api-automation/interfaces/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),

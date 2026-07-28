@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, Braces, ChevronDown, ChevronRight, Clipboard, FileJson, FlaskConical, KeyRound, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Save, Upload } from "lucide-react";
+import { AlignLeft, ArrowLeft, Braces, ChevronDown, ChevronRight, Clipboard, FileJson, FlaskConical, KeyRound, Minimize2, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Save, Upload } from "lucide-react";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { StateBlock } from "../components/StateBlock.js";
@@ -224,7 +224,7 @@ function InterfaceManagementPage() {
 }
 
 const detailSections = [
-  ["variables", "临时变量", "仅用于本次预览与调试，优先级最高"],
+  ["variables", "临时变量", "保存到当前接口，调试时优先级最高"],
   ["auth", "认证", "配置 Bearer、Basic 或 API Key"],
   ["headers", "请求头", "维护接口请求 Headers"],
   ["params", "参数", "维护查询参数"],
@@ -301,15 +301,13 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   const [notice, setNotice] = useState("");
   const [testObjectId, setTestObjectId] = useState("");
   const [preview, setPreview] = useState(null);
-  const [temporaryVariables, setTemporaryVariables] = useState("{\n  \n}");
+  const [temporaryVariableRows, setTemporaryVariableRows] = useState(() => parseTemporaryVariableRows(saved));
+  const [savedTemporaryVariablesSignature, setSavedTemporaryVariablesSignature] = useState(() => stableConfigurationValue(parseTemporaryVariableRows(saved)));
   const [temporaryFiles, setTemporaryFiles] = useState(saved.temporaryFiles || []);
-  const [savedSignature, setSavedSignature] = useState(() => JSON.stringify({
-    method: row.method || "GET",
-    url: row.path || "",
-    config: {
+  const [savedSignature, setSavedSignature] = useState(() => editorConfigurationSignature(
+    {
       auth: JSON.stringify(saved.auth || { type: "none" }, null, 2),
       headers: saved.headers || "{\n  \"Content-Type\": \"application/json\"\n}",
-      params: saved.params || "{\n  \n}",
       body: saved.body || "{\n  \n}",
       bodyType: saved.bodyType || "json",
       jsonpath: saved.jsonpath || "[]",
@@ -317,15 +315,17 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       script: saved.script || "",
       assertions: saved.assertions || "[]"
     },
-    parameterRows: parseParameterRows(saved),
-    temporaryFiles: saved.temporaryFiles || []
-  }));
+    parseParameterRows(saved),
+    saved.temporaryFiles || [],
+    parseTemporaryVariableRows(saved)
+  ));
   const [debugEvents, setDebugEvents] = useState([]);
   const [activeTaskId, setActiveTaskId] = useState("");
   const [historyDetail, setHistoryDetail] = useState(null);
   const [versionDiff, setVersionDiff] = useState(null);
-  const currentSignature = JSON.stringify({ method, url, config, parameterRows, temporaryFiles });
+  const currentSignature = editorConfigurationSignature(config, parameterRows, temporaryFiles, temporaryVariableRows);
   const configurationDirty = currentSignature !== savedSignature;
+  const temporaryVariablesDirty = stableConfigurationValue(temporaryVariableRows) !== savedTemporaryVariablesSignature;
 
   function syncParametersFromUrl(nextUrl) {
     try {
@@ -350,6 +350,21 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
     setParameterRows(nextRows);
   }
 
+  function copyBodyToTemporaryVariables() {
+    const incomingRows = temporaryRowsFromRequestBody(config.body);
+    const incomingNames = new Set(incomingRows.map((row) => row.key));
+    setTemporaryVariableRows((current) => {
+      const next = current.filter((row, index) => !incomingNames.has(row.key.trim()) || current.findIndex((item) => item.key.trim() === row.key.trim()) === index);
+      incomingRows.forEach((incoming) => {
+        const index = next.findIndex((row) => row.key.trim() === incoming.key);
+        if (index >= 0) next[index] = { ...next[index], ...incoming, description: next[index].description || incoming.description };
+        else next.push(incoming);
+      });
+      return next;
+    });
+    return incomingRows.length;
+  }
+
   function configurationPayload() {
     const enabledParams = Object.fromEntries(parameterRows
       .filter((item) => item.enabled !== false && item.key.trim())
@@ -360,6 +375,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       auth: JSON.parse(config.auth || "{\"type\":\"none\"}"),
       params: JSON.stringify(enabledParams, null, 2),
       paramsMeta: parameterRows,
+      temporaryVariables: temporaryVariableRows,
       temporaryFiles
     };
   }
@@ -400,6 +416,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       const payload = configurationPayload();
       const duplicateParam = parameterRows.find((item, index) => item.key.trim() && parameterRows.some((other, otherIndex) => otherIndex !== index && other.key.trim() === item.key.trim()));
       if (duplicateParam) throw new Error(`参数名 ${duplicateParam.key.trim()} 重复`);
+      buildTemporaryVariables(temporaryVariableRows);
       for (const [key, label] of [["headers", "请求头"], ["jsonpath", "JSONPath 提取"], ["regex", "正则提取"], ["assertions", "断言"]]) {
         try {
           JSON.parse(config[key] || (["jsonpath", "regex", "assertions"].includes(key) ? "[]" : "{}"));
@@ -407,13 +424,14 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
           throw new Error(`${label}配置不是合法 JSON`);
         }
       }
-      await apiAutomationService.interfaces.update(row.id, { productId: row.productId, moduleId: row.moduleId, name: row.name, method, path: url, protocol: row.protocol, endpointType: row.endpointType, lifecycleStatus: row.lifecycleStatus, timeoutSeconds: row.timeoutSeconds, followRedirects: row.followRedirects, configuration: payload, revision: currentRevision });
+      await apiAutomationService.interfaces.saveConfiguration(row.id, { configuration: payload, revision: currentRevision });
       const refreshed = await apiAutomationService.interfaces.get(row.id);
-      if (refreshed.method !== method || refreshed.path !== url || !isConfigurationPersisted(refreshed.configuration || {}, payload)) {
+      if (!isConfigurationPersisted(refreshed.configuration || {}, payload)) {
         throw new Error("保存后回读校验失败，请刷新后重试");
       }
       setCurrentRevision(refreshed.revision || currentRevision + 1);
       setSavedSignature(signatureToSave);
+      setSavedTemporaryVariablesSignature(stableConfigurationValue(temporaryVariableRows));
       await reloadVersions();
       setNotice("接口配置已保存。");
     } catch (error) { setNotice(error.message || "保存接口配置失败"); } finally { setBusy(false); }
@@ -550,7 +568,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
         timeoutSeconds: row.timeoutSeconds, followRedirects: row.followRedirects,
         configuration: configurationPayload(), revision: row.revision
       },
-      temporaryVariables: JSON.parse(temporaryVariables || "{}"),
+      temporaryVariables: buildTemporaryVariables(temporaryVariableRows),
       temporaryHeaders: {}
     };
   }
@@ -575,12 +593,11 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       <div className="api-debugger-request-bar"><select aria-label="请求方法" className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}>{["GET", "POST", "PUT", "DELETE", "PATCH"].map((item) => <option key={item}>{item}</option>)}</select><input aria-label="请求 URL" className="text-input api-debugger-url" value={url} onChange={(event) => { const nextUrl = event.target.value; setUrl(nextUrl); syncParametersFromUrl(nextUrl); }} /><select aria-label="测试环境" className="text-input" value={testObjectId} onChange={(event) => setTestObjectId(event.target.value)}><option value="">选择测试环境</option>{testObjects.map((item) => <option key={item.id} value={item.id}>{item.envName}</option>)}</select><span className={`api-save-state ${configurationDirty ? "dirty" : ""}`}>{configurationDirty ? "有未保存修改" : "配置已保存"}</span><button aria-label="保存配置" className="icon-text-button compact-button" disabled={busy || !configurationDirty} onClick={saveConfiguration} type="button"><Save size={14} />保存</button>{activeTaskId ? <button className="danger-button compact-button" onClick={cancelDebug} type="button">取消</button> : <button aria-label="执行接口" className="success-button api-send-button" disabled={busy} onClick={execute} type="button"><Play size={14} />{busy ? "发送中" : "发送"}</button>}</div>
       <div className="api-debugger-columns">
         <main className="api-detail-editor api-request-pane">
-          <nav className="api-request-tabs">{detailSections.map(([key, title]) => <button className={active === key ? "active" : ""} key={key} onClick={() => setActive(key)} type="button">{title}{key === "params" && parameterRows.length ? <small>{parameterRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}</button>)}</nav>
+          <nav className="api-request-tabs">{detailSections.map(([key, title]) => <button className={active === key ? "active" : ""} key={key} onClick={() => setActive(key)} type="button">{title}{key === "variables" && temporaryVariableRows.length ? <small>{temporaryVariableRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "params" && parameterRows.length ? <small>{parameterRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "body" && config.bodyType !== "none" && config.body.trim() ? <i className="api-tab-status" aria-label="请求体已配置" /> : null}</button>)}</nav>
           <div className="api-request-pane-content">
-            {active === "body" ? <label className="form-field api-body-type"><span>Body 类型</span><select className="text-input" value={config.bodyType} onChange={(event) => setConfig({ ...config, bodyType: event.target.value })}><option value="none">无</option><option value="json">JSON</option><option value="form_data">form-data</option><option value="urlencoded">x-www-form-urlencoded</option><option value="raw">Raw 文本</option></select></label> : null}
-            <div className="api-editor-tip">{active === "headers" ? `已加载 ${Object.keys(defaultHeaders).length} 个项目默认请求头；接口内同名请求头优先。` : active === "variables" ? "临时变量不会保存到接口，覆盖同名的环境级和项目级全局变量。" : "配置修改后请点击顶部保存；发送时使用当前编辑内容。"}</div>
+            {active === "body" || active === "variables" ? null : <div className="api-editor-tip">{active === "headers" ? `已加载 ${Object.keys(defaultHeaders).length} 个项目默认请求头；接口内同名请求头优先。` : "配置修改后请点击顶部保存；发送时使用当前编辑内容。"}</div>}
             {active === "body" && config.bodyType === "form_data" ? <div className="api-temp-files"><label className="icon-text-button compact-button">上传临时文件<input disabled={busy} hidden onChange={uploadTemporaryFile} type="file" /></label>{temporaryFiles.map((file) => <span key={file.id}>{file.originalName}（{Math.ceil(file.sizeBytes / 1024)} KB）<button className="link-button danger-link" onClick={() => removeTemporaryFile(file)} type="button">删除</button></span>)}</div> : null}
-            {active === "params" ? <ParameterTableEditor rows={parameterRows} onChange={updateParametersAndUrl} /> : active === "jsonpath" || active === "regex" ? <ExtractorRuleEditor type={active} value={config[active]} dirty={configurationDirty} saving={busy} onChange={(value) => setConfig({ ...config, [active]: value })} onSave={saveConfiguration} /> : active === "assertions" ? <AssertionRuleEditor value={config.assertions} onChange={(value) => setConfig({ ...config, assertions: value })} /> : active === "versions" ? <VersionPanel versions={versions} diff={versionDiff} busy={busy} onCompare={compareVersion} onRestore={restoreVersion} /> : <textarea className="api-config-editor" spellCheck="false" value={active === "variables" ? temporaryVariables : config[active]} onChange={(event) => active === "variables" ? setTemporaryVariables(event.target.value) : setConfig({ ...config, [active]: event.target.value })} />}
+            {active === "variables" ? <TemporaryVariableEditor rows={temporaryVariableRows} dirty={temporaryVariablesDirty} saving={busy} onChange={setTemporaryVariableRows} onSave={saveConfiguration} /> : active === "body" ? <RequestBodyEditor bodyType={config.bodyType} value={config.body} onBodyTypeChange={(bodyType) => setConfig({ ...config, bodyType })} onChange={(body) => setConfig({ ...config, body })} onCopyToVariables={copyBodyToTemporaryVariables} /> : active === "params" ? <ParameterTableEditor rows={parameterRows} onChange={updateParametersAndUrl} /> : active === "jsonpath" || active === "regex" ? <ExtractorRuleEditor type={active} value={config[active]} dirty={configurationDirty} saving={busy} onChange={(value) => setConfig({ ...config, [active]: value })} onSave={saveConfiguration} /> : active === "assertions" ? <AssertionRuleEditor value={config.assertions} onChange={(value) => setConfig({ ...config, assertions: value })} /> : active === "versions" ? <VersionPanel versions={versions} diff={versionDiff} busy={busy} onCompare={compareVersion} onRestore={restoreVersion} /> : <textarea className="api-config-editor" spellCheck="false" value={config[active]} onChange={(event) => setConfig({ ...config, [active]: event.target.value })} />}
           </div>
         </main>
         <aside className="api-result-panel api-response-pane">
@@ -739,6 +756,24 @@ function parseParameterRows(configuration, requestUrl = "") {
   return rows;
 }
 
+export function parseTemporaryVariableRows(configuration) {
+  if (Array.isArray(configuration.temporaryVariables)) {
+    return configuration.temporaryVariables
+      .filter((item) => item && (item.key || item.value || item.description))
+      .map((item) => ({
+        key: String(item.key || ""),
+        type: ["string", "number", "boolean", "json"].includes(item.type) ? item.type : "string",
+        value: String(item.value ?? ""),
+        description: String(item.description || ""),
+        enabled: item.enabled !== false
+      }));
+  }
+  if (configuration.temporaryVariables && typeof configuration.temporaryVariables === "object") {
+    return temporaryRowsFromRequestBody(JSON.stringify(configuration.temporaryVariables));
+  }
+  return [];
+}
+
 function syncUrlFromParameterRows(currentUrl, previousRows, nextRows) {
   const hashIndex = currentUrl.indexOf("#");
   const hash = hashIndex >= 0 ? currentUrl.slice(hashIndex) : "";
@@ -759,8 +794,13 @@ function syncUrlFromParameterRows(currentUrl, previousRows, nextRows) {
 }
 
 function isConfigurationPersisted(actual, expected) {
-  const keys = ["headers", "params", "paramsMeta", "body", "bodyType", "jsonpath", "regex", "script", "assertions", "temporaryFiles"];
+  const keys = ["headers", "params", "paramsMeta", "body", "bodyType", "jsonpath", "regex", "script", "assertions", "temporaryVariables", "temporaryFiles"];
   return keys.every((key) => stableConfigurationValue(actual[key] ?? null) === stableConfigurationValue(expected[key] ?? null));
+}
+
+function editorConfigurationSignature(config, parameterRows, temporaryFiles, temporaryVariables) {
+  const { params: _legacyParams, ...editableConfig } = config;
+  return stableConfigurationValue({ config: editableConfig, parameterRows, temporaryFiles, temporaryVariables });
 }
 
 function stableConfigurationValue(value) {
@@ -769,6 +809,149 @@ function stableConfigurationValue(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableConfigurationValue(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function temporaryRowsFromRequestBody(body) {
+  let parsed;
+  try { parsed = JSON.parse(body || "{}"); } catch { throw new Error("请求体不是合法 JSON，无法复制"); }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("请求体必须是 JSON 对象");
+  const rows = Object.entries(parsed).map(([key, value]) => {
+    if (typeof value === "number") return { key, type: "number", value: String(value), description: "来自请求体", enabled: true };
+    if (typeof value === "boolean") return { key, type: "boolean", value: String(value), description: "来自请求体", enabled: true };
+    if (value === null || typeof value === "object") return { key, type: "json", value: JSON.stringify(value), description: "来自请求体", enabled: true };
+    return { key, type: "string", value: String(value), description: "来自请求体", enabled: true };
+  });
+  if (!rows.length) throw new Error("请求体中没有可复制的字段");
+  return rows;
+}
+
+function buildTemporaryVariables(rows) {
+  const result = {};
+  const names = new Set();
+  rows.filter((row) => row.enabled !== false && row.key.trim()).forEach((row) => {
+    const name = row.key.trim();
+    if (names.has(name)) throw new Error(`临时变量名不能重复：${name}`);
+    names.add(name);
+    if (row.type === "number") {
+      if (!row.value.trim() || Number.isNaN(Number(row.value))) throw new Error(`临时变量 ${name} 不是有效数字`);
+      result[name] = Number(row.value);
+    } else if (row.type === "boolean") {
+      result[name] = row.value === "true";
+    } else if (row.type === "json") {
+      try { result[name] = JSON.parse(row.value); } catch { throw new Error(`临时变量 ${name} 不是合法 JSON`); }
+    } else {
+      result[name] = row.value;
+    }
+  });
+  return result;
+}
+
+function TemporaryVariableEditor({ rows, dirty, saving, onChange, onSave }) {
+  const updateRow = (index, key, value) => {
+    if (index === rows.length) {
+      onChange([...rows, { key: "", type: "string", value: "", description: "", enabled: true, [key]: value }]);
+      return;
+    }
+    const updated = { ...rows[index], [key]: value };
+    if (!updated.key.trim() && !updated.value.trim() && !updated.description.trim()) {
+      onChange(rows.filter((_, itemIndex) => itemIndex !== index));
+      return;
+    }
+    onChange(rows.map((row, itemIndex) => itemIndex === index ? updated : row));
+  };
+  const duplicateKeys = new Set(rows
+    .map((row) => row.key.trim())
+    .filter((key, _index, values) => key && values.indexOf(key) !== values.lastIndexOf(key)));
+  const visibleRows = [...rows, { key: "", type: "string", value: "", description: "", enabled: true, placeholder: true }];
+  const enabledCount = rows.filter((row) => row.enabled !== false && row.key.trim()).length;
+
+  return <section className="api-variable-editor">
+    <header className="api-variable-toolbar">
+      <div><strong>接口调试变量</strong><span>保存到当前接口，用于预览、发送和 cURL 导出，优先级最高</span></div>
+      <div className="api-variable-toolbar-actions"><span className={`api-save-state ${dirty ? "dirty" : ""}`}>{dirty ? "有未保存修改" : "已保存"}</span><button aria-label="保存临时变量" className="icon-text-button compact-button" disabled={saving || !dirty} onClick={onSave} type="button"><Save size={13} />{saving ? "保存中" : "保存"}</button>{rows.length ? <button className="link-button danger-link" onClick={() => onChange([])} type="button">清空变量</button> : null}</div>
+    </header>
+    <div className="api-variable-table" role="table" aria-label="临时变量列表">
+      <div className="api-variable-table-head" role="row"><span>启用</span><span>变量名</span><span>类型</span><span>值</span><span>说明</span><span>操作</span></div>
+      {visibleRows.map((row, index) => <div className={`api-variable-row ${row.placeholder ? "placeholder" : ""} ${duplicateKeys.has(row.key.trim()) ? "invalid" : ""}`} role="row" key={index}>
+        <input aria-label={`启用临时变量 ${index + 1}`} checked={row.enabled !== false} disabled={row.placeholder} onChange={(event) => updateRow(index, "enabled", event.target.checked)} type="checkbox" />
+        <input aria-label={`临时变量名 ${index + 1}`} onChange={(event) => updateRow(index, "key", event.target.value)} placeholder={row.placeholder ? "变量名" : ""} value={row.key} />
+        <select aria-label={`临时变量类型 ${index + 1}`} onChange={(event) => updateRow(index, "type", event.target.value)} value={row.type || "string"}><option value="string">String</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="json">JSON</option></select>
+        {row.type === "boolean"
+          ? <select aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} value={row.value || "true"}><option value="true">true</option><option value="false">false</option></select>
+          : <input aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} placeholder={row.type === "json" ? "{\"key\":\"value\"}" : row.placeholder ? "变量值" : ""} value={row.value} />}
+        <input aria-label={`临时变量说明 ${index + 1}`} onChange={(event) => updateRow(index, "description", event.target.value)} placeholder={row.placeholder ? "可选说明" : ""} value={row.description} />
+        {row.placeholder ? <span /> : <button className="link-button danger-link" onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))} type="button">删除</button>}
+      </div>)}
+    </div>
+    <footer><span>共 {rows.length} 个变量，已启用 {enabledCount} 个</span>{duplicateKeys.size ? <strong>变量名不能重复</strong> : <span>引用格式：{"${variable_name}"}</span>}</footer>
+  </section>;
+}
+
+function RequestBodyEditor({ bodyType, value, onBodyTypeChange, onChange, onCopyToVariables }) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const [validation, setValidation] = useState(null);
+  const content = String(value || "");
+  const lineCount = Math.max(1, content.split("\n").length);
+  const isJson = bodyType === "json";
+
+  function transformJson(compact) {
+    try {
+      const parsed = JSON.parse(content || "{}");
+      onChange(JSON.stringify(parsed, null, compact ? 0 : 2));
+      setValidation({ type: "success", text: compact ? "JSON 已压缩" : "JSON 格式正确" });
+    } catch {
+      setValidation({ type: "error", text: "JSON 格式错误，请检查后重试" });
+    }
+  }
+
+  function copyToVariables() {
+    try {
+      const count = onCopyToVariables();
+      setValidation({ type: "success", text: `已复制 ${count} 个字段到临时变量` });
+    } catch (error) {
+      setValidation({ type: "error", text: error.message });
+    }
+  }
+
+  function handleKeyDown(event) {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const input = event.currentTarget;
+    const start = input.selectionStart;
+    const nextValue = `${content.slice(0, start)}  ${content.slice(input.selectionEnd)}`;
+    onChange(nextValue);
+    requestAnimationFrame(() => {
+      input.selectionStart = start + 2;
+      input.selectionEnd = start + 2;
+    });
+  }
+
+  return <section className="api-body-editor">
+    <header className="api-body-toolbar">
+      <label>
+        <span>数据类型</span>
+        <select aria-label="请求体数据类型" value={bodyType} onChange={(event) => { onBodyTypeChange(event.target.value); setValidation(null); }}>
+          <option value="none">无</option>
+          <option value="json">JSON</option>
+          <option value="form_data">form-data</option>
+          <option value="urlencoded">x-www-form-urlencoded</option>
+          <option value="raw">Raw 文本</option>
+        </select>
+      </label>
+      <div className="api-body-tools">
+        {validation ? <span className={validation.type}>{validation.text}</span> : <span>{lineCount} 行</span>}
+        <button aria-label="复制到临时变量" disabled={!isJson} onClick={copyToVariables} title="将 JSON 顶层字段复制到临时变量" type="button"><Clipboard size={14} />复制到临时变量</button>
+        <button aria-label="格式化 JSON" disabled={!isJson} onClick={() => transformJson(false)} title="格式化 JSON" type="button"><AlignLeft size={14} />格式化</button>
+        <button aria-label="压缩 JSON" disabled={!isJson} onClick={() => transformJson(true)} title="压缩 JSON" type="button"><Minimize2 size={14} />压缩</button>
+      </div>
+    </header>
+    {bodyType === "none"
+      ? <div className="api-body-empty"><Braces size={24} /><strong>当前请求不发送 Body</strong><span>选择 JSON、表单或 Raw 文本后开始编辑</span></div>
+      : <div className={`api-code-editor ${validation?.type === "error" ? "invalid" : ""}`}>
+          <div className="api-code-gutter" aria-hidden="true"><div style={{ transform: `translateY(-${scrollTop}px)` }}>{Array.from({ length: lineCount }, (_, index) => <span key={index}>{index + 1}</span>)}</div></div>
+          <textarea aria-label="请求体内容" onChange={(event) => { onChange(event.target.value); setValidation(null); }} onKeyDown={handleKeyDown} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} placeholder={isJson ? "{\n  \"key\": \"value\"\n}" : "请输入请求体内容"} spellCheck="false" value={content} />
+        </div>}
+  </section>;
 }
 
 function ParameterTableEditor({ rows, onChange }) {

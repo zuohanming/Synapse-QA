@@ -175,6 +175,46 @@ html[data-density="comfortable"] .data-table th,
 html[data-density="comfortable"] .data-table td { height: 52px; padding-inline: 15px; }
 html[data-density="comfortable"] .text-input { min-height: 42px; }
 
+html[data-ui-font-size] body {
+  font-size: var(--ui-font-size);
+}
+
+html[data-ui-font-size] .menu-button,
+html[data-ui-font-size] .menu-child,
+html[data-ui-font-size] .text-input,
+html[data-ui-font-size] .text-area,
+html[data-ui-font-size] .primary-button,
+html[data-ui-font-size] .success-button,
+html[data-ui-font-size] .danger-button,
+html[data-ui-font-size] .icon-text-button,
+html[data-ui-font-size] .form-field {
+  font-size: var(--ui-font-size);
+}
+
+html[data-table-font-size] .data-table th,
+html[data-table-font-size] .data-table td,
+html[data-table-font-size] .api-parameter-table,
+html[data-table-font-size] .api-variable-table {
+  font-size: var(--table-font-size);
+}
+
+html[data-table-font-size] .api-parameter-row input,
+html[data-table-font-size] .api-variable-row > input,
+html[data-table-font-size] .api-variable-row > select,
+html[data-table-font-size] .api-variable-row > button {
+  font-size: var(--table-font-size);
+}
+
+html[data-code-font-size] code,
+html[data-code-font-size] pre,
+html[data-code-font-size] .api-config-editor,
+html[data-code-font-size] .api-code-editor textarea,
+html[data-code-font-size] .api-code-gutter,
+html[data-code-font-size] .debug-log,
+html[data-code-font-size] .execution-log-output {
+  font-size: var(--code-font-size) !important;
+}
+
 .appearance-page { max-width: 1100px; }
 .appearance-section { gap: 18px; }
 .appearance-section-heading { display: flex; align-items: flex-start; gap: 10px; }
@@ -203,6 +243,19 @@ html[data-density="comfortable"] .text-input { min-height: 42px; }
 .font-sample,
 .code-font-sample { padding: 14px; color: var(--text); background: #f7f7f5; border: 1px solid var(--line); border-radius: 6px; }
 .code-font-sample { font-family: var(--code-font, Consolas, monospace); }
+.font-size-setting-list { display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
+.font-size-setting { display: grid; grid-template-columns: minmax(260px, 1fr) auto; align-items: center; gap: 20px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.font-size-setting:last-child { border-bottom: 0; }
+.font-size-setting > div:first-child { display: grid; gap: 4px; }
+.font-size-setting > div:first-child > strong { font-size: 12px; }
+.font-size-setting > div:first-child > span { color: var(--muted); font-size: 10px; }
+.font-size-setting > div:first-child > samp { width: max-content; margin-top: 4px; padding: 5px 8px; color: var(--text); background: color-mix(in srgb, var(--bg) 58%, var(--panel)); border-radius: 4px; }
+.font-size-setting-uiFontSize > div:first-child > samp { font-family: var(--app-font); font-size: var(--ui-font-size); }
+.font-size-setting-tableFontSize > div:first-child > samp { font-family: var(--app-font); font-size: var(--table-font-size); }
+.font-size-setting-codeFontSize > div:first-child > samp { font-family: var(--code-font); font-size: var(--code-font-size); }
+.font-size-options { display: flex; gap: 6px; }
+.font-size-options button { min-width: 58px; min-height: 32px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.font-size-options button.active { color: #fff; background: var(--primary); border-color: var(--primary); }
 .density-options { display: flex; gap: 8px; }
 .density-options button { min-width: 84px; min-height: 34px; color: var(--text); background: #fff; border: 1px solid var(--line); border-radius: 6px; }
 .density-options button.active { color: #fff; background: var(--primary); border-color: var(--primary); }
@@ -210,6 +263,8 @@ html[data-density="comfortable"] .text-input { min-height: 42px; }
 @media (max-width: 720px) {
   .theme-choice-grid,
   .appearance-settings-grid { grid-template-columns: 1fr; }
+  .font-size-setting { grid-template-columns: 1fr; }
+  .font-size-options { justify-content: flex-start; }
 }
 
 .notification-button { position: relative; }
@@ -539,6 +594,165 @@ html[data-density="comfortable"] .text-input { min-height: 42px; }
   flex: 0 0 auto;
 }
 
+.api-tab-status {
+  width: 6px;
+  height: 6px;
+  background: var(--success);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.api-body-editor {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.api-body-toolbar {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.api-body-toolbar label,
+.api-body-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-body-toolbar label > span,
+.api-body-tools > span {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.api-body-toolbar select {
+  min-width: 116px;
+  padding: 5px 24px 5px 8px;
+  color: var(--text);
+  background: var(--panel);
+  border: 0;
+  border-radius: 4px;
+  outline: 0;
+  font: 10px/1.2 var(--code-font, monospace);
+}
+
+.api-body-toolbar select:focus-visible {
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.api-body-tools > span.success {
+  color: var(--success);
+}
+
+.api-body-tools > span.error {
+  color: var(--danger);
+}
+
+.api-body-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: 9px;
+}
+
+.api-body-tools button:hover:not(:disabled) {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.api-body-tools button:disabled {
+  opacity: .36;
+}
+
+.api-code-editor {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-columns: 46px minmax(0, 1fr);
+  background: var(--panel);
+}
+
+.api-code-editor.invalid {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 65%, transparent);
+}
+
+.api-code-gutter {
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 12px;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  background: color-mix(in srgb, var(--bg) 52%, var(--panel));
+  border-right: 1px solid var(--line);
+  font: 10px/20px var(--code-font, monospace);
+  text-align: right;
+  user-select: none;
+}
+
+.api-code-gutter > div {
+  display: grid;
+}
+
+.api-code-gutter span {
+  height: 20px;
+  padding-right: 10px;
+}
+
+.api-code-editor textarea {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 48px;
+  resize: none;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  caret-color: var(--primary);
+  font: 10px/20px var(--code-font, monospace);
+  tab-size: 2;
+  white-space: pre;
+}
+
+.api-code-editor textarea::placeholder {
+  color: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
+.api-body-empty {
+  display: grid;
+  min-height: 0;
+  align-content: center;
+  justify-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.api-body-empty svg {
+  color: color-mix(in srgb, var(--muted) 48%, transparent);
+}
+
+.api-body-empty strong {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .api-parameter-editor {
   display: grid;
   min-height: 0;
@@ -691,6 +905,147 @@ html[data-density="comfortable"] .text-input { min-height: 42px; }
   padding: 7px 2px 0;
   color: var(--muted);
   font-size: 8px;
+}
+
+.api-variable-editor {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  flex: 1 1 auto;
+  padding: 0 12px 12px;
+}
+
+.api-variable-toolbar {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.api-variable-toolbar > div {
+  display: grid;
+  gap: 3px;
+}
+
+.api-variable-toolbar strong {
+  font-size: 10px;
+}
+
+.api-variable-toolbar span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.api-variable-toolbar > .api-variable-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.api-variable-table {
+  min-width: 620px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.api-variable-table-head,
+.api-variable-row {
+  display: grid;
+  grid-template-columns: 44px minmax(110px, .8fr) 90px minmax(140px, 1.2fr) minmax(110px, .8fr) 48px;
+}
+
+.api-variable-table-head {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg) 52%, var(--panel));
+  border-bottom: 1px solid var(--line);
+  font-size: 8px;
+}
+
+.api-variable-table-head span {
+  padding: 7px 8px;
+  border-right: 1px solid var(--line);
+}
+
+.api-variable-table-head span:last-child {
+  border-right: 0;
+}
+
+.api-variable-row {
+  min-height: 36px;
+  border-bottom: 1px solid var(--line);
+}
+
+.api-variable-row:last-child {
+  border-bottom: 0;
+}
+
+.api-variable-row > input,
+.api-variable-row > select,
+.api-variable-row > button,
+.api-variable-row > span {
+  min-width: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  outline: 0;
+  font: 9px/1 var(--code-font, monospace);
+}
+
+.api-variable-row > input:not([type="checkbox"]),
+.api-variable-row > select {
+  width: 100%;
+  height: 100%;
+  padding: 0 9px;
+}
+
+.api-variable-row > input[type="checkbox"] {
+  width: 14px;
+  margin: auto;
+  accent-color: var(--success);
+}
+
+.api-variable-row > input:focus,
+.api-variable-row > select:focus {
+  background: color-mix(in srgb, var(--primary) 4%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, var(--line));
+}
+
+.api-variable-row.invalid > input:nth-child(2) {
+  background: color-mix(in srgb, var(--danger) 5%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, var(--line));
+}
+
+.api-variable-row > button {
+  color: var(--danger);
+  border-right: 0;
+  font-family: inherit;
+}
+
+.api-variable-row > button:hover {
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.api-variable-row.placeholder {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg) 26%, var(--panel));
+}
+
+.api-variable-editor > footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 2px 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.api-variable-editor > footer strong {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .api-debugger-page .api-result-panel {

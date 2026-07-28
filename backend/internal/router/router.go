@@ -57,6 +57,7 @@ func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	group.POST("/interfaces", deps.APIAutomationController.CreateInterface)
 	group.GET("/interfaces/:id", deps.APIAutomationController.GetInterface)
 	group.PATCH("/interfaces/:id", deps.APIAutomationController.UpdateInterface)
+	group.PATCH("/interfaces/:id/configuration", deps.APIAutomationController.UpdateInterfaceConfiguration)
 	group.DELETE("/interfaces/:id", deps.APIAutomationController.DeleteInterface)
 	group.POST("/interfaces/:id/restore", deps.APIAutomationController.RestoreInterface)
 	group.POST("/interfaces/batch-delete", deps.APIAutomationController.BatchDeleteInterfaces)

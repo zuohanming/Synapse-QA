@@ -33,4 +33,24 @@ describe("外观设置", () => {
     expect(document.documentElement.dataset.theme).toBe("kimi");
     expect(JSON.parse(localStorage.getItem(APPEARANCE_KEY))).toMatchObject({ theme: "kimi" });
   });
+
+  it("分别设置界面、表格和代码日志字体大小", () => {
+    render(<SystemPage activePath={["系统管理", "外观设置"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "界面文字：大" }));
+    fireEvent.click(screen.getByRole("button", { name: "表格文字：小" }));
+    fireEvent.click(screen.getByRole("button", { name: "代码与日志：大" }));
+
+    expect(document.documentElement.dataset.uiFontSize).toBe("large");
+    expect(document.documentElement.dataset.tableFontSize).toBe("small");
+    expect(document.documentElement.dataset.codeFontSize).toBe("large");
+    expect(document.documentElement.style.getPropertyValue("--ui-font-size")).toBe("16px");
+    expect(document.documentElement.style.getPropertyValue("--table-font-size")).toBe("10px");
+    expect(document.documentElement.style.getPropertyValue("--code-font-size")).toBe("14px");
+    expect(JSON.parse(localStorage.getItem(APPEARANCE_KEY))).toMatchObject({
+      uiFontSize: "large",
+      tableFontSize: "small",
+      codeFontSize: "large"
+    });
+  });
 });

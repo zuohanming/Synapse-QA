@@ -78,6 +78,19 @@ function AppearanceSettings() {
       </section>
     </div>
     <section className="resource-panel appearance-section">
+      <div className="appearance-section-heading"><Type size={18} /><div><strong>字体大小</strong><span>分别调整界面、数据表格和代码日志的文字尺寸</span></div></div>
+      <div className="font-size-setting-list">
+        {[
+          ["uiFontSize", "界面文字", "导航、按钮、表单与正文", "界面 Aa 123"],
+          ["tableFontSize", "表格文字", "列表表头、数据单元格与结构化参数", "字段名称 · status · 200"],
+          ["codeFontSize", "代码与日志", "JSON、SQL、Python 和执行日志", "const status = 200;"]
+        ].map(([key, label, description, sample]) => <article className={`font-size-setting font-size-setting-${key}`} key={key}>
+          <div><strong>{label}</strong><span>{description}</span><samp>{sample}</samp></div>
+          <div className="font-size-options">{[["small", "小"], ["standard", "标准"], ["large", "大"]].map(([value, optionLabel]) => <button aria-label={`${label}：${optionLabel}`} className={appearance[key] === value ? "active" : ""} key={value} onClick={() => update(key, value)} type="button">{optionLabel}</button>)}</div>
+        </article>)}
+      </div>
+    </section>
+    <section className="resource-panel appearance-section">
       <div className="appearance-section-heading"><LayoutTemplate size={18} /><div><strong>显示密度</strong><span>控制表格、表单和工作区的间距</span></div></div>
       <div className="density-options">{[["compact", "紧凑"], ["standard", "标准"], ["comfortable", "宽松"]].map(([value, label]) => <button className={appearance.density === value ? "active" : ""} key={value} onClick={() => update("density", value)} type="button">{label}</button>)}</div>
     </section>

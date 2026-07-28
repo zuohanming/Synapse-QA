@@ -96,6 +96,33 @@ func (s *APIAutomationService) UpdateInterface(ctx context.Context, userID int64
 	return nil
 }
 
+func (s *APIAutomationService) UpdateInterfaceConfiguration(ctx context.Context, userID int64, actor string, id int64, req model.APIInterfaceConfigurationRequest) error {
+	current, err := s.repo.GetInterface(ctx, userID, id)
+	if err != nil || !s.repo.CanAccessProject(ctx, userID, current.ProjectID) {
+		return errors.New("接口不存在或无权访问")
+	}
+	if req.Revision <= 0 {
+		return errors.New("缺少接口版本号")
+	}
+	if len(req.Configuration) == 0 || !json.Valid(req.Configuration) {
+		return errors.New("接口配置格式无效")
+	}
+	configuration := preserveMaskedAPIAuth(req.Configuration, current.Configuration)
+	configuration, err = s.protectAPIConfiguration(configuration)
+	if err != nil {
+		return errors.New("认证密钥加密失败")
+	}
+	snapshot := interfaceUpdateRequest(current)
+	if _, err := s.repo.UpdateInterfaceConfiguration(ctx, id, configuration, req.Revision, actor, snapshot); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("接口已被其他用户修改，请刷新后重试")
+		}
+		return errors.New("保存接口配置失败")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "保存接口配置", current.Name)
+	return nil
+}
+
 func (s *APIAutomationService) DeleteInterface(ctx context.Context, userID int64, actor string, id int64) error {
 	item, err := s.repo.GetInterface(ctx, userID, id)
 	if err != nil || !s.repo.CanAccessProject(ctx, userID, item.ProjectID) {

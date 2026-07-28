@@ -157,6 +157,34 @@ func (ctl *APIAutomationController) UpdateInterface(c *gin.Context) {
 	ok(c, map[string]string{"message": "接口已更新"})
 }
 
+func (ctl *APIAutomationController) UpdateInterfaceConfiguration(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	var req model.APIInterfaceConfigurationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if header := c.GetHeader("If-Match"); header != "" {
+		req.Revision, _ = strconv.ParseInt(header, 10, 64)
+	}
+	if err := ctl.service.UpdateInterfaceConfiguration(c.Request.Context(), claims.UserID, claims.Username, id, req); err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "接口已被其他用户修改，请刷新后重试" {
+			status = http.StatusConflict
+		}
+		fail(c, status, err.Error())
+		return
+	}
+	ok(c, map[string]string{"message": "接口配置已保存"})
+}
+
 func (ctl *APIAutomationController) DeleteInterface(c *gin.Context) {
 	claims, exists := claimsFromContext(c)
 	if !exists {

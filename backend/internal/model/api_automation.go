@@ -48,6 +48,11 @@ type APIInterfaceRequest struct {
 	Revision        int64           `json:"revision"`
 }
 
+type APIInterfaceConfigurationRequest struct {
+	Configuration json.RawMessage `json:"configuration"`
+	Revision      int64           `json:"revision"`
+}
+
 type APIInterfaceFilter struct {
 	ProjectID       string
 	ProductID       string

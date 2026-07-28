@@ -481,6 +481,30 @@ func (r *APIAutomationRepository) UpdateInterface(ctx context.Context, id int64,
 	return int64(version), tx.Commit()
 }
 
+func (r *APIAutomationRepository) UpdateInterfaceConfiguration(ctx context.Context, id int64, configuration json.RawMessage, revision int64, actor string, snapshot model.APIInterfaceRequest) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var version int
+	err = tx.QueryRowContext(ctx, `
+		update api_interfaces set configuration=$1,current_version=current_version+1,revision=revision+1,
+			updated_by=$2,updated_at=now()
+		where id=$3 and revision=$4 and deleted_at is null returning current_version
+	`, configuration, actor, id, revision).Scan(&version)
+	if err != nil {
+		return 0, err
+	}
+	snapshot.Configuration = configuration
+	snapshot.Revision = revision + 1
+	raw, _ := json.Marshal(snapshot)
+	if _, err = tx.ExecContext(ctx, `insert into api_interface_versions(interface_id,version,snapshot,change_summary,created_by) values($1,$2,$3,'更新接口配置',$4)`, id, version, raw, actor); err != nil {
+		return 0, err
+	}
+	return int64(version), tx.Commit()
+}
+
 func (r *APIAutomationRepository) DeleteInterface(ctx context.Context, id int64) (int64, error) {
 	result, err := r.db.ExecContext(ctx, `update api_interfaces set deleted_at=now(),updated_at=now() where id=$1 and deleted_at is null`, id)
 	if err != nil {
