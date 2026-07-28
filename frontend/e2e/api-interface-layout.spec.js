@@ -74,6 +74,13 @@ test("接口管理在桌面端保持单行搜索且列表无横向溢出", async
   }));
   expect(tableMetrics.scrollWidth).toBeLessThanOrEqual(tableMetrics.clientWidth);
 
-  await expect(page.getByRole("columnheader", { name: "最近修改" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "操作" })).toBeVisible();
+  const updatedHeader = page.getByRole("columnheader", { name: "最近修改" });
+  await expect(updatedHeader).toBeVisible();
+  await expect(updatedHeader).toBeInViewport();
+  expect(await updatedHeader.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  const operationsHeader = page.getByRole("columnheader", { name: "操作" });
+  await expect(operationsHeader).toBeVisible();
+  await expect(operationsHeader).toBeInViewport();
+  expect(await operationsHeader.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
