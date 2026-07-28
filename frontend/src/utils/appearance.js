@@ -1,7 +1,7 @@
 export const APPEARANCE_KEY = "synapse_qa_appearance";
 
 export const defaultAppearance = {
-  theme: "blue",
+  theme: "blueprint",
   uiFont: "system",
   codeFont: "consolas",
   uiFontSize: "standard",

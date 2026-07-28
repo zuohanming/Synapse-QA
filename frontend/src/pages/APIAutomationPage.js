@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlignLeft, ArrowLeft, Braces, ChevronDown, ChevronRight, Clipboard, FileJson, FlaskConical, KeyRound, Minimize2, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Save, Upload } from "lucide-react";
+import { AlignLeft, ArrowLeft, Braces, ChevronDown, ChevronRight, Clipboard, FileJson, FlaskConical, KeyRound, Lock, Minimize2, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Save, Upload } from "lucide-react";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { StateBlock } from "../components/StateBlock.js";
@@ -7,6 +7,8 @@ import { useAsyncData } from "../hooks/useAsyncData.js";
 import { apiAutomationService } from "../services/apiAutomationService.js";
 import { configService } from "../services/configService.js";
 import { pageItems } from "../utils/formatters.js";
+import { APIGlobalVariablesPage } from "./APIGlobalVariablesPage.js";
+import { APITestCasesPage } from "./APITestCasesPage.js";
 
 const emptyForm = { name: "", productId: "", moduleId: "", path: "", method: "GET", protocol: "HTTP", endpointType: "WEB", lifecycleStatus: "draft", timeoutSeconds: 30, followRedirects: true, configuration: {}, revision: 0 };
 const initialFilters = { keyword: "", projectId: "", productId: "", moduleId: "", method: "", lifecycleStatus: "", deletionState: "active" };
@@ -14,6 +16,8 @@ const initialFilters = { keyword: "", projectId: "", productId: "", moduleId: ""
 export function APIAutomationPage({ activePath }) {
   const section = activePath[1] || "接口管理";
   if (section === "接口管理") return <InterfaceManagementPage />;
+  if (section === "测试用例") return <APITestCasesPage />;
+  if (section === "全局变量") return <APIGlobalVariablesPage />;
   if (section === "请求头管理") return <RequestHeaderManagementPage />;
   return <APISectionPlaceholder section={section} />;
 }
@@ -160,7 +164,7 @@ function InterfaceManagementPage() {
   }
 
   const columns = [
-    { key: "select", width: "3%", title: <input checked={pageRows.length > 0 && pageRows.every((row) => selected.includes(row.id))} onChange={(event) => setSelected(event.target.checked ? pageRows.map((row) => row.id) : [])} type="checkbox" />, render: (row) => <input checked={selected.includes(row.id)} onChange={() => setSelected((current) => current.includes(row.id) ? current.filter((id) => id !== row.id) : [...current, row.id])} type="checkbox" /> },
+    { key: "select", width: "3%", title: <input aria-label="全选当前页接口" checked={pageRows.length > 0 && pageRows.every((row) => selected.includes(row.id))} onChange={(event) => setSelected(event.target.checked ? pageRows.map((row) => row.id) : [])} type="checkbox" />, render: (row) => <input aria-label={`选择接口 ${row.name}`} checked={selected.includes(row.id)} onChange={() => setSelected((current) => current.includes(row.id) ? current.filter((id) => id !== row.id) : [...current, row.id])} type="checkbox" /> },
     { key: "id", width: "4%", title: "ID" },
     { key: "productName", width: "12%", title: "项目/产品", render: (row) => `${row.projectName}/${row.productName}` },
     { key: "moduleName", width: "9%", title: "模块名称", render: (row) => row.moduleName || "未分组" },
@@ -213,9 +217,13 @@ function InterfaceManagementPage() {
         <FilterSelect label="数据范围" value={filters.deletionState} onChange={(value) => setFilters({ ...filters, deletionState: value })} options={[{ value: "active", label: "正常数据" }, { value: "deleted", label: "回收站" }, { value: "all", label: "全部数据" }]} />
         <div className="api-filter-actions"><button className="primary-button compact-button" type="submit">搜索</button><button className="icon-text-button compact-button" onClick={() => { setFilters(initialFilters); setApplied(initialFilters); }} type="button">重置</button></div>
       </form>
-      <div className="api-list-toolbar"><div className="api-tabs"><button className="active" type="button">接口定义</button></div><div><button className="primary-button compact-button" onClick={openCreate} type="button"><Plus size={14} />新增</button><button className="icon-text-button compact-button" disabled={busy} onClick={openCurlImport} type="button"><Upload size={14} />导入 cURL</button><button className="icon-text-button compact-button" disabled={!selected.length || !filters.productId || busy} onClick={batchMoveToCurrentProduct} type="button">移动到当前产品</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("active")} type="button">批量启用</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("disabled")} type="button">批量停用</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("deprecated")} type="button">批量废弃</button><button className="danger-button compact-button" disabled={!selected.length || busy} onClick={() => removeRows(selected)} type="button">批量删除</button><button className="icon-text-button compact-button" onClick={reload} type="button"><RefreshCw size={14} /></button></div></div>
-      {notice ? <div className="inline-notice">{notice}</div> : null}
-      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={pageRows} fitContainer emptyText="暂无接口数据" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
+      <div className="api-list-toolbar">
+        <div className="api-tabs"><button aria-current="page" className="active" type="button">接口定义</button><span>共 {total} 条</span></div>
+        <div className="api-primary-actions"><button className="primary-button compact-button" onClick={openCreate} type="button"><Plus size={14} />新增接口</button><button className="icon-text-button compact-button" disabled={busy} onClick={openCurlImport} type="button"><Upload size={14} />导入 cURL</button><button aria-label="刷新接口列表" className="icon-text-button compact-button icon-only-button" onClick={reload} title="刷新接口列表" type="button"><RefreshCw size={14} /></button></div>
+      </div>
+      {selected.length ? <div aria-label="批量操作" className="api-batch-toolbar"><strong>已选择 {selected.length} 项</strong><button className="link-button" onClick={() => setSelected([])} type="button">取消选择</button><span /><button className="icon-text-button compact-button" disabled={!filters.productId || busy} onClick={batchMoveToCurrentProduct} type="button">移动到当前产品</button><button className="icon-text-button compact-button" disabled={busy} onClick={() => batchStatus("active")} type="button">启用</button><button className="icon-text-button compact-button" disabled={busy} onClick={() => batchStatus("disabled")} type="button">停用</button><button className="icon-text-button compact-button" disabled={busy} onClick={() => batchStatus("deprecated")} type="button">废弃</button><button className="danger-button compact-button" disabled={busy} onClick={() => removeRows(selected)} type="button">删除</button></div> : null}
+      {notice ? <div aria-live="polite" className="inline-notice" role="status">{notice}</div> : null}
+      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={pageRows} emptyText="暂无接口数据" fitContainer /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
     </section>
     </div>
     {curlModal ? <CurlImportModal busy={busy} command={curlCommand} error={curlError} onChange={(value) => { setCurlCommand(value); if (curlError) setCurlError(""); }} onClose={() => setCurlModal(false)} onSubmit={importCurl} /> : null}
@@ -274,10 +282,15 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
     () => projectId ? apiAutomationService.requestHeaders.list({ projectId }) : Promise.resolve({ items: [] }),
     [projectId]
   );
-  const defaultHeaders = useMemo(() => Object.fromEntries(
+  const defaultHeaderItems = useMemo(() => (
     pageItems(defaultHeadersData)
       .filter((item) => item.enabled && item.name)
-      .map((item) => [item.name, item.value])
+      .map((item) => ({
+        key: String(item.name),
+        value: String(item.value ?? ""),
+        description: String(item.description || ""),
+        sensitive: item.sensitive === true
+      }))
   ), [defaultHeadersData]);
   const [active, setActive] = useState("headers");
   const [responseActive, setResponseActive] = useState("body");
@@ -292,6 +305,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
     script: saved.script || "",
     assertions: saved.assertions || "[]"
   });
+  const [headerRows, setHeaderRows] = useState(() => parseHeaderRows(saved));
   const [parameterRows, setParameterRows] = useState(() => parseParameterRows(saved, row.path));
   const [method, setMethod] = useState(row.method || "GET");
   const [url, setUrl] = useState(row.path || "");
@@ -315,6 +329,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       script: saved.script || "",
       assertions: saved.assertions || "[]"
     },
+    parseHeaderRows(saved),
     parseParameterRows(saved),
     saved.temporaryFiles || [],
     parseTemporaryVariableRows(saved)
@@ -323,7 +338,7 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   const [activeTaskId, setActiveTaskId] = useState("");
   const [historyDetail, setHistoryDetail] = useState(null);
   const [versionDiff, setVersionDiff] = useState(null);
-  const currentSignature = editorConfigurationSignature(config, parameterRows, temporaryFiles, temporaryVariableRows);
+  const currentSignature = editorConfigurationSignature(config, headerRows, parameterRows, temporaryFiles, temporaryVariableRows);
   const configurationDirty = currentSignature !== savedSignature;
   const temporaryVariablesDirty = stableConfigurationValue(temporaryVariableRows) !== savedTemporaryVariablesSignature;
 
@@ -366,6 +381,9 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
   }
 
   function configurationPayload() {
+    const enabledHeaders = Object.fromEntries(headerRows
+      .filter((item) => item.enabled !== false && item.key.trim())
+      .map((item) => [item.key.trim(), item.value]));
     const enabledParams = Object.fromEntries(parameterRows
       .filter((item) => item.enabled !== false && item.key.trim())
       .map((item) => [item.key.trim(), item.value]));
@@ -373,6 +391,8 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       ...saved,
       ...config,
       auth: JSON.parse(config.auth || "{\"type\":\"none\"}"),
+      headers: JSON.stringify(enabledHeaders, null, 2),
+      headersMeta: headerRows,
       params: JSON.stringify(enabledParams, null, 2),
       paramsMeta: parameterRows,
       temporaryVariables: temporaryVariableRows,
@@ -414,10 +434,14 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
     const signatureToSave = currentSignature;
     try {
       const payload = configurationPayload();
+      const duplicateHeader = findDuplicateHeader(headerRows);
+      if (duplicateHeader) throw new Error(`请求头名称 ${duplicateHeader} 重复`);
+      const invalidHeader = headerRows.find((item) => item.key.trim() && !isValidHeaderName(item.key));
+      if (invalidHeader) throw new Error(`请求头名称 ${invalidHeader.key.trim()} 格式不正确`);
       const duplicateParam = parameterRows.find((item, index) => item.key.trim() && parameterRows.some((other, otherIndex) => otherIndex !== index && other.key.trim() === item.key.trim()));
       if (duplicateParam) throw new Error(`参数名 ${duplicateParam.key.trim()} 重复`);
       buildTemporaryVariables(temporaryVariableRows);
-      for (const [key, label] of [["headers", "请求头"], ["jsonpath", "JSONPath 提取"], ["regex", "正则提取"], ["assertions", "断言"]]) {
+      for (const [key, label] of [["jsonpath", "JSONPath 提取"], ["regex", "正则提取"], ["assertions", "断言"]]) {
         try {
           JSON.parse(config[key] || (["jsonpath", "regex", "assertions"].includes(key) ? "[]" : "{}"));
         } catch {
@@ -593,11 +617,11 @@ function InterfaceDetailWorkspace({ row, projectId, onBack }) {
       <div className="api-debugger-request-bar"><select aria-label="请求方法" className="text-input" value={method} onChange={(event) => setMethod(event.target.value)}>{["GET", "POST", "PUT", "DELETE", "PATCH"].map((item) => <option key={item}>{item}</option>)}</select><input aria-label="请求 URL" className="text-input api-debugger-url" value={url} onChange={(event) => { const nextUrl = event.target.value; setUrl(nextUrl); syncParametersFromUrl(nextUrl); }} /><select aria-label="测试环境" className="text-input" value={testObjectId} onChange={(event) => setTestObjectId(event.target.value)}><option value="">选择测试环境</option>{testObjects.map((item) => <option key={item.id} value={item.id}>{item.envName}</option>)}</select><span className={`api-save-state ${configurationDirty ? "dirty" : ""}`}>{configurationDirty ? "有未保存修改" : "配置已保存"}</span><button aria-label="保存配置" className="icon-text-button compact-button" disabled={busy || !configurationDirty} onClick={saveConfiguration} type="button"><Save size={14} />保存</button>{activeTaskId ? <button className="danger-button compact-button" onClick={cancelDebug} type="button">取消</button> : <button aria-label="执行接口" className="success-button api-send-button" disabled={busy} onClick={execute} type="button"><Play size={14} />{busy ? "发送中" : "发送"}</button>}</div>
       <div className="api-debugger-columns">
         <main className="api-detail-editor api-request-pane">
-          <nav className="api-request-tabs">{detailSections.map(([key, title]) => <button className={active === key ? "active" : ""} key={key} onClick={() => setActive(key)} type="button">{title}{key === "variables" && temporaryVariableRows.length ? <small>{temporaryVariableRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "params" && parameterRows.length ? <small>{parameterRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "body" && config.bodyType !== "none" && config.body.trim() ? <i className="api-tab-status" aria-label="请求体已配置" /> : null}</button>)}</nav>
+          <nav className="api-request-tabs">{detailSections.map(([key, title]) => <button className={active === key ? "active" : ""} key={key} onClick={() => setActive(key)} type="button">{title}{key === "variables" && temporaryVariableRows.length ? <small>{temporaryVariableRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "headers" ? <small>{requestHeaderCount(headerRows, defaultHeaderItems)}</small> : null}{key === "params" && parameterRows.length ? <small>{parameterRows.filter((item) => item.enabled !== false && item.key.trim()).length}</small> : null}{key === "body" && config.bodyType !== "none" && config.body.trim() ? <i className="api-tab-status" aria-label="请求体已配置" /> : null}</button>)}</nav>
           <div className="api-request-pane-content">
-            {active === "body" || active === "variables" ? null : <div className="api-editor-tip">{active === "headers" ? `已加载 ${Object.keys(defaultHeaders).length} 个项目默认请求头；接口内同名请求头优先。` : "配置修改后请点击顶部保存；发送时使用当前编辑内容。"}</div>}
+            {active === "body" || active === "variables" || active === "headers" ? null : <div className="api-editor-tip">配置修改后请点击顶部保存；发送时使用当前编辑内容。</div>}
             {active === "body" && config.bodyType === "form_data" ? <div className="api-temp-files"><label className="icon-text-button compact-button">上传临时文件<input disabled={busy} hidden onChange={uploadTemporaryFile} type="file" /></label>{temporaryFiles.map((file) => <span key={file.id}>{file.originalName}（{Math.ceil(file.sizeBytes / 1024)} KB）<button className="link-button danger-link" onClick={() => removeTemporaryFile(file)} type="button">删除</button></span>)}</div> : null}
-            {active === "variables" ? <TemporaryVariableEditor rows={temporaryVariableRows} dirty={temporaryVariablesDirty} saving={busy} onChange={setTemporaryVariableRows} onSave={saveConfiguration} /> : active === "body" ? <RequestBodyEditor bodyType={config.bodyType} value={config.body} onBodyTypeChange={(bodyType) => setConfig({ ...config, bodyType })} onChange={(body) => setConfig({ ...config, body })} onCopyToVariables={copyBodyToTemporaryVariables} /> : active === "params" ? <ParameterTableEditor rows={parameterRows} onChange={updateParametersAndUrl} /> : active === "jsonpath" || active === "regex" ? <ExtractorRuleEditor type={active} value={config[active]} dirty={configurationDirty} saving={busy} onChange={(value) => setConfig({ ...config, [active]: value })} onSave={saveConfiguration} /> : active === "assertions" ? <AssertionRuleEditor value={config.assertions} onChange={(value) => setConfig({ ...config, assertions: value })} /> : active === "versions" ? <VersionPanel versions={versions} diff={versionDiff} busy={busy} onCompare={compareVersion} onRestore={restoreVersion} /> : <textarea className="api-config-editor" spellCheck="false" value={config[active]} onChange={(event) => setConfig({ ...config, [active]: event.target.value })} />}
+            {active === "variables" ? <TemporaryVariableEditor rows={temporaryVariableRows} dirty={temporaryVariablesDirty} saving={busy} onChange={setTemporaryVariableRows} onSave={saveConfiguration} /> : active === "headers" ? <RequestHeaderEditor rows={headerRows} defaultHeaders={defaultHeaderItems} url={url} onChange={setHeaderRows} /> : active === "body" ? <RequestBodyEditor bodyType={config.bodyType} value={config.body} onBodyTypeChange={(bodyType) => setConfig({ ...config, bodyType })} onChange={(body) => setConfig({ ...config, body })} onCopyToVariables={copyBodyToTemporaryVariables} /> : active === "params" ? <ParameterTableEditor rows={parameterRows} onChange={updateParametersAndUrl} /> : active === "jsonpath" || active === "regex" ? <ExtractorRuleEditor type={active} value={config[active]} dirty={configurationDirty} saving={busy} onChange={(value) => setConfig({ ...config, [active]: value })} onSave={saveConfiguration} /> : active === "assertions" ? <AssertionRuleEditor value={config.assertions} onChange={(value) => setConfig({ ...config, assertions: value })} /> : active === "versions" ? <VersionPanel versions={versions} diff={versionDiff} busy={busy} onCompare={compareVersion} onRestore={restoreVersion} /> : <textarea className="api-config-editor" spellCheck="false" value={config[active]} onChange={(event) => setConfig({ ...config, [active]: event.target.value })} />}
           </div>
         </main>
         <aside className="api-result-panel api-response-pane">
@@ -756,6 +780,30 @@ function parseParameterRows(configuration, requestUrl = "") {
   return rows;
 }
 
+export function parseHeaderRows(configuration) {
+  if (Array.isArray(configuration.headersMeta)) {
+    return configuration.headersMeta
+      .filter((item) => item && (item.key || item.value || item.description))
+      .map((item) => ({
+        key: String(item.key || ""),
+        value: String(item.value ?? ""),
+        description: String(item.description || ""),
+        enabled: item.enabled !== false
+      }));
+  }
+  try {
+    const source = typeof configuration.headers === "string" ? JSON.parse(configuration.headers || "{}") : configuration.headers || {};
+    return Object.entries(source).map(([key, value]) => ({
+      key,
+      value: String(value ?? ""),
+      description: "",
+      enabled: true
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export function parseTemporaryVariableRows(configuration) {
   if (Array.isArray(configuration.temporaryVariables)) {
     return configuration.temporaryVariables
@@ -794,13 +842,13 @@ function syncUrlFromParameterRows(currentUrl, previousRows, nextRows) {
 }
 
 function isConfigurationPersisted(actual, expected) {
-  const keys = ["headers", "params", "paramsMeta", "body", "bodyType", "jsonpath", "regex", "script", "assertions", "temporaryVariables", "temporaryFiles"];
+  const keys = ["headers", "headersMeta", "params", "paramsMeta", "body", "bodyType", "jsonpath", "regex", "script", "assertions", "temporaryVariables", "temporaryFiles"];
   return keys.every((key) => stableConfigurationValue(actual[key] ?? null) === stableConfigurationValue(expected[key] ?? null));
 }
 
-function editorConfigurationSignature(config, parameterRows, temporaryFiles, temporaryVariables) {
-  const { params: _legacyParams, ...editableConfig } = config;
-  return stableConfigurationValue({ config: editableConfig, parameterRows, temporaryFiles, temporaryVariables });
+function editorConfigurationSignature(config, headerRows, parameterRows, temporaryFiles, temporaryVariables) {
+  const { headers: _legacyHeaders, params: _legacyParams, ...editableConfig } = config;
+  return stableConfigurationValue({ config: editableConfig, headerRows, parameterRows, temporaryFiles, temporaryVariables });
 }
 
 function stableConfigurationValue(value) {
@@ -870,18 +918,20 @@ function TemporaryVariableEditor({ rows, dirty, saving, onChange, onSave }) {
       <div><strong>接口调试变量</strong><span>保存到当前接口，用于预览、发送和 cURL 导出，优先级最高</span></div>
       <div className="api-variable-toolbar-actions"><span className={`api-save-state ${dirty ? "dirty" : ""}`}>{dirty ? "有未保存修改" : "已保存"}</span><button aria-label="保存临时变量" className="icon-text-button compact-button" disabled={saving || !dirty} onClick={onSave} type="button"><Save size={13} />{saving ? "保存中" : "保存"}</button>{rows.length ? <button className="link-button danger-link" onClick={() => onChange([])} type="button">清空变量</button> : null}</div>
     </header>
-    <div className="api-variable-table" role="table" aria-label="临时变量列表">
-      <div className="api-variable-table-head" role="row"><span>启用</span><span>变量名</span><span>类型</span><span>值</span><span>说明</span><span>操作</span></div>
-      {visibleRows.map((row, index) => <div className={`api-variable-row ${row.placeholder ? "placeholder" : ""} ${duplicateKeys.has(row.key.trim()) ? "invalid" : ""}`} role="row" key={index}>
-        <input aria-label={`启用临时变量 ${index + 1}`} checked={row.enabled !== false} disabled={row.placeholder} onChange={(event) => updateRow(index, "enabled", event.target.checked)} type="checkbox" />
-        <input aria-label={`临时变量名 ${index + 1}`} onChange={(event) => updateRow(index, "key", event.target.value)} placeholder={row.placeholder ? "变量名" : ""} value={row.key} />
-        <select aria-label={`临时变量类型 ${index + 1}`} onChange={(event) => updateRow(index, "type", event.target.value)} value={row.type || "string"}><option value="string">String</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="json">JSON</option></select>
-        {row.type === "boolean"
-          ? <select aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} value={row.value || "true"}><option value="true">true</option><option value="false">false</option></select>
-          : <input aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} placeholder={row.type === "json" ? "{\"key\":\"value\"}" : row.placeholder ? "变量值" : ""} value={row.value} />}
-        <input aria-label={`临时变量说明 ${index + 1}`} onChange={(event) => updateRow(index, "description", event.target.value)} placeholder={row.placeholder ? "可选说明" : ""} value={row.description} />
-        {row.placeholder ? <span /> : <button className="link-button danger-link" onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))} type="button">删除</button>}
-      </div>)}
+    <div className="api-variable-scroll">
+      <div className="api-variable-table" role="table" aria-label="临时变量列表">
+        <div className="api-variable-table-head" role="row"><span>启用</span><span>变量名</span><span>类型</span><span>值</span><span>说明</span><span>操作</span></div>
+        {visibleRows.map((row, index) => <div className={`api-variable-row ${row.placeholder ? "placeholder" : ""} ${duplicateKeys.has(row.key.trim()) ? "invalid" : ""}`} role="row" key={index}>
+          <input aria-label={`启用临时变量 ${index + 1}`} checked={row.enabled !== false} disabled={row.placeholder} onChange={(event) => updateRow(index, "enabled", event.target.checked)} type="checkbox" />
+          <input aria-label={`临时变量名 ${index + 1}`} onChange={(event) => updateRow(index, "key", event.target.value)} placeholder={row.placeholder ? "变量名" : ""} value={row.key} />
+          <select aria-label={`临时变量类型 ${index + 1}`} onChange={(event) => updateRow(index, "type", event.target.value)} value={row.type || "string"}><option value="string">String</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="json">JSON</option></select>
+          {row.type === "boolean"
+            ? <select aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} value={row.value || "true"}><option value="true">true</option><option value="false">false</option></select>
+            : <input aria-label={`临时变量值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} placeholder={row.type === "json" ? "{\"key\":\"value\"}" : row.placeholder ? "变量值" : ""} value={row.value} />}
+          <input aria-label={`临时变量说明 ${index + 1}`} onChange={(event) => updateRow(index, "description", event.target.value)} placeholder={row.placeholder ? "可选说明" : ""} value={row.description} />
+          {row.placeholder ? <span /> : <button className="link-button danger-link" onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))} type="button">删除</button>}
+        </div>)}
+      </div>
     </div>
     <footer><span>共 {rows.length} 个变量，已启用 {enabledCount} 个</span>{duplicateKeys.size ? <strong>变量名不能重复</strong> : <span>引用格式：{"${variable_name}"}</span>}</footer>
   </section>;
@@ -951,6 +1001,109 @@ function RequestBodyEditor({ bodyType, value, onBodyTypeChange, onChange, onCopy
           <div className="api-code-gutter" aria-hidden="true"><div style={{ transform: `translateY(-${scrollTop}px)` }}>{Array.from({ length: lineCount }, (_, index) => <span key={index}>{index + 1}</span>)}</div></div>
           <textarea aria-label="请求体内容" onChange={(event) => { onChange(event.target.value); setValidation(null); }} onKeyDown={handleKeyDown} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} placeholder={isJson ? "{\n  \"key\": \"value\"\n}" : "请输入请求体内容"} spellCheck="false" value={content} />
         </div>}
+  </section>;
+}
+
+function automaticRequestHeaders(url) {
+  let host = "根据 URL 自动生成";
+  try {
+    host = new URL(url, "http://synapse.local").host || host;
+  } catch {
+    // URL 尚未输入完整时展示生成规则。
+  }
+  return [
+    { key: "Host", value: host },
+    { key: "User-Agent", value: "Synapse-QA-Executor" },
+    { key: "Content-Length", value: "发送时自动计算" }
+  ];
+}
+
+function isValidHeaderName(value) {
+  return /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(String(value || "").trim());
+}
+
+function findDuplicateHeader(rows) {
+  const names = rows.map((item) => item.key.trim().toLowerCase()).filter(Boolean);
+  return rows.find((item) => {
+    const key = item.key.trim().toLowerCase();
+    return key && names.indexOf(key) !== names.lastIndexOf(key);
+  })?.key.trim() || "";
+}
+
+function requestHeaderCount(rows, defaultHeaders) {
+  const customNames = new Set(rows.map((item) => item.key.trim().toLowerCase()).filter(Boolean));
+  const inherited = defaultHeaders.filter((item) => !customNames.has(item.key.trim().toLowerCase())).length;
+  return automaticRequestHeaders("").length + inherited + rows.filter((item) => item.key.trim()).length;
+}
+
+function RequestHeaderEditor({ rows, defaultHeaders, url, onChange }) {
+  const updateRow = (index, key, value) => {
+    if (index === rows.length) {
+      onChange([...rows, { key: "", value: "", description: "", enabled: true, [key]: value }]);
+      return;
+    }
+    const updated = { ...rows[index], [key]: value };
+    if (!updated.key.trim() && !updated.value.trim() && !updated.description.trim()) {
+      onChange(rows.filter((_, itemIndex) => itemIndex !== index));
+      return;
+    }
+    onChange(rows.map((row, itemIndex) => itemIndex === index ? updated : row));
+  };
+  const duplicateNames = new Set(rows
+    .map((item) => item.key.trim().toLowerCase())
+    .filter((key, _index, values) => key && values.indexOf(key) !== values.lastIndexOf(key)));
+  const customNames = new Set(rows.map((item) => item.key.trim().toLowerCase()).filter(Boolean));
+  const inheritedHeaders = defaultHeaders.filter((item) => !customNames.has(item.key.trim().toLowerCase()));
+  const runtimeHeaders = automaticRequestHeaders(url);
+  const visibleRows = [...rows, { key: "", value: "", description: "", enabled: true, placeholder: true }];
+  const overrideHeader = (item) => onChange([...rows, {
+    key: item.key,
+    value: item.value,
+    description: item.description,
+    enabled: true
+  }]);
+  return <section className="api-header-editor">
+    <header className="api-header-toolbar">
+      <div><strong>请求头列表</strong><span>自动生成项和项目默认项只读；接口请求头可覆盖项目默认值</span></div>
+      {rows.length ? <button className="link-button danger-link" onClick={() => onChange([])} type="button">清空接口请求头</button> : null}
+    </header>
+    <div className="api-header-summary">
+      <span><i className="runtime" />自动生成 {runtimeHeaders.length}</span>
+      <span><i className="project" />项目默认 {inheritedHeaders.length}</span>
+      <span><i className="interface" />接口自定义 {rows.filter((item) => item.key.trim()).length}</span>
+      <small>请求头名称不区分大小写</small>
+    </div>
+    <div className="api-header-scroll">
+      <div className="api-header-table">
+        <div className="api-header-table-head"><span>启用</span><span>请求头名称</span><span>请求头值</span><span>来源</span><span></span></div>
+        {runtimeHeaders.map((item) => <div className="api-header-row locked" key={`runtime-${item.key}`}>
+          <label><input aria-label={`自动请求头 ${item.key}`} checked disabled readOnly type="checkbox" /></label>
+          <div className="api-header-locked-value"><span>{item.key}</span><Lock size={12} /></div>
+          <div className="api-header-locked-value"><span>{item.value}</span><Lock size={12} /></div>
+          <span className="api-header-source runtime">自动生成</span><Lock className="api-header-row-lock" size={13} />
+        </div>)}
+        {inheritedHeaders.map((item) => <div className="api-header-row locked" key={`project-${item.key}`}>
+          <label><input aria-label={`项目请求头 ${item.key}`} checked disabled readOnly type="checkbox" /></label>
+          <div className="api-header-locked-value"><span>{item.key}</span><Lock size={12} /></div>
+          <div className="api-header-locked-value"><span>{item.sensitive ? "••••••••" : item.value}</span><Lock size={12} /></div>
+          <span className="api-header-source project">项目默认</span>
+          <button aria-label={`覆盖项目请求头 ${item.key}`} className="api-header-override" onClick={() => overrideHeader(item)} type="button">覆盖</button>
+        </div>)}
+        {visibleRows.map((row, index) => {
+          const normalizedName = row.key.trim().toLowerCase();
+          const duplicate = duplicateNames.has(normalizedName);
+          const invalid = Boolean(row.key.trim()) && !isValidHeaderName(row.key);
+          return <div className={`api-header-row ${row.enabled === false ? "disabled" : ""} ${row.placeholder ? "placeholder" : ""}`} key={`custom-${index}`}>
+            <label><input aria-label={`启用接口请求头 ${index + 1}`} checked={row.enabled !== false} disabled={row.placeholder} onChange={(event) => updateRow(index, "enabled", event.target.checked)} type="checkbox" /></label>
+            <div><input aria-label={`接口请求头名称 ${index + 1}`} className={duplicate || invalid ? "invalid" : ""} onChange={(event) => updateRow(index, "key", event.target.value)} placeholder={row.placeholder ? "请求头名称" : "例如 Authorization"} spellCheck="false" value={row.key} />{duplicate ? <small>名称重复</small> : invalid ? <small>名称格式不正确</small> : null}</div>
+            <input aria-label={`接口请求头值 ${index + 1}`} onChange={(event) => updateRow(index, "value", event.target.value)} placeholder={row.placeholder ? "值，支持 ${变量名}" : "请求头值"} spellCheck="false" value={row.value} />
+            <span className="api-header-source interface">{row.placeholder ? "新增" : "接口自定义"}</span>
+            {row.placeholder ? <span /> : <button aria-label={`删除接口请求头 ${row.key || index + 1}`} onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))} type="button">−</button>}
+          </div>;
+        })}
+      </div>
+    </div>
+    <footer className="api-header-footer"><span>发送时按 自动生成 → 项目默认 → 接口自定义 合并，后者覆盖同名项</span><span>输入最后一行可继续添加</span></footer>
   </section>;
 }
 

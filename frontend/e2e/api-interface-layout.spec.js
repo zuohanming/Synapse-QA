@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const apiBase = "http://127.0.0.1:8080/api";
+const longPath = "/api/v1/auth/organizations/primary/workspaces/current/sessions/login-with-a-very-long-path";
 
 async function mockApi(page) {
   await page.route(`${apiBase}/auth/me`, async (route) => {
@@ -37,7 +38,7 @@ async function mockApi(page) {
             productName: "示例产品",
             moduleName: "登录模块",
             name: "登录接口",
-            path: "/api/v1/auth/login",
+            path: longPath,
             method: "POST",
             endpointType: "WEB",
             lifecycleStatus: "active",
@@ -83,4 +84,46 @@ test("接口管理在桌面端保持单行搜索且列表无横向溢出", async
   await expect(operationsHeader).toBeVisible();
   await expect(operationsHeader).toBeInViewport({ ratio: 1 });
   expect(await operationsHeader.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  for (const name of ["调试", "编辑", "删除"]) {
+    const button = page.getByRole("button", { name, exact: true });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(1440);
+  }
+
+  await expect(page.getByRole("checkbox", { name: "全选当前页接口" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "选择接口 登录接口" })).toBeVisible();
+
+  const pathContent = page.locator(".api-interface-list .data-table tbody td:nth-child(6) .table-cell-content");
+  expect(await pathContent.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await pathContent.hover();
+  await expect(page.getByRole("tooltip")).toContainText(longPath);
+  await page.getByRole("columnheader", { name: "方法 / 路径" }).hover();
+  await pathContent.focus();
+  await expect(page.getByRole("tooltip")).toContainText(longPath);
+});
+
+test("接口管理按内容容器宽度降为单列且页面无横向溢出", async ({ page }) => {
+  await mockApi(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("synapse_qa_token", "e2e-token");
+  });
+  await page.setViewportSize({ width: 1100, height: 900 });
+
+  await page.goto("/#/接口自动化/接口管理");
+  const list = page.locator(".api-interface-list");
+  const filters = page.locator(".api-interface-filter > *");
+  await expect(filters).toHaveCount(7);
+  expect(await list.evaluate((element) => element.clientWidth)).toBeLessThan(900);
+
+  const filterTops = await filters.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().top));
+  expect(new Set(filterTops).size).toBe(7);
+
+  const pageMetrics = await page.locator("html").evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth
+  }));
+  expect(pageMetrics.scrollWidth).toBeLessThanOrEqual(pageMetrics.clientWidth);
 });

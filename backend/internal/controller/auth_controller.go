@@ -57,3 +57,21 @@ func (ctl *AuthController) Me(c *gin.Context) {
 	}
 	ok(c, user)
 }
+
+func (ctl *AuthController) ChangePassword(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	var req model.ChangePasswordRequest
+	if c.ShouldBindJSON(&req) != nil {
+		fail(c, http.StatusBadRequest, "密码参数无效")
+		return
+	}
+	result, err := ctl.systemService.ChangePassword(c.Request.Context(), claims, req)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, result)
+}

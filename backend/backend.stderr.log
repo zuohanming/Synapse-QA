@@ -1,1 +1,2 @@
-2026/07/27 18:50:05 Synapse QA API å·²å¯åŠ¨ï¼šhttp://127.0.0.1:8080
+2026/07/28 10:53:56 è¿æ¥ PostgreSQL å¤±è´¥ï¼šfailed to connect to `user=postgres database=synapse_qa`: 127.0.0.1:5432 (127.0.0.1): failed SASL auth: ÖÂÃü´íÎó: ÓÃ»§ "postgres" Password ÈÏÖ¤Ê§°Ü (SQLSTATE 28P01)
+è¯·è®¾ç½® DATABASE_URLï¼Œä¾‹å¦‚ postgres://ç”¨æˆ·å:å¯†ç @127.0.0.1:5432/synapse_qa?sslmode=disable

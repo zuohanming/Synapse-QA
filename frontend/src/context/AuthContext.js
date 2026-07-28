@@ -1,5 +1,5 @@
 import { createContext, useCallback, useEffect, useMemo, useState } from "react";
-import { currentUser, login as loginRequest, logout as clearSession } from "../services/authService.js";
+import { changePassword as changePasswordRequest, currentUser, login as loginRequest, logout as clearSession } from "../services/authService.js";
 import { getToken } from "../services/httpClient.js";
 
 export const AuthContext = createContext(null);
@@ -39,8 +39,12 @@ export function AuthProvider({ children }) {
     clearSession();
     setUser(null);
   }, []);
+  const changePassword = useCallback(async (payload) => {
+    const nextUser = await changePasswordRequest(payload);
+    setUser(nextUser);
+  }, []);
 
-  const value = useMemo(() => ({ user, bootstrapping, login, logout }), [user, bootstrapping, login, logout]);
+  const value = useMemo(() => ({ user, bootstrapping, login, logout, changePassword }), [user, bootstrapping, login, logout, changePassword]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

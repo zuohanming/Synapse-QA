@@ -52,6 +52,11 @@ SIDEBAR = "#efefec"
 SIDEBAR_MUTED = "#6f6f69"
 
 
+def resource_path(relative_path: str) -> Path:
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base_path / relative_path
+
+
 class QueueLogHandler(logging.Handler):
     def __init__(self, log_queue: queue.Queue[str]) -> None:
         super().__init__()
@@ -68,6 +73,14 @@ class ExecutorGui:
         self.root.geometry("1180x740")
         self.root.minsize(1020, 640)
         self.root.configure(bg=BG)
+        self._window_icon: tk.PhotoImage | None = None
+        icon_png_path = resource_path("assets/executor-icon.png")
+        if icon_png_path.exists():
+            self._window_icon = tk.PhotoImage(file=str(icon_png_path))
+            self.root.iconphoto(True, self._window_icon)
+        icon_path = resource_path("assets/executor-icon.ico")
+        if icon_path.exists():
+            self.root.iconbitmap(default=str(icon_path))
         self.root.option_add("*Font", ("Microsoft YaHei UI", 10))
         self.root.option_add("*TCombobox*Listbox.font", ("Microsoft YaHei UI", 10))
 

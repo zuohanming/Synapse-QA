@@ -16,13 +16,13 @@ import (
 
 type APIAutomationService struct {
 	repo         *repository.APIAutomationRepository
-	systemRepo   OperationLogger
+	systemRepo   *repository.SystemRepository
 	secretKey    []byte
 	executorRepo *repository.ExecutorRepository
 	callbackBase string
 }
 
-func NewAPIAutomationService(repo *repository.APIAutomationRepository, systemRepo OperationLogger, secretKey ...[]byte) *APIAutomationService {
+func NewAPIAutomationService(repo *repository.APIAutomationRepository, systemRepo *repository.SystemRepository, secretKey ...[]byte) *APIAutomationService {
 	key := []byte("synapse-api-automation-local-secret")
 	if len(secretKey) > 0 && len(secretKey[0]) > 0 {
 		key = secretKey[0]

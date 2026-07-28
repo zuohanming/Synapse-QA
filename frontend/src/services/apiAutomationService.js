@@ -72,5 +72,25 @@ export const apiAutomationService = {
     create: (body) => request("/api-automation/project-headers", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => request(`/api-automation/project-headers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     remove: (id) => request(`/api-automation/project-headers/${id}`, { method: "DELETE" })
+  },
+  globalVariables: {
+    list: (params = {}) => request(`/api-automation/global-variables${toQuery(params)}`),
+    create: (body) => request("/api-automation/global-variables", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => request(`/api-automation/global-variables/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    remove: (id) => request(`/api-automation/global-variables/${id}`, { method: "DELETE" })
+  },
+  testCases: {
+    list: (params = {}) => request(`/api-automation/test-cases${toQuery(params)}`),
+    get: (id) => request(`/api-automation/test-cases/${id}`),
+    create: (body) => request("/api-automation/test-cases", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => request(`/api-automation/test-cases/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    remove: (id) => request(`/api-automation/test-cases/${id}`, { method: "DELETE" }),
+    validate: (id) => request(`/api-automation/test-cases/${id}/validate`, { method: "POST" }),
+    publish: (id, body) => request(`/api-automation/test-cases/${id}/publish`, { method: "POST", body: JSON.stringify(body) }),
+    versions: (id) => request(`/api-automation/test-cases/${id}/versions`)
+  },
+  testRuns: {
+    start: (body) => request("/api-automation/test-runs", { method: "POST", body: JSON.stringify(body) }),
+    get: (batchId) => request(`/api-automation/test-runs/${encodeURIComponent(batchId)}`)
   }
 };

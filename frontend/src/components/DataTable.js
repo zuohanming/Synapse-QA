@@ -36,7 +36,7 @@ export function DataTable({ columns, rows, rowKey = "id", emptyText = "暂无数
               <tr key={row[rowKey]}>
                 {columns.map((column) => (
                   <td className={column.className} key={column.key}>
-                    <div className={column.key === "actions" || column.key === "select" ? "table-cell-content table-cell-actions" : "table-cell-content"} data-overflow-tooltip={column.key === "actions" || column.key === "select" ? undefined : "auto"} tabIndex={column.key === "actions" || column.key === "select" ? undefined : 0}>
+                    <div className={["actions", "operations", "select"].includes(column.key) ? "table-cell-content table-cell-actions" : "table-cell-content"} data-overflow-tooltip={["actions", "operations", "select"].includes(column.key) ? undefined : "auto"} tabIndex={["actions", "operations", "select"].includes(column.key) ? undefined : 0}>
                       {column.render ? column.render(row) : row[column.key]}
                     </div>
                   </td>

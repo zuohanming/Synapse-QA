@@ -15,16 +15,27 @@ func NewNotificationRepository(db *sql.DB) *NotificationRepository {
 
 func (r *NotificationRepository) Create(ctx context.Context, req model.NotificationCreate) (model.Notification, error) {
 	row := r.db.QueryRowContext(ctx, `insert into notifications(user_id,type,level,title,content,target_type,target_id,target_url)
-		select u.id,$2,$3,$4,$5,$6,$7,$8 from users u left join notification_preferences p on p.user_id=u.id where u.username=$1 and
-		(case when $2='execution.success' then coalesce(p.execution_success,true) when $2='execution.failure' then coalesce(p.execution_failure,true) when $2 like 'executor.%' then coalesce(p.executor_alert,true) when $2='system' then coalesce(p.system_notice,true) else true end)
+		select u.id,$2,$3,$4,$5,$6,$7,$8 from users u
+		left join notification_preferences p on p.user_id=u.id
+		left join system_setting_groups s on s.group_key='notification'
+		where u.username=$1 and
+		(case
+		 when $2='execution.success' then case when coalesce(p.use_system_defaults,true) then coalesce((s.value->>'executionSuccess')::boolean,true) else p.execution_success end
+		 when $2='execution.failure' then case when coalesce(p.use_system_defaults,true) then coalesce((s.value->>'executionFailure')::boolean,true) else p.execution_failure end
+		 when $2 like 'executor.%' then case when coalesce(p.use_system_defaults,true) then coalesce((s.value->>'executorOffline')::boolean,true) else p.executor_alert end
+		 when $2='system' then true
+		 else true end)
 		returning id,user_id,type,level,title,content,target_type,target_id,target_url,is_read,read_at,created_at`, req.Username, req.Type, req.Level, req.Title, req.Content, req.TargetType, req.TargetID, req.TargetURL)
 	return scanNotification(row)
 }
 
 func (r *NotificationRepository) CreateForAll(ctx context.Context, req model.NotificationCreate) error {
 	_, err := r.db.ExecContext(ctx, `insert into notifications(user_id,type,level,title,content,target_type,target_id,target_url)
-		select u.id,$1,$2,$3,$4,$5,$6,$7 from users u left join notification_preferences p on p.user_id=u.id where u.status='active' and
-		(case when $1 like 'executor.%' then coalesce(p.executor_alert,true) when $1='system' then coalesce(p.system_notice,true) else true end)`, req.Type, req.Level, req.Title, req.Content, req.TargetType, req.TargetID, req.TargetURL)
+		select u.id,$1,$2,$3,$4,$5,$6,$7 from users u
+		left join notification_preferences p on p.user_id=u.id
+		left join system_setting_groups s on s.group_key='notification'
+		where u.status='active' and
+		(case when $1 like 'executor.%' then case when coalesce(p.use_system_defaults,true) then coalesce((s.value->>'executorOffline')::boolean,true) else p.executor_alert end when $1='system' then true else true end)`, req.Type, req.Level, req.Title, req.Content, req.TargetType, req.TargetID, req.TargetURL)
 	return err
 }
 
@@ -68,11 +79,23 @@ func (r *NotificationRepository) Delete(ctx context.Context, userID, id int64) e
 
 func (r *NotificationRepository) GetPreferences(ctx context.Context, userID int64) (model.NotificationPreference, error) {
 	var p model.NotificationPreference
-	err := r.db.QueryRowContext(ctx, `insert into notification_preferences(user_id) values($1) on conflict(user_id) do update set user_id=excluded.user_id returning execution_success,execution_failure,executor_alert,system_notice`, userID).Scan(&p.ExecutionSuccess, &p.ExecutionFailure, &p.ExecutorAlert, &p.SystemNotice)
+	err := r.db.QueryRowContext(ctx, `
+		with pref as (
+			insert into notification_preferences(user_id) values($1)
+			on conflict(user_id) do update set user_id=excluded.user_id
+			returning use_system_defaults,execution_success,execution_failure,executor_alert,system_notice
+		)
+		select pref.use_system_defaults,
+		  case when pref.use_system_defaults then coalesce((s.value->>'executionSuccess')::boolean,true) else pref.execution_success end,
+		  case when pref.use_system_defaults then coalesce((s.value->>'executionFailure')::boolean,true) else pref.execution_failure end,
+		  case when pref.use_system_defaults then coalesce((s.value->>'executorOffline')::boolean,true) else pref.executor_alert end,
+		  case when pref.use_system_defaults then true else pref.system_notice end
+		from pref left join system_setting_groups s on s.group_key='notification'
+	`, userID).Scan(&p.UseSystemDefaults, &p.ExecutionSuccess, &p.ExecutionFailure, &p.ExecutorAlert, &p.SystemNotice)
 	return p, err
 }
 func (r *NotificationRepository) UpdatePreferences(ctx context.Context, userID int64, p model.NotificationPreference) error {
-	_, err := r.db.ExecContext(ctx, `insert into notification_preferences(user_id,execution_success,execution_failure,executor_alert,system_notice) values($1,$2,$3,$4,$5) on conflict(user_id) do update set execution_success=$2,execution_failure=$3,executor_alert=$4,system_notice=$5,updated_at=now()`, userID, p.ExecutionSuccess, p.ExecutionFailure, p.ExecutorAlert, p.SystemNotice)
+	_, err := r.db.ExecContext(ctx, `insert into notification_preferences(user_id,use_system_defaults,execution_success,execution_failure,executor_alert,system_notice) values($1,$2,$3,$4,$5,$6) on conflict(user_id) do update set use_system_defaults=$2,execution_success=$3,execution_failure=$4,executor_alert=$5,system_notice=$6,updated_at=now()`, userID, p.UseSystemDefaults, p.ExecutionSuccess, p.ExecutionFailure, p.ExecutorAlert, p.SystemNotice)
 	return err
 }
 

@@ -13,6 +13,12 @@ export async function currentUser() {
   return request("/auth/me");
 }
 
+export async function changePassword(payload) {
+  const result = await request("/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
+  setToken(result.token);
+  return result.user;
+}
+
 export function logout() {
   clearToken();
 }

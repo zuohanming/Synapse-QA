@@ -2962,8 +2962,8 @@ textarea:focus-visible {
 }
 .table-empty-cell { color: var(--muted); padding-block: 48px !important; text-align: center; }
 
-.api-interface-browser { align-items: start; grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); }
-.api-interface-list { min-width: 0; }
+.api-interface-browser { align-items: start; grid-template-columns: 180px minmax(0, 1fr); }
+.api-interface-list { container-type: inline-size; min-width: 0; }
 .api-filter-grid { align-items: end; gap: 12px; grid-template-columns: repeat(3, minmax(150px, 1fr)); }
 .api-filter-grid label > span { font-size: 12px; font-weight: 650; }
 .api-filter-actions { justify-content: flex-end; }
@@ -3158,7 +3158,7 @@ body,
 .api-interface-list .action-links { flex-wrap: nowrap; gap: 5px; white-space: nowrap; }
 .api-interface-list .action-links .link-button { padding-inline: 2px; }
 
-@media (max-width: 900px) {
+@container (max-width: 899px) {
   .api-interface-list .api-interface-filter { grid-template-columns: 1fr; }
 }
 

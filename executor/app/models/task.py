@@ -11,6 +11,7 @@ class TaskType(StrEnum):
     noop = "noop"
     script = "script"
     api = "api"
+    api_case = "api_case"
     ui = "ui"
     unit = "unit"
 

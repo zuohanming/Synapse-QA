@@ -43,4 +43,23 @@ describe("DataTable 容器适配模式", () => {
     expect(columns[0]).toHaveStyle({ width: "20%" });
     expect(columns[1]).toHaveStyle({ width: "80%" });
   });
+
+  it("operations 列使用操作单元格且不启用文本溢出气泡", () => {
+    const { container } = render(
+      <DataTable
+        columns={[{
+          key: "operations",
+          title: "操作",
+          render: () => <button type="button">编辑</button>
+        }]}
+        rows={[{ id: "row-1" }]}
+      />
+    );
+
+    const content = container.querySelector("tbody .table-cell-content");
+
+    expect(content).toHaveClass("table-cell-actions");
+    expect(content).not.toHaveAttribute("data-overflow-tooltip");
+    expect(content).not.toHaveAttribute("tabindex");
+  });
 });

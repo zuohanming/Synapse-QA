@@ -19,6 +19,24 @@ func (a *app) migrateLegacyAPIData(ctx context.Context) error {
 
 func (a *app) seedAPIPermissions(ctx context.Context) error {
 	permissions := [][]string{
+		{"menu.home.read", "访问首页"},
+		{"menu.ui_automation.read", "访问界面自动化"},
+		{"menu.api_automation.read", "访问接口自动化"},
+		{"menu.test_config.read", "访问测试配置"},
+		{"menu.execution.read", "访问执行中心"},
+		{"menu.system.read", "访问系统管理"},
+		{"system.overview.read", "查看系统概览"},
+		{"system.user.read", "查看用户"},
+		{"system.user.manage", "维护用户"},
+		{"system.role.read", "查看角色权限"},
+		{"system.role.manage", "维护角色权限"},
+		{"system.settings.read", "查看系统参数"},
+		{"system.settings.manage", "维护系统参数"},
+		{"system.notification.manage", "维护通知配置"},
+		{"system.audit.read", "查看操作日志"},
+		{"system.audit.export", "导出操作日志"},
+		{"system.appearance.read", "查看个人外观"},
+		{"system.appearance.manage", "维护个人外观"},
 		{"api.interface.read", "查看接口"},
 		{"api.interface.write", "维护接口"},
 		{"api.interface.debug", "调试接口"},
@@ -33,7 +51,28 @@ func (a *app) seedAPIPermissions(ctx context.Context) error {
 	if _, err := a.db.ExecContext(ctx, `
 		insert into role_permissions(role_id,permission_id)
 		select r.id,p.id from roles r cross join permissions p
-		where r.code='admin' and p.code like 'api.%'
+		where r.code='admin'
+		on conflict do nothing
+	`); err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, `
+		insert into role_permissions(role_id,permission_id)
+		select r.id,p.id from roles r cross join permissions p
+		where r.code in ('qa_lead','automation_engineer')
+		  and (p.code in ('menu.home.read','menu.ui_automation.read','menu.api_automation.read',
+		    'menu.test_config.read','menu.execution.read','menu.system.read','system.appearance.read','system.appearance.manage')
+		    or p.code like 'api.%')
+		on conflict do nothing
+	`); err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, `
+		insert into role_permissions(role_id,permission_id)
+		select r.id,p.id from roles r cross join permissions p
+		where r.code='viewer' and p.code in ('menu.home.read','menu.ui_automation.read',
+		  'menu.api_automation.read','menu.execution.read','menu.system.read','system.appearance.read','system.appearance.manage',
+		  'api.interface.read')
 		on conflict do nothing
 	`); err != nil {
 		return err

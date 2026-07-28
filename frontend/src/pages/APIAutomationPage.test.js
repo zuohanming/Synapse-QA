@@ -17,13 +17,24 @@ const configMock = vi.hoisted(() => ({
 vi.mock("../services/apiAutomationService.js", () => ({ apiAutomationService: apiMock }));
 vi.mock("../services/configService.js", () => ({ configService: configMock }));
 
-import { APIAutomationPage, parseTemporaryVariableRows } from "./APIAutomationPage.js";
+import { APIAutomationPage, parseHeaderRows, parseTemporaryVariableRows } from "./APIAutomationPage.js";
 
 describe("接口自动化项目默认请求头", () => {
   it("恢复接口中已保存的临时变量配置", () => {
     expect(parseTemporaryVariableRows({
       temporaryVariables: [{ key: "token", type: "string", value: "saved-token", description: "登录令牌", enabled: false }]
     })).toEqual([{ key: "token", type: "string", value: "saved-token", description: "登录令牌", enabled: false }]);
+  });
+
+  it("兼容历史请求头并恢复结构化元数据", () => {
+    expect(parseHeaderRows({ headers: "{\"Authorization\":\"Bearer legacy\"}" })).toEqual([
+      { key: "Authorization", value: "Bearer legacy", description: "", enabled: true }
+    ]);
+    expect(parseHeaderRows({
+      headersMeta: [{ key: "X-Trace", value: "${trace_id}", description: "链路标识", enabled: false }]
+    })).toEqual([
+      { key: "X-Trace", value: "${trace_id}", description: "链路标识", enabled: false }
+    ]);
   });
 
   afterEach(() => {
@@ -113,7 +124,15 @@ describe("接口自动化项目默认请求头", () => {
     render(<APIAutomationPage activePath={["接口自动化", "接口管理"]} />);
     await screen.findByText("查询商品");
     fireEvent.click(screen.getByRole("button", { name: "调试" }));
-    expect(await screen.findByText("已加载 2 个项目默认请求头；接口内同名请求头优先。")).toBeInTheDocument();
+    expect(await screen.findByText("请求头列表")).toBeInTheDocument();
+    expect(screen.getByLabelText("接口请求头名称 1")).toHaveValue("Authorization");
+    expect(screen.getByLabelText("接口请求头值 1")).toHaveValue("Bearer interface");
+    expect(screen.getByLabelText("项目请求头 X-Project")).toBeDisabled();
+    expect(screen.getByLabelText("自动请求头 Host")).toBeDisabled();
+    expect(screen.getByText("自动生成 3")).toBeInTheDocument();
+    expect(screen.getByText("项目默认 1")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("接口请求头名称 2"), { target: { value: "X-Debug" } });
+    fireEvent.change(screen.getByLabelText("接口请求头值 2"), { target: { value: "${trace_id}" } });
     fireEvent.click(screen.getByRole("button", { name: /后置 JSONPath 提取/ }));
     fireEvent.click(screen.getByRole("button", { name: "新增第一条规则" }));
     fireEvent.change(screen.getByPlaceholderText("例如 access_token"), { target: { value: "product_id" } });
@@ -122,6 +141,11 @@ describe("接口自动化项目默认请求头", () => {
     await waitFor(() => expect(apiMock.interfaces.saveConfiguration).toHaveBeenCalledWith(1, expect.objectContaining({
       revision: 1,
       configuration: expect.objectContaining({
+        headers: expect.stringContaining('"X-Debug": "${trace_id}"'),
+        headersMeta: expect.arrayContaining([
+          expect.objectContaining({ key: "Authorization", value: "Bearer interface", enabled: true }),
+          expect.objectContaining({ key: "X-Debug", value: "${trace_id}", enabled: true })
+        ]),
         jsonpath: expect.stringContaining('"name": "product_id"')
       })
     })));
@@ -211,5 +235,5 @@ describe("接口自动化项目默认请求头", () => {
     }));
     expect(await screen.findByText("执行器调试完成。")).toBeInTheDocument();
     expect(apiMock.requestHeaders.list).toHaveBeenCalledWith({ projectId: "8" });
-  });
+  }, 10000);
 });

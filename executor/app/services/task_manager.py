@@ -7,6 +7,7 @@ from uuid import uuid4
 from app.core.config import settings
 from app.models.task import TaskCreate, TaskResult, TaskStatus, TaskType, TaskView
 from app.runners.api_runner import ApiRunner
+from app.runners.api_case_runner import ApiCaseRunner
 from app.runners.noop_runner import NoopRunner
 from app.runners.playwright_runner import PlaywrightRunner
 from app.runners.pytest_runner import PytestRunner
@@ -31,6 +32,7 @@ class TaskManager:
             TaskType.noop: NoopRunner(),
             TaskType.script: ScriptRunner(),
             TaskType.api: ApiRunner(),
+            TaskType.api_case: ApiCaseRunner(),
             TaskType.ui: PlaywrightRunner(),
             TaskType.unit: PytestRunner(),
         }
@@ -112,7 +114,7 @@ class TaskManager:
             runner = self._runners[task.type]
             if task.type == TaskType.ui:
                 result = runner.run(task, lambda output: self._update_progress(task_id, output))
-            elif task.type == TaskType.api:
+            elif task.type in (TaskType.api, TaskType.api_case):
                 cancel_event = self._cancel_events[task_id]
                 result = runner.run(
                     task,
