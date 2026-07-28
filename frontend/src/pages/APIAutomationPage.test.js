@@ -32,6 +32,23 @@ describe("接口自动化项目默认请求头", () => {
     vi.unstubAllGlobals();
   });
 
+  it("接口管理列表使用视口适配列宽", async () => {
+    apiMock.interfaces.list.mockResolvedValue({ items: [], total: 0 });
+    configMock.projects.list.mockResolvedValue({ items: [] });
+    configMock.products.list.mockResolvedValue({ items: [] });
+    configMock.productModules.list.mockResolvedValue({ items: [] });
+
+    const { container } = render(<APIAutomationPage activePath={["接口自动化", "接口管理"]} />);
+
+    await waitFor(() => expect(container.querySelector(".api-interface-list .data-table")).toBeInTheDocument());
+    expect(container.querySelector("form.api-interface-filter")).toBeInTheDocument();
+    const table = container.querySelector(".api-interface-list .data-table");
+    expect(table).toHaveAttribute("data-fit-container", "true");
+    expect(Array.from(table.querySelectorAll("col")).map((column) => column.style.width)).toEqual([
+      "3%", "4%", "12%", "9%", "11%", "21%", "7%", "8%", "8%", "10%", "7%"
+    ]);
+  });
+
   it("新增请求头时关联项目", async () => {
     configMock.projects.list.mockResolvedValue({ items: [{ id: 8, name: "商城项目" }] });
     apiMock.requestHeaders.list.mockResolvedValue({ items: [] });

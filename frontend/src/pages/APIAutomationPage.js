@@ -160,17 +160,17 @@ function InterfaceManagementPage() {
   }
 
   const columns = [
-    { key: "select", title: <input checked={pageRows.length > 0 && pageRows.every((row) => selected.includes(row.id))} onChange={(event) => setSelected(event.target.checked ? pageRows.map((row) => row.id) : [])} type="checkbox" />, render: (row) => <input checked={selected.includes(row.id)} onChange={() => setSelected((current) => current.includes(row.id) ? current.filter((id) => id !== row.id) : [...current, row.id])} type="checkbox" /> },
-    { key: "id", title: "ID" },
-    { key: "productName", title: "项目/产品", render: (row) => `${row.projectName}/${row.productName}` },
-    { key: "moduleName", title: "模块名称", render: (row) => row.moduleName || "未分组" },
-    { key: "name", title: "接口名称" },
-    { key: "path", title: "方法 / 路径", render: (row) => <span><span className={`api-tag method-${row.method?.toLowerCase()}`}>{row.method}</span> <code>{row.path}</code></span> },
-    { key: "endpointType", title: "端类型", render: (row) => <span className="api-tag endpoint">{row.endpointType}</span> },
-    { key: "lifecycleStatus", title: "接口状态", render: (row) => <span className={`status-badge ${row.lifecycleStatus === "active" && !row.deletedAt ? "status-passed" : ""}`}>{row.deletedAt ? "已删除" : lifecycleLabel(row.lifecycleStatus)}</span> },
-    { key: "lastDebugStatus", title: "最近调试", render: (row) => row.lastDebugStatus ? <span className={`status-badge ${row.lastDebugStatus === "success" ? "status-passed" : "status-failed"}`}>{row.lastDebugStatus === "success" ? "通过" : "失败"}</span> : "未调试" },
-    { key: "updatedBy", title: "最近修改", render: (row) => <span>{row.updatedBy}<br /><small>{new Date(row.updatedAt).toLocaleString()}</small></span> },
-    { key: "operations", title: "操作", render: (row) => row.deletedAt
+    { key: "select", width: "3%", title: <input checked={pageRows.length > 0 && pageRows.every((row) => selected.includes(row.id))} onChange={(event) => setSelected(event.target.checked ? pageRows.map((row) => row.id) : [])} type="checkbox" />, render: (row) => <input checked={selected.includes(row.id)} onChange={() => setSelected((current) => current.includes(row.id) ? current.filter((id) => id !== row.id) : [...current, row.id])} type="checkbox" /> },
+    { key: "id", width: "4%", title: "ID" },
+    { key: "productName", width: "12%", title: "项目/产品", render: (row) => `${row.projectName}/${row.productName}` },
+    { key: "moduleName", width: "9%", title: "模块名称", render: (row) => row.moduleName || "未分组" },
+    { key: "name", width: "11%", title: "接口名称" },
+    { key: "path", width: "21%", title: "方法 / 路径", render: (row) => <span><span className={`api-tag method-${row.method?.toLowerCase()}`}>{row.method}</span> <code>{row.path}</code></span> },
+    { key: "endpointType", width: "7%", title: "端类型", render: (row) => <span className="api-tag endpoint">{row.endpointType}</span> },
+    { key: "lifecycleStatus", width: "8%", title: "接口状态", render: (row) => <span className={`status-badge ${row.lifecycleStatus === "active" && !row.deletedAt ? "status-passed" : ""}`}>{row.deletedAt ? "已删除" : lifecycleLabel(row.lifecycleStatus)}</span> },
+    { key: "lastDebugStatus", width: "8%", title: "最近调试", render: (row) => row.lastDebugStatus ? <span className={`status-badge ${row.lastDebugStatus === "success" ? "status-passed" : "status-failed"}`}>{row.lastDebugStatus === "success" ? "通过" : "失败"}</span> : "未调试" },
+    { key: "updatedBy", width: "10%", title: "最近修改", render: (row) => <span>{row.updatedBy}<br /><small>{new Date(row.updatedAt).toLocaleString()}</small></span> },
+    { key: "operations", width: "7%", title: "操作", render: (row) => row.deletedAt
       ? <div className="action-links"><button className="link-button" disabled={busy} onClick={() => restoreRow(row.id)} type="button">恢复</button></div>
       : <div className="action-links"><button className="link-button" onClick={() => setDetailRow(row)} type="button">调试</button><button className="link-button" onClick={() => openEdit(row)} type="button">编辑</button><button className="link-button danger-link" onClick={() => removeRows([row.id])} type="button">删除</button></div> }
   ];
@@ -204,7 +204,7 @@ function InterfaceManagementPage() {
     </aside>
     <section className="resource-panel api-interface-list">
       <div className="panel-header"><strong>接口信息收集</strong></div>
-      <form className="api-filter-grid" onSubmit={(event) => { event.preventDefault(); setApplied(filters); setPage(1); }}>
+      <form className="api-filter-grid api-interface-filter" onSubmit={(event) => { event.preventDefault(); setApplied(filters); setPage(1); }}>
         <FilterInput label="名称或路径" value={filters.keyword} onChange={(value) => setFilters({ ...filters, keyword: value })} />
         <FilterSelect label="项目/产品" value={filters.productId} onChange={(value) => setFilters({ ...filters, productId: value, projectId: products.find((item) => item.value === value)?.projectId || "", moduleId: "" })} options={products} />
         <FilterSelect label="模块名称" value={filters.moduleId} onChange={(value) => setFilters({ ...filters, moduleId: value })} options={modules.map((item) => ({ value: String(item.id), label: item.name }))} />
@@ -215,7 +215,7 @@ function InterfaceManagementPage() {
       </form>
       <div className="api-list-toolbar"><div className="api-tabs"><button className="active" type="button">接口定义</button></div><div><button className="primary-button compact-button" onClick={openCreate} type="button"><Plus size={14} />新增</button><button className="icon-text-button compact-button" disabled={busy} onClick={openCurlImport} type="button"><Upload size={14} />导入 cURL</button><button className="icon-text-button compact-button" disabled={!selected.length || !filters.productId || busy} onClick={batchMoveToCurrentProduct} type="button">移动到当前产品</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("active")} type="button">批量启用</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("disabled")} type="button">批量停用</button><button className="icon-text-button compact-button" disabled={!selected.length || busy} onClick={() => batchStatus("deprecated")} type="button">批量废弃</button><button className="danger-button compact-button" disabled={!selected.length || busy} onClick={() => removeRows(selected)} type="button">批量删除</button><button className="icon-text-button compact-button" onClick={reload} type="button"><RefreshCw size={14} /></button></div></div>
       {notice ? <div className="inline-notice">{notice}</div> : null}
-      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={pageRows} emptyText="暂无接口数据" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
+      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={pageRows} fitContainer emptyText="暂无接口数据" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
     </section>
     </div>
     {curlModal ? <CurlImportModal busy={busy} command={curlCommand} error={curlError} onChange={(value) => { setCurlCommand(value); if (curlError) setCurlError(""); }} onClose={() => setCurlModal(false)} onSubmit={importCurl} /> : null}
