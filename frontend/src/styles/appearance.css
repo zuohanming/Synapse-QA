@@ -2963,7 +2963,7 @@ textarea:focus-visible {
 .table-empty-cell { color: var(--muted); padding-block: 48px !important; text-align: center; }
 
 .api-interface-browser { align-items: start; grid-template-columns: 180px minmax(0, 1fr); }
-.api-interface-list { container-type: inline-size; min-width: 0; }
+.api-interface-list { container-type: inline-size; min-width: 0; padding-inline: 16px; }
 .api-filter-grid { align-items: end; gap: 12px; grid-template-columns: repeat(3, minmax(150px, 1fr)); }
 .api-filter-grid label > span { font-size: 12px; font-weight: 650; }
 .api-filter-actions { justify-content: flex-end; }
