@@ -34,7 +34,8 @@ type ElementCaptureSessionDetail struct {
 }
 
 type ElementCaptureCandidate struct {
-	ID                 int64           `json:"id"`
+	ID                 string          `json:"id"`
+	CursorID           int64           `json:"cursorId"`
 	SessionID          string          `json:"sessionId"`
 	Name               string          `json:"name"`
 	Fingerprint        string          `json:"fingerprint"`
@@ -73,7 +74,7 @@ type CaptureSessionCreateRequest struct {
 }
 
 type CandidateSaveItem struct {
-	CandidateID int64  `json:"candidateId"`
+	CandidateID string `json:"candidateId"`
 	Resolution  string `json:"resolution"`
 }
 
@@ -96,19 +97,19 @@ type CaptureCandidateCreateRequest struct {
 type CaptureCandidateUpdateRequest struct {
 	Name               string          `json:"name"`
 	Locators           json.RawMessage `json:"locators"`
-	QualityScore       float64         `json:"qualityScore"`
+	QualityScore       *float64        `json:"qualityScore"`
 	ConflictResolution string          `json:"conflictResolution"`
 }
 
 type CandidateIssue struct {
-	CandidateID int64  `json:"candidateId"`
+	CandidateID string `json:"candidateId"`
 	Field       string `json:"field"`
 	Message     string `json:"message"`
 }
 
 type BatchSaveResult struct {
-	SavedCandidateIDs   []int64 `json:"savedCandidateIds"`
-	IgnoredCandidateIDs []int64 `json:"ignoredCandidateIds"`
+	SavedCandidateIDs   []string `json:"savedCandidateIds"`
+	IgnoredCandidateIDs []string `json:"ignoredCandidateIds"`
 }
 
 type CaptureBatchData struct {

@@ -42,10 +42,14 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("select page_id from element_capture_sessions where id=$1 and status in ('active','completed') for update")).
 		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"page_id"}).AddRow(8))
+	mock.ExpectQuery(regexp.QuoteMeta("select id from ui_assets where id=$1 and deleted_at is null for update")).
+		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
 	mock.ExpectQuery(regexp.QuoteMeta("select id from element_capture_candidates where session_id=$1 for update")).
 		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(regexp.QuoteMeta("select id,status from element_capture_candidates where session_id=$1")).
+		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow("candidate-1", "pending"))
 	mock.ExpectQuery("insert into page_elements").
-		WithArgs(8, "submit", "testid", "submit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", 95.0, "admin").
+		WithArgs(8, "submit", "testid", "submit", "", "", "", "", "", "", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", 95.0, "admin").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(22))
 	mock.ExpectExec("insert into page_element_versions").
 		WithArgs(22, 1, sqlmock.AnyArg(), "采集候选项审核入库", "admin").
@@ -53,9 +57,9 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	mock.ExpectRollback()
 
 	_, err = NewElementCaptureRepository(db).SaveCandidates(context.Background(), "admin", model.CandidateBatchSaveRequest{
-		SessionID: "session-1", Items: []model.CandidateSaveItem{{CandidateID: 1, Resolution: "create"}},
+		SessionID: "session-1", Items: []model.CandidateSaveItem{{CandidateID: "candidate-1", Resolution: "create"}},
 	}, []model.ElementCaptureCandidate{{
-		ID: 1, Name: "submit", Fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ID: "candidate-1", Name: "submit", Fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		CaptureURL: "https://example.test", TagName: "button", AccessibleName: "Submit", QualityScore: 95,
 		Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`),
 	}})
