@@ -34,7 +34,7 @@ type ElementCaptureSessionDetail struct {
 }
 
 type ElementCaptureCandidate struct {
-	ID                 string          `json:"id"`
+	ID                 int64           `json:"id"`
 	SessionID          string          `json:"sessionId"`
 	Name               string          `json:"name"`
 	Fingerprint        string          `json:"fingerprint"`
@@ -48,6 +48,8 @@ type ElementCaptureCandidate struct {
 	ConflictResolution string          `json:"conflictResolution"`
 	Status             string          `json:"status"`
 	ExpiresAt          time.Time       `json:"expiresAt"`
+	CandidateCount     int             `json:"candidateCount,omitempty"`
+	Warning            string          `json:"warning,omitempty"`
 }
 
 type PageElementVersion struct {
@@ -71,11 +73,46 @@ type CaptureSessionCreateRequest struct {
 }
 
 type CandidateSaveItem struct {
-	CandidateID string `json:"candidateId"`
-	Name        string `json:"name"`
+	CandidateID int64  `json:"candidateId"`
+	Resolution  string `json:"resolution"`
 }
 
 type CandidateBatchSaveRequest struct {
 	SessionID string              `json:"sessionId"`
 	Items     []CandidateSaveItem `json:"items"`
+}
+
+type CaptureCandidateCreateRequest struct {
+	SessionID      string          `json:"sessionId"`
+	Name           string          `json:"name"`
+	Fingerprint    string          `json:"fingerprint"`
+	CaptureURL     string          `json:"captureUrl"`
+	TagName        string          `json:"tagName"`
+	AccessibleName string          `json:"accessibleName"`
+	Locators       json.RawMessage `json:"locators"`
+	QualityScore   float64         `json:"qualityScore"`
+}
+
+type CaptureCandidateUpdateRequest struct {
+	Name               string          `json:"name"`
+	Locators           json.RawMessage `json:"locators"`
+	QualityScore       float64         `json:"qualityScore"`
+	ConflictResolution string          `json:"conflictResolution"`
+}
+
+type CandidateIssue struct {
+	CandidateID int64  `json:"candidateId"`
+	Field       string `json:"field"`
+	Message     string `json:"message"`
+}
+
+type BatchSaveResult struct {
+	SavedCandidateIDs   []int64 `json:"savedCandidateIds"`
+	IgnoredCandidateIDs []int64 `json:"ignoredCandidateIds"`
+}
+
+type CaptureBatchData struct {
+	Session       ElementCaptureSession
+	Candidates    []ElementCaptureCandidate
+	ExistingNames map[string]bool
 }

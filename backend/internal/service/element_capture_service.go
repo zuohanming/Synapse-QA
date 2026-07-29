@@ -6,8 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +41,30 @@ type ElementCaptureRepository interface {
 
 type CaptureExecutorReader interface {
 	GetByID(ctx context.Context, executorID string) (model.ExecutorView, error)
+}
+
+const (
+	maxCaptureCandidates     = 500
+	warningCaptureCandidates = 400
+	maxBatchSaveCandidates   = 200
+	reliableLocatorScore     = 70
+)
+
+var captureFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+type candidateCaptureRepository interface {
+	AddCandidate(ctx context.Context, candidate model.ElementCaptureCandidate, executorID, tokenHash string) (model.ElementCaptureCandidate, error)
+	ListCandidates(ctx context.Context, userID int64, sessionID string, afterID int64, limit int) ([]model.ElementCaptureCandidate, error)
+	UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) (bool, error)
+	GetBatchSaveData(ctx context.Context, sessionID string, candidateIDs []int64) (model.CaptureBatchData, error)
+	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, candidates []model.ElementCaptureCandidate) (model.BatchSaveResult, error)
+}
+
+type captureLocator struct {
+	Type   string  `json:"type"`
+	Value  string  `json:"value"`
+	Score  float64 `json:"score"`
+	Unique bool    `json:"unique"`
 }
 
 type ElementCaptureService struct {
@@ -184,6 +211,211 @@ func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, execut
 
 func (s *ElementCaptureService) ExpireSessions(ctx context.Context, now time.Time) error {
 	return s.repo.ExpireSessions(ctx, now)
+}
+
+func (s *ElementCaptureService) AddCandidate(ctx context.Context, executorID, token string, req model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {
+	repo, err := s.candidateRepo()
+	if err != nil {
+		return model.ElementCaptureCandidate{}, err
+	}
+	if err := validateCandidateCreate(req); err != nil {
+		return model.ElementCaptureCandidate{}, err
+	}
+	tokenHash := sha256.Sum256([]byte(token))
+	candidate := model.ElementCaptureCandidate{
+		SessionID: req.SessionID, Name: strings.TrimSpace(req.Name), Fingerprint: req.Fingerprint,
+		CaptureURL: req.CaptureURL, TagName: strings.TrimSpace(req.TagName), AccessibleName: strings.TrimSpace(req.AccessibleName),
+		Locators: req.Locators, QualityScore: req.QualityScore, Status: "pending",
+	}
+	return repo.AddCandidate(ctx, candidate, executorID, hex.EncodeToString(tokenHash[:]))
+}
+
+func (s *ElementCaptureService) ListCandidates(ctx context.Context, userID int64, sessionID string, afterID int64, limit int) ([]model.ElementCaptureCandidate, error) {
+	repo, err := s.candidateRepo()
+	if err != nil {
+		return nil, err
+	}
+	if afterID < 0 {
+		return nil, errors.New("afterID 不能小于 0")
+	}
+	if limit == 0 {
+		limit = 100
+	}
+	if limit < 0 || limit > maxBatchSaveCandidates {
+		return nil, errors.New("limit 必须在 1 到 200 之间")
+	}
+	return repo.ListCandidates(ctx, userID, sessionID, afterID, limit)
+}
+
+func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) error {
+	repo, err := s.candidateRepo()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(actor) == "" || candidateID <= 0 || strings.TrimSpace(sessionID) == "" {
+		return errors.New("采集候选项参数无效")
+	}
+	if req.Name != "" && strings.TrimSpace(req.Name) == "" {
+		return errors.New("候选项名称不能为空")
+	}
+	if req.Locators != nil {
+		if _, err := parseCaptureLocators(req.Locators); err != nil {
+			return err
+		}
+	}
+	if req.ConflictResolution != "" && !isResolution(req.ConflictResolution) {
+		return errors.New("冲突处理方式无效")
+	}
+	updated, err := repo.UpdateCandidate(ctx, actor, sessionID, candidateID, req)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return errors.New("采集候选项不存在或会话不可审核")
+	}
+	return nil
+}
+
+func (s *ElementCaptureService) BatchSave(ctx context.Context, actor string, req model.CandidateBatchSaveRequest) (model.BatchSaveResult, error) {
+	repo, err := s.candidateRepo()
+	if err != nil {
+		return model.BatchSaveResult{}, err
+	}
+	if strings.TrimSpace(actor) == "" {
+		return model.BatchSaveResult{}, errors.New("操作人不能为空")
+	}
+	if strings.TrimSpace(req.SessionID) == "" || len(req.Items) == 0 || len(req.Items) > maxBatchSaveCandidates {
+		return model.BatchSaveResult{}, errors.New("批量保存项必须在 1 到 200 之间")
+	}
+	ids := make([]int64, 0, len(req.Items))
+	for _, item := range req.Items {
+		ids = append(ids, item.CandidateID)
+	}
+	data, err := repo.GetBatchSaveData(ctx, req.SessionID, ids)
+	if err != nil {
+		return model.BatchSaveResult{}, err
+	}
+	issues := validateBatchSave(data, req)
+	if len(issues) > 0 {
+		return model.BatchSaveResult{}, candidateIssuesError(issues)
+	}
+	return repo.SaveCandidates(ctx, actor, req, data.Candidates)
+}
+
+func (s *ElementCaptureService) candidateRepo() (candidateCaptureRepository, error) {
+	repo, ok := s.repo.(candidateCaptureRepository)
+	if !ok {
+		return nil, errors.New("采集候选项仓储未配置")
+	}
+	return repo, nil
+}
+
+func validateCandidateCreate(req model.CaptureCandidateCreateRequest) error {
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.Name) == "" || !isCaptureURL(req.CaptureURL) {
+		return errors.New("候选项会话、名称和采集地址无效")
+	}
+	if !captureFingerprintPattern.MatchString(req.Fingerprint) {
+		return errors.New("fingerprint 必须是 64 位小写十六进制 SHA-256")
+	}
+	_, err := parseCaptureLocators(req.Locators)
+	return err
+}
+
+func parseCaptureLocators(raw json.RawMessage) ([]captureLocator, error) {
+	var locators []captureLocator
+	if len(raw) == 0 || json.Unmarshal(raw, &locators) != nil || len(locators) == 0 {
+		return nil, errors.New("locators 必须是非空数组")
+	}
+	for _, locator := range locators {
+		if strings.TrimSpace(locator.Type) == "" || strings.TrimSpace(locator.Value) == "" {
+			return nil, errors.New("locators 包含无效定位器")
+		}
+	}
+	return locators, nil
+}
+
+func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSaveRequest) []model.CandidateIssue {
+	issues := make([]model.CandidateIssue, 0)
+	if data.Session.Status != CaptureActive && data.Session.Status != CaptureCompleted {
+		return append(issues, model.CandidateIssue{Field: "sessionId", Message: "会话当前状态不能保存候选项"})
+	}
+	byID := make(map[int64]model.ElementCaptureCandidate, len(data.Candidates))
+	for _, candidate := range data.Candidates {
+		byID[candidate.ID] = candidate
+	}
+	seenIDs, names := map[int64]bool{}, map[string]bool{}
+	for _, item := range req.Items {
+		candidate, ok := byID[item.CandidateID]
+		if !ok || seenIDs[item.CandidateID] {
+			issues = append(issues, model.CandidateIssue{CandidateID: item.CandidateID, Field: "candidateId", Message: "候选项不存在或重复"})
+			continue
+		}
+		seenIDs[item.CandidateID] = true
+		if candidate.Status != "pending" {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: "status", Message: "候选项已处理"})
+		}
+		issues = append(issues, validateCandidateForSave(candidate, item)...)
+		name := strings.ToLower(strings.TrimSpace(candidate.Name))
+		if names[name] || data.ExistingNames[name] {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: "name", Message: "页面内元素名称重复"})
+		}
+		names[name] = true
+	}
+	return issues
+}
+
+func validateCandidateForSave(candidate model.ElementCaptureCandidate, item model.CandidateSaveItem) []model.CandidateIssue {
+	issues := make([]model.CandidateIssue, 0)
+	issue := func(field, message string) {
+		issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: field, Message: message})
+	}
+	if strings.TrimSpace(candidate.Name) == "" || strings.TrimSpace(candidate.Name) == "未命名元素" {
+		issue("name", "候选项名称不可靠")
+	}
+	locators, err := parseCaptureLocators(candidate.Locators)
+	if err != nil {
+		issue("locators", "候选项缺少可靠定位器")
+	} else {
+		maxScore, unique := candidate.QualityScore, false
+		for _, locator := range locators {
+			if locator.Score > maxScore {
+				maxScore = locator.Score
+			}
+			unique = unique || locator.Unique
+		}
+		if maxScore < reliableLocatorScore {
+			issue("qualityScore", "候选项定位器评分不足")
+		}
+		if !unique {
+			issue("locators", "候选项没有唯一定位器")
+		}
+	}
+	if !isResolution(item.Resolution) {
+		issue("resolution", "冲突处理方式无效")
+	}
+	if candidate.ConflictStatus == "duplicate" && item.Resolution == "" {
+		issue("resolution", "重复候选项必须明确处理方式")
+	}
+	if item.Resolution == "update" && candidate.DuplicateElementID == 0 {
+		issue("duplicateElementId", "更新必须指定重复元素")
+	}
+	return issues
+}
+
+func isResolution(value string) bool {
+	return value == "update" || value == "ignore" || value == "create"
+}
+
+func candidateIssuesError(issues []model.CandidateIssue) error {
+	parts := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if issue.CandidateID == 0 {
+			parts = append(parts, issue.Message)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("候选项 %d：%s", issue.CandidateID, issue.Message))
+	}
+	return errors.New(strings.Join(parts, "；"))
 }
 
 func supportsUI(types []string) bool {
