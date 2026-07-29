@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -190,10 +191,11 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 		return candidate, errors.New("生成候选项 ID 失败")
 	}
 	candidate.ExpiresAt = time.Now().Add(30 * time.Minute)
-	if _, err = tx.ExecContext(ctx, `
+	if err = tx.QueryRowContext(ctx, `
 		insert into element_capture_candidates(id,session_id,name,fingerprint,capture_url,tag_name,accessible_name,locators,quality_score,duplicate_element_id,conflict_status,conflict_resolution,status,expires_at)
 		values($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,0),$11,$12,'pending',$13)
-		`, candidate.ID, candidate.SessionID, candidate.Name, candidate.Fingerprint, candidate.CaptureURL, candidate.TagName, candidate.AccessibleName, candidate.Locators, candidate.QualityScore, candidate.DuplicateElementID, candidate.ConflictStatus, candidate.ConflictResolution, candidate.ExpiresAt); err != nil {
+		returning cursor_id
+	`, candidate.ID, candidate.SessionID, candidate.Name, candidate.Fingerprint, candidate.CaptureURL, candidate.TagName, candidate.AccessibleName, candidate.Locators, candidate.QualityScore, candidate.DuplicateElementID, candidate.ConflictStatus, candidate.ConflictResolution, candidate.ExpiresAt).Scan(&candidate.CursorID); err != nil {
 		return candidate, err
 	}
 	count++
@@ -232,7 +234,7 @@ func (r *ElementCaptureRepository) ListCandidates(ctx context.Context, userID in
 	return items, rows.Err()
 }
 
-func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, sessionID, candidateID string, req model.CaptureCandidateUpdateRequest) (bool, error) {
+func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) (bool, error) {
 	result, err := r.db.ExecContext(ctx, `
 		update element_capture_candidates c set
 		name=case when $1='' then c.name else $1 end,
@@ -240,9 +242,10 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 		quality_score=coalesce($3,c.quality_score),
 		conflict_resolution=case when $4='' then c.conflict_resolution else $4 end,
 		updated_at=now()
-		from element_capture_sessions s where c.session_id=s.id and c.id=$5 and c.session_id=$6 and s.created_by=$7
+		from element_capture_sessions s where c.session_id=s.id and c.cursor_id=$5 and c.session_id=$6
 		and s.status in ('active','completed') and c.status='pending'
-	`, strings.TrimSpace(req.Name), req.Locators, req.QualityScore, req.ConflictResolution, candidateID, sessionID, actor)
+		and not exists(select 1 from page_elements p where p.page_id=s.page_id and p.deleted_at is null and lower(p.name)=lower($1) and p.id <> coalesce(c.duplicate_element_id,0))
+	`, strings.TrimSpace(req.Name), req.Locators, req.QualityScore, req.ConflictResolution, candidateID, sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -257,8 +260,8 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, session
 		return data, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		select id,cursor_id,session_id,name,fingerprint,capture_url,tag_name,accessible_name,locators,quality_score,coalesce(duplicate_element_id,0),conflict_status,conflict_resolution,status,expires_at
-		from element_capture_candidates where session_id=$1 order by cursor_id
+		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,coalesce(c.duplicate_element_id,0),coalesce(p.page_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
+		from element_capture_candidates c left join page_elements p on p.id=c.duplicate_element_id and p.deleted_at is null where c.session_id=$1 order by c.cursor_id
 	`, sessionID)
 	if err != nil {
 		return data, err
@@ -266,7 +269,7 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, session
 	defer rows.Close()
 	for rows.Next() {
 		var candidate model.ElementCaptureCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.CursorID, &candidate.SessionID, &candidate.Name, &candidate.Fingerprint, &candidate.CaptureURL, &candidate.TagName, &candidate.AccessibleName, &candidate.Locators, &candidate.QualityScore, &candidate.DuplicateElementID, &candidate.ConflictStatus, &candidate.ConflictResolution, &candidate.Status, &candidate.ExpiresAt); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.CursorID, &candidate.SessionID, &candidate.Name, &candidate.Fingerprint, &candidate.CaptureURL, &candidate.TagName, &candidate.AccessibleName, &candidate.Locators, &candidate.QualityScore, &candidate.DuplicateElementID, &candidate.DuplicateElementPageID, &candidate.ConflictStatus, &candidate.ConflictResolution, &candidate.Status, &candidate.ExpiresAt); err != nil {
 			return data, err
 		}
 		data.Candidates = append(data.Candidates, candidate)
@@ -274,74 +277,97 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, session
 	if err := rows.Err(); err != nil {
 		return data, err
 	}
-	nameRows, err := r.db.QueryContext(ctx, `select lower(name) from page_elements where page_id=$1 and deleted_at is null`, data.Session.PageID)
+	nameRows, err := r.db.QueryContext(ctx, `select id,lower(name) from page_elements where page_id=$1 and deleted_at is null`, data.Session.PageID)
 	if err != nil {
 		return data, err
 	}
 	defer nameRows.Close()
-	data.ExistingNames = map[string]bool{}
+	data.ExistingNames = map[string][]int64{}
 	for nameRows.Next() {
+		var id int64
 		var name string
-		if err := nameRows.Scan(&name); err != nil {
+		if err := nameRows.Scan(&id, &name); err != nil {
 			return data, err
 		}
-		data.ExistingNames[name] = true
+		data.ExistingNames[name] = append(data.ExistingNames[name], id)
 	}
 	return data, nameRows.Err()
 }
 
-func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, candidates []model.ElementCaptureCandidate) (model.BatchSaveResult, error) {
+func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var pageID int64
-	if err = tx.QueryRowContext(ctx, `select page_id from element_capture_sessions where id=$1 and status in ('active','completed') for update`, req.SessionID).Scan(&pageID); err != nil {
+	var sessionStatus string
+	if err = tx.QueryRowContext(ctx, `select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') for update`, req.SessionID).Scan(&pageID, &sessionStatus); err != nil {
 		return model.BatchSaveResult{}, err
 	}
 	var lockedPageID int64
 	if err = tx.QueryRowContext(ctx, `select id from ui_assets where id=$1 and deleted_at is null for update`, pageID).Scan(&lockedPageID); err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	lockedCandidates, err := tx.QueryContext(ctx, `select id from element_capture_candidates where session_id=$1 for update`, req.SessionID)
+	args := []any{req.SessionID}
+	placeholders := make([]string, 0, len(req.Items))
+	for index, item := range req.Items {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", index+2))
+		args = append(args, item.CandidateID)
+	}
+	currentRows, err := tx.QueryContext(ctx, `
+		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,coalesce(c.duplicate_element_id,0),coalesce(p.page_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
+		from element_capture_candidates c left join page_elements p on p.id=c.duplicate_element_id and p.deleted_at is null
+		where c.session_id=$1 and c.cursor_id in (`+strings.Join(placeholders, ",")+`) for update of c`, args...)
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	if err = lockedCandidates.Close(); err != nil {
-		return model.BatchSaveResult{}, err
-	}
-	currentRows, err := tx.QueryContext(ctx, `select id,status from element_capture_candidates where session_id=$1`, req.SessionID)
-	if err != nil {
-		return model.BatchSaveResult{}, err
-	}
-	currentStatus := map[string]string{}
+	locked := model.CaptureBatchData{Session: model.ElementCaptureSession{ID: req.SessionID, PageID: pageID, Status: sessionStatus}, ExistingNames: map[string][]int64{}}
 	for currentRows.Next() {
-		var id, status string
-		if err = currentRows.Scan(&id, &status); err != nil {
+		var candidate model.ElementCaptureCandidate
+		if err = currentRows.Scan(&candidate.ID, &candidate.CursorID, &candidate.SessionID, &candidate.Name, &candidate.Fingerprint, &candidate.CaptureURL, &candidate.TagName, &candidate.AccessibleName, &candidate.Locators, &candidate.QualityScore, &candidate.DuplicateElementID, &candidate.DuplicateElementPageID, &candidate.ConflictStatus, &candidate.ConflictResolution, &candidate.Status, &candidate.ExpiresAt); err != nil {
 			currentRows.Close()
 			return model.BatchSaveResult{}, err
 		}
-		currentStatus[id] = status
+		locked.Candidates = append(locked.Candidates, candidate)
 	}
 	if err = currentRows.Close(); err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	requested := make(map[string]string, len(req.Items))
+	if len(locked.Candidates) != len(req.Items) {
+		return model.BatchSaveResult{}, errors.New("候选项不存在或不属于该会话")
+	}
+	nameRows, err := tx.QueryContext(ctx, `select id,lower(name) from page_elements where page_id=$1 and deleted_at is null for update`, pageID)
+	if err != nil {
+		return model.BatchSaveResult{}, err
+	}
+	for nameRows.Next() {
+		var id int64
+		var name string
+		if err = nameRows.Scan(&id, &name); err != nil {
+			nameRows.Close()
+			return model.BatchSaveResult{}, err
+		}
+		locked.ExistingNames[name] = append(locked.ExistingNames[name], id)
+	}
+	if err = nameRows.Close(); err != nil {
+		return model.BatchSaveResult{}, err
+	}
+	if err = validate(locked); err != nil {
+		return model.BatchSaveResult{}, err
+	}
+	requested := make(map[int64]string, len(req.Items))
 	for _, item := range req.Items {
 		requested[item.CandidateID] = item.Resolution
 	}
 	result := model.BatchSaveResult{}
-	for _, candidate := range candidates {
-		resolution, ok := requested[candidate.ID]
+	for _, candidate := range locked.Candidates {
+		resolution, ok := requested[candidate.CursorID]
 		if !ok {
 			continue
 		}
-		if currentStatus[candidate.ID] != "pending" {
-			return result, errors.New("候选项状态已被并发修改")
-		}
 		if resolution == "ignore" {
-			updated, updateErr := tx.ExecContext(ctx, `update element_capture_candidates set status='ignored',updated_at=now() where id=$1 and session_id=$2 and status='pending'`, candidate.ID, req.SessionID)
+			updated, updateErr := tx.ExecContext(ctx, `update element_capture_candidates set status='ignored',updated_at=now() where cursor_id=$1 and session_id=$2 and status='pending'`, candidate.CursorID, req.SessionID)
 			if updateErr != nil {
 				return result, updateErr
 			}
@@ -352,7 +378,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 				}
 				return result, errors.New("候选项状态已被并发修改")
 			}
-			result.IgnoredCandidateIDs = append(result.IgnoredCandidateIDs, candidate.ID)
+			result.IgnoredCandidateIDs = append(result.IgnoredCandidateIDs, candidate.CursorID)
 			continue
 		}
 		elementID, version, err := saveCapturedElement(ctx, tx, pageID, actor, candidate, resolution)
@@ -366,7 +392,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		if _, err = tx.ExecContext(ctx, `insert into page_element_versions(page_element_id,version,snapshot,change_summary,created_by) values($1,$2,$3,$4,$5)`, elementID, version, snapshot, "采集候选项审核入库", actor); err != nil {
 			return result, err
 		}
-		updated, updateErr := tx.ExecContext(ctx, `update element_capture_candidates set status='saved',conflict_resolution=$1,updated_at=now() where id=$2 and session_id=$3 and status='pending'`, resolution, candidate.ID, req.SessionID)
+		updated, updateErr := tx.ExecContext(ctx, `update element_capture_candidates set status='saved',conflict_resolution=$1,updated_at=now() where cursor_id=$2 and session_id=$3 and status='pending'`, resolution, candidate.CursorID, req.SessionID)
 		if updateErr != nil {
 			return result, updateErr
 		}
@@ -377,7 +403,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 			}
 			return result, errors.New("候选项状态已被并发修改")
 		}
-		result.SavedCandidateIDs = append(result.SavedCandidateIDs, candidate.ID)
+		result.SavedCandidateIDs = append(result.SavedCandidateIDs, candidate.CursorID)
 	}
 	if _, err = tx.ExecContext(ctx, `insert into operation_logs(actor,action,target) values($1,'element_capture.batch_save',$2)`, actor, req.SessionID); err != nil {
 		return result, err

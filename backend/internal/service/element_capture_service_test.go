@@ -21,7 +21,7 @@ func TestBatchSaveRejectsUnreliableCandidate(t *testing.T) {
 
 	_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{
 		SessionID: "session-1",
-		Items:     []model.CandidateSaveItem{{CandidateID: "1", Resolution: "create"}},
+		Items:     []model.CandidateSaveItem{{CandidateID: 1, Resolution: "create"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "候选项 1") {
 		t.Fatalf("unexpected error: %v", err)
@@ -32,7 +32,7 @@ func TestBatchSaveAllowsIgnoringUnreliableCandidate(t *testing.T) {
 	service := newCaptureServiceWithCandidates(candidateFixture{Name: "未命名元素", Locators: nil, QualityScore: 0})
 	_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{
 		SessionID: "session-1",
-		Items:     []model.CandidateSaveItem{{CandidateID: "1", Resolution: "ignore"}},
+		Items:     []model.CandidateSaveItem{{CandidateID: 1, Resolution: "ignore"}},
 	})
 	if err != nil {
 		t.Fatalf("ignore should bypass quality gates: %v", err)
@@ -60,6 +60,7 @@ type fakeExecutorReader struct {
 
 type candidateFixture struct {
 	ID           string
+	CursorID     int64
 	Name         string
 	Locators     []byte
 	QualityScore float64
@@ -74,17 +75,21 @@ type candidateCaptureRepo struct {
 	saved      bool
 }
 
-var _ candidateCaptureRepository = (*candidateCaptureRepo)(nil)
+var _ CandidateCaptureRepository = (*candidateCaptureRepo)(nil)
 
 func newCaptureServiceWithCandidates(fixtures ...candidateFixture) *ElementCaptureService {
 	repo := &candidateCaptureRepo{session: model.ElementCaptureSession{ID: "session-1", PageID: 8, Status: CaptureActive}}
 	for index, fixture := range fixtures {
 		id := fixture.ID
 		if id == "" {
-			id = fmt.Sprintf("%d", index+1)
+			id = fmt.Sprintf("candidate-%d", index+1)
+		}
+		cursorID := fixture.CursorID
+		if cursorID == 0 {
+			cursorID = int64(index + 1)
 		}
 		repo.candidates = append(repo.candidates, model.ElementCaptureCandidate{
-			ID: id, SessionID: "session-1", Name: fixture.Name, Locators: fixture.Locators,
+			ID: id, CursorID: cursorID, SessionID: "session-1", Name: fixture.Name, Locators: fixture.Locators,
 			QualityScore: fixture.QualityScore, Fingerprint: fixture.Fingerprint,
 			ConflictStatus: fixture.Conflict, DuplicateElementID: fixture.DuplicateID, Status: "pending",
 		})
@@ -117,7 +122,8 @@ func (r *candidateCaptureRepo) Heartbeat(_ context.Context, _, _, _, _, _ string
 func (r *candidateCaptureRepo) ExpireSessions(_ context.Context, _ time.Time) error { return nil }
 
 func (r *candidateCaptureRepo) AddCandidate(_ context.Context, candidate model.ElementCaptureCandidate, _, _ string) (model.ElementCaptureCandidate, error) {
-	candidate.ID = fmt.Sprintf("%d", len(r.candidates)+1)
+	candidate.ID = fmt.Sprintf("candidate-%d", len(r.candidates)+1)
+	candidate.CursorID = int64(len(r.candidates) + 1)
 	r.candidates = append(r.candidates, candidate)
 	return candidate, nil
 }
@@ -126,15 +132,18 @@ func (r *candidateCaptureRepo) ListCandidates(_ context.Context, _ int64, _ stri
 	return r.candidates, nil
 }
 
-func (r *candidateCaptureRepo) UpdateCandidate(_ context.Context, _, _, _ string, _ model.CaptureCandidateUpdateRequest) (bool, error) {
+func (r *candidateCaptureRepo) UpdateCandidate(_ context.Context, _, _ string, _ int64, _ model.CaptureCandidateUpdateRequest) (bool, error) {
 	return true, nil
 }
 
-func (r *candidateCaptureRepo) GetBatchSaveData(_ context.Context, _ string, _ []string) (model.CaptureBatchData, error) {
+func (r *candidateCaptureRepo) GetBatchSaveData(_ context.Context, _ string, _ []int64) (model.CaptureBatchData, error) {
 	return model.CaptureBatchData{Session: r.session, Candidates: r.candidates}, nil
 }
 
-func (r *candidateCaptureRepo) SaveCandidates(_ context.Context, _ string, _ model.CandidateBatchSaveRequest, _ []model.ElementCaptureCandidate) (model.BatchSaveResult, error) {
+func (r *candidateCaptureRepo) SaveCandidates(_ context.Context, _ string, _ model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error) {
+	if err := validate(model.CaptureBatchData{Session: r.session, Candidates: r.candidates}); err != nil {
+		return model.BatchSaveResult{}, err
+	}
 	r.saved = true
 	return model.BatchSaveResult{}, nil
 }
@@ -551,11 +560,11 @@ func TestElementCaptureCreateSessionRejectsOfflineExecutor(t *testing.T) {
 
 func TestBatchSaveRejectsUnresolvedDuplicateAndMissingUpdateTarget(t *testing.T) {
 	service := newCaptureServiceWithCandidates(
-		candidateFixture{ID: "1", Name: "submit", Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95, Conflict: "duplicate"},
-		candidateFixture{ID: "2", Name: "cancel", Locators: []byte(`[{"type":"testid","value":"cancel","score":95,"unique":true}]`), QualityScore: 95, Conflict: "duplicate"},
+		candidateFixture{CursorID: 1, Name: "submit", Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95, Conflict: "duplicate"},
+		candidateFixture{CursorID: 2, Name: "cancel", Locators: []byte(`[{"type":"testid","value":"cancel","score":95,"unique":true}]`), QualityScore: 95, Conflict: "duplicate"},
 	)
 	_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{SessionID: "session-1", Items: []model.CandidateSaveItem{
-		{CandidateID: "1", Resolution: ""}, {CandidateID: "2", Resolution: "update"},
+		{CandidateID: 1, Resolution: ""}, {CandidateID: 2, Resolution: "update"},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "候选项 1") || !strings.Contains(err.Error(), "候选项 2") {
 		t.Fatalf("unexpected error: %v", err)

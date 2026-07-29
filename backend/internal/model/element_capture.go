@@ -34,23 +34,24 @@ type ElementCaptureSessionDetail struct {
 }
 
 type ElementCaptureCandidate struct {
-	ID                 string          `json:"id"`
-	CursorID           int64           `json:"cursorId"`
-	SessionID          string          `json:"sessionId"`
-	Name               string          `json:"name"`
-	Fingerprint        string          `json:"fingerprint"`
-	CaptureURL         string          `json:"captureUrl"`
-	TagName            string          `json:"tagName"`
-	AccessibleName     string          `json:"accessibleName"`
-	Locators           json.RawMessage `json:"locators"`
-	QualityScore       float64         `json:"qualityScore"`
-	DuplicateElementID int64           `json:"duplicateElementId"`
-	ConflictStatus     string          `json:"conflictStatus"`
-	ConflictResolution string          `json:"conflictResolution"`
-	Status             string          `json:"status"`
-	ExpiresAt          time.Time       `json:"expiresAt"`
-	CandidateCount     int             `json:"candidateCount,omitempty"`
-	Warning            string          `json:"warning,omitempty"`
+	ID                     string          `json:"id"`
+	CursorID               int64           `json:"cursorId"`
+	SessionID              string          `json:"sessionId"`
+	Name                   string          `json:"name"`
+	Fingerprint            string          `json:"fingerprint"`
+	CaptureURL             string          `json:"captureUrl"`
+	TagName                string          `json:"tagName"`
+	AccessibleName         string          `json:"accessibleName"`
+	Locators               json.RawMessage `json:"locators"`
+	QualityScore           float64         `json:"qualityScore"`
+	DuplicateElementID     int64           `json:"duplicateElementId"`
+	DuplicateElementPageID int64           `json:"-"`
+	ConflictStatus         string          `json:"conflictStatus"`
+	ConflictResolution     string          `json:"conflictResolution"`
+	Status                 string          `json:"status"`
+	ExpiresAt              time.Time       `json:"expiresAt"`
+	CandidateCount         int             `json:"candidateCount,omitempty"`
+	Warning                string          `json:"warning,omitempty"`
 }
 
 type PageElementVersion struct {
@@ -74,7 +75,7 @@ type CaptureSessionCreateRequest struct {
 }
 
 type CandidateSaveItem struct {
-	CandidateID string `json:"candidateId"`
+	CandidateID int64  `json:"candidateId"`
 	Resolution  string `json:"resolution"`
 }
 
@@ -102,18 +103,18 @@ type CaptureCandidateUpdateRequest struct {
 }
 
 type CandidateIssue struct {
-	CandidateID string `json:"candidateId"`
+	CandidateID int64  `json:"candidateId"`
 	Field       string `json:"field"`
 	Message     string `json:"message"`
 }
 
 type BatchSaveResult struct {
-	SavedCandidateIDs   []string `json:"savedCandidateIds"`
-	IgnoredCandidateIDs []string `json:"ignoredCandidateIds"`
+	SavedCandidateIDs   []int64 `json:"savedCandidateIds"`
+	IgnoredCandidateIDs []int64 `json:"ignoredCandidateIds"`
 }
 
 type CaptureBatchData struct {
 	Session       ElementCaptureSession
 	Candidates    []ElementCaptureCandidate
-	ExistingNames map[string]bool
+	ExistingNames map[string][]int64
 }

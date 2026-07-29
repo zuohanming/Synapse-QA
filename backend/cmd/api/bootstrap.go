@@ -658,7 +658,6 @@ func elementCaptureMigrationStatements() []string {
 		`alter table element_capture_candidates add column if not exists conflict_status text not null default ''`,
 		`alter table element_capture_candidates add column if not exists conflict_resolution text not null default ''`,
 		`alter table element_capture_candidates add column if not exists cursor_id bigserial`,
-		`create unique index if not exists uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
 		`drop index if exists uq_element_capture_sessions_active_executor`,
 		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,
 	}

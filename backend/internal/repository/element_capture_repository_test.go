@@ -40,14 +40,14 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("select page_id from element_capture_sessions where id=$1 and status in ('active','completed') for update")).
-		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"page_id"}).AddRow(8))
+	mock.ExpectQuery(regexp.QuoteMeta("select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') for update")).
+		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"page_id", "status"}).AddRow(8, "active"))
 	mock.ExpectQuery(regexp.QuoteMeta("select id from ui_assets where id=$1 and deleted_at is null for update")).
 		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
-	mock.ExpectQuery(regexp.QuoteMeta("select id from element_capture_candidates where session_id=$1 for update")).
-		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	mock.ExpectQuery(regexp.QuoteMeta("select id,status from element_capture_candidates where session_id=$1")).
-		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow("candidate-1", "pending"))
+	mock.ExpectQuery("from element_capture_candidates c left join page_elements p").
+		WithArgs("session-1", 1).WillReturnRows(sqlmock.NewRows([]string{"id", "cursor_id", "session_id", "name", "fingerprint", "capture_url", "tag_name", "accessible_name", "locators", "quality_score", "duplicate_element_id", "page_id", "conflict_status", "conflict_resolution", "status", "expires_at"}).AddRow("candidate-1", 1, "session-1", "submit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95, 0, 0, "", "", "pending", time.Now()))
+	mock.ExpectQuery(regexp.QuoteMeta("select id,lower(name) from page_elements where page_id=$1 and deleted_at is null for update")).
+		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}))
 	mock.ExpectQuery("insert into page_elements").
 		WithArgs(8, "submit", "testid", "submit", "", "", "", "", "", "", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", 95.0, "admin").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(22))
@@ -57,12 +57,8 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	mock.ExpectRollback()
 
 	_, err = NewElementCaptureRepository(db).SaveCandidates(context.Background(), "admin", model.CandidateBatchSaveRequest{
-		SessionID: "session-1", Items: []model.CandidateSaveItem{{CandidateID: "candidate-1", Resolution: "create"}},
-	}, []model.ElementCaptureCandidate{{
-		ID: "candidate-1", Name: "submit", Fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		CaptureURL: "https://example.test", TagName: "button", AccessibleName: "Submit", QualityScore: 95,
-		Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`),
-	}})
+		SessionID: "session-1", Items: []model.CandidateSaveItem{{CandidateID: 1, Resolution: "create"}},
+	}, func(model.CaptureBatchData) error { return nil })
 	if err == nil || err.Error() != "version write failed" {
 		t.Fatalf("unexpected error: %v", err)
 	}

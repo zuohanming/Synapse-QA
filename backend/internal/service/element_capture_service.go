@@ -52,12 +52,12 @@ const (
 
 var captureFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-type candidateCaptureRepository interface {
+type CandidateCaptureRepository interface {
 	AddCandidate(ctx context.Context, candidate model.ElementCaptureCandidate, executorID, tokenHash string) (model.ElementCaptureCandidate, error)
 	ListCandidates(ctx context.Context, userID int64, sessionID string, afterID int64, limit int) ([]model.ElementCaptureCandidate, error)
-	UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID string, req model.CaptureCandidateUpdateRequest) (bool, error)
-	GetBatchSaveData(ctx context.Context, sessionID string, candidateIDs []string) (model.CaptureBatchData, error)
-	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, candidates []model.ElementCaptureCandidate) (model.BatchSaveResult, error)
+	UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) (bool, error)
+	GetBatchSaveData(ctx context.Context, sessionID string, candidateIDs []int64) (model.CaptureBatchData, error)
+	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error)
 }
 
 type captureLocator struct {
@@ -247,12 +247,12 @@ func (s *ElementCaptureService) ListCandidates(ctx context.Context, userID int64
 	return repo.ListCandidates(ctx, userID, sessionID, afterID, limit)
 }
 
-func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sessionID, candidateID string, req model.CaptureCandidateUpdateRequest) error {
+func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) error {
 	repo, err := s.candidateRepo()
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(actor) == "" || strings.TrimSpace(candidateID) == "" || strings.TrimSpace(sessionID) == "" {
+	if strings.TrimSpace(actor) == "" || candidateID <= 0 || strings.TrimSpace(sessionID) == "" {
 		return errors.New("采集候选项参数无效")
 	}
 	if req.Name != "" && strings.TrimSpace(req.Name) == "" {
@@ -290,7 +290,7 @@ func (s *ElementCaptureService) BatchSave(ctx context.Context, actor string, req
 	if strings.TrimSpace(req.SessionID) == "" || len(req.Items) == 0 || len(req.Items) > maxBatchSaveCandidates {
 		return model.BatchSaveResult{}, errors.New("批量保存项必须在 1 到 200 之间")
 	}
-	ids := make([]string, 0, len(req.Items))
+	ids := make([]int64, 0, len(req.Items))
 	for _, item := range req.Items {
 		ids = append(ids, item.CandidateID)
 	}
@@ -302,11 +302,17 @@ func (s *ElementCaptureService) BatchSave(ctx context.Context, actor string, req
 	if len(issues) > 0 {
 		return model.BatchSaveResult{}, candidateIssuesError(issues)
 	}
-	return repo.SaveCandidates(ctx, actor, req, data.Candidates)
+	return repo.SaveCandidates(ctx, actor, req, func(locked model.CaptureBatchData) error {
+		issues := validateBatchSave(locked, req)
+		if len(issues) > 0 {
+			return candidateIssuesError(issues)
+		}
+		return nil
+	})
 }
 
-func (s *ElementCaptureService) candidateRepo() (candidateCaptureRepository, error) {
-	repo, ok := s.repo.(candidateCaptureRepository)
+func (s *ElementCaptureService) candidateRepo() (CandidateCaptureRepository, error) {
+	repo, ok := s.repo.(CandidateCaptureRepository)
 	if !ok {
 		return nil, errors.New("采集候选项仓储未配置")
 	}
@@ -326,7 +332,7 @@ func validateCandidateCreate(req model.CaptureCandidateCreateRequest) error {
 
 func parseCaptureLocators(raw json.RawMessage) ([]captureLocator, error) {
 	var locators []captureLocator
-	if len(raw) == 0 || json.Unmarshal(raw, &locators) != nil || len(locators) == 0 {
+	if len(raw) == 0 || json.Unmarshal(raw, &locators) != nil || len(locators) == 0 || len(locators) > 3 {
 		return nil, errors.New("locators 必须是非空数组")
 	}
 	for _, locator := range locators {
@@ -342,11 +348,11 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 	if data.Session.Status != CaptureActive && data.Session.Status != CaptureCompleted {
 		return append(issues, model.CandidateIssue{Field: "sessionId", Message: "会话当前状态不能保存候选项"})
 	}
-	byID := make(map[string]model.ElementCaptureCandidate, len(data.Candidates))
+	byID := make(map[int64]model.ElementCaptureCandidate, len(data.Candidates))
 	for _, candidate := range data.Candidates {
-		byID[candidate.ID] = candidate
+		byID[candidate.CursorID] = candidate
 	}
-	seenIDs, names := map[string]bool{}, map[string]bool{}
+	seenIDs, names := map[int64]bool{}, map[string]bool{}
 	for _, item := range req.Items {
 		candidate, ok := byID[item.CandidateID]
 		if !ok || seenIDs[item.CandidateID] {
@@ -355,15 +361,26 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		}
 		seenIDs[item.CandidateID] = true
 		if candidate.Status != "pending" {
-			issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: "status", Message: "候选项已处理"})
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "status", Message: "候选项已处理"})
 		}
 		if item.Resolution == "ignore" {
 			continue
 		}
+		if candidate.DuplicateElementID != 0 && candidate.DuplicateElementPageID != 0 && candidate.DuplicateElementPageID != data.Session.PageID {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "重复元素不属于会话页面"})
+		}
 		issues = append(issues, validateCandidateForSave(candidate, item)...)
 		name := strings.ToLower(strings.TrimSpace(candidate.Name))
-		if names[name] || data.ExistingNames[name] {
-			issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: "name", Message: "页面内元素名称重复"})
+		if names[name] {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "name", Message: "页面内元素名称重复"})
+		}
+		if len(data.ExistingNames[name]) > 0 {
+			for _, existingID := range data.ExistingNames[name] {
+				if item.Resolution != "update" || existingID != candidate.DuplicateElementID {
+					issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "name", Message: "页面内元素名称重复"})
+					break
+				}
+			}
 		}
 		names[name] = true
 	}
@@ -373,7 +390,7 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 func validateCandidateForSave(candidate model.ElementCaptureCandidate, item model.CandidateSaveItem) []model.CandidateIssue {
 	issues := make([]model.CandidateIssue, 0)
 	issue := func(field, message string) {
-		issues = append(issues, model.CandidateIssue{CandidateID: candidate.ID, Field: field, Message: message})
+		issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: field, Message: message})
 	}
 	if strings.TrimSpace(candidate.Name) == "" || strings.TrimSpace(candidate.Name) == "未命名元素" {
 		issue("name", "候选项名称不可靠")
@@ -415,11 +432,11 @@ func isResolution(value string) bool {
 func candidateIssuesError(issues []model.CandidateIssue) error {
 	parts := make([]string, 0, len(issues))
 	for _, issue := range issues {
-		if issue.CandidateID == "" {
+		if issue.CandidateID == 0 {
 			parts = append(parts, issue.Message)
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("候选项 %s：%s", issue.CandidateID, issue.Message))
+		parts = append(parts, fmt.Sprintf("候选项 %d：%s", issue.CandidateID, issue.Message))
 	}
 	return errors.New(strings.Join(parts, "；"))
 }
