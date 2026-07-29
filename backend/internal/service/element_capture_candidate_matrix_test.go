@@ -29,6 +29,8 @@ type captureCandidateTestRepo struct {
 	lockedCandidates     []model.ElementCaptureCandidate
 	existingNames        map[string][]int64
 	existingFingerprints map[string][]int64
+	lockedNames          map[string][]int64
+	lockedFingerprints   map[string][]int64
 
 	addCalls      int
 	addExecutorID string
@@ -165,7 +167,7 @@ func (r *captureCandidateTestRepo) UpdateCandidate(_ context.Context, actor, ses
 
 func (r *captureCandidateTestRepo) GetBatchSaveData(context.Context, string, []int64) (model.CaptureBatchData, error) {
 	r.batchDataCalls++
-	return r.batchData(r.candidates), nil
+	return r.batchData(r.candidates, r.existingNames, r.existingFingerprints), nil
 }
 
 func (r *captureCandidateTestRepo) SaveCandidates(_ context.Context, _ string, _ model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error) {
@@ -174,19 +176,27 @@ func (r *captureCandidateTestRepo) SaveCandidates(_ context.Context, _ string, _
 	if candidates == nil {
 		candidates = r.candidates
 	}
-	if err := validate(r.batchData(candidates)); err != nil {
+	names := r.lockedNames
+	if names == nil {
+		names = r.existingNames
+	}
+	fingerprints := r.lockedFingerprints
+	if fingerprints == nil {
+		fingerprints = r.existingFingerprints
+	}
+	if err := validate(r.batchData(candidates, names, fingerprints)); err != nil {
 		return model.BatchSaveResult{}, err
 	}
 	r.saveSucceeded = true
 	return model.BatchSaveResult{}, nil
 }
 
-func (r *captureCandidateTestRepo) batchData(candidates []model.ElementCaptureCandidate) model.CaptureBatchData {
+func (r *captureCandidateTestRepo) batchData(candidates []model.ElementCaptureCandidate, names map[string][]int64, fingerprints map[string][]int64) model.CaptureBatchData {
 	return model.CaptureBatchData{
 		Session:              r.session,
 		Candidates:           candidates,
-		ExistingNames:        r.existingNames,
-		ExistingFingerprints: r.existingFingerprints,
+		ExistingNames:        names,
+		ExistingFingerprints: fingerprints,
 	}
 }
 
@@ -206,6 +216,48 @@ func TestAddCandidatePassesTokenHashToProductionRepositoryBoundary(t *testing.T)
 	sum := sha256.Sum256([]byte("one-time-token"))
 	if repo.addCalls != 1 || repo.addExecutorID != "executor-1" || repo.addTokenHash != hex.EncodeToString(sum[:]) {
 		t.Fatalf("令牌或执行器未正确传递：calls=%d executor=%q hash=%q", repo.addCalls, repo.addExecutorID, repo.addTokenHash)
+	}
+}
+
+func TestAddCandidateRejectsInvalidCreateRequestMatrix(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*model.CaptureCandidateCreateRequest)
+		wantErr string
+	}{
+		{name: "empty name", mutate: func(req *model.CaptureCandidateCreateRequest) { req.Name = " " }, wantErr: "会话、名称和采集地址无效"},
+		{name: "invalid capture URL", mutate: func(req *model.CaptureCandidateCreateRequest) { req.CaptureURL = "javascript:alert(1)" }, wantErr: "会话、名称和采集地址无效"},
+		{name: "empty locators", mutate: func(req *model.CaptureCandidateCreateRequest) { req.Locators = nil }, wantErr: "locators 必须是非空数组"},
+		{name: "malformed locators", mutate: func(req *model.CaptureCandidateCreateRequest) { req.Locators = []byte(`{`) }, wantErr: "locators 必须是非空数组"},
+		{name: "more than three locators", mutate: func(req *model.CaptureCandidateCreateRequest) {
+			req.Locators = []byte(`[
+				{"type":"css","value":"#one"},
+				{"type":"css","value":"#two"},
+				{"type":"css","value":"#three"},
+				{"type":"css","value":"#four"}
+			]`)
+		}, wantErr: "locators 必须是非空数组"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, repo := newCaptureCandidateTestService()
+			req := model.CaptureCandidateCreateRequest{
+				SessionID:    "session-1",
+				Name:         "submit",
+				Fingerprint:  testFingerprintA,
+				CaptureURL:   "https://example.test",
+				Locators:     reliableTestLocators,
+				QualityScore: 95,
+			}
+			tt.mutate(&req)
+			_, err := service.AddCandidate(context.Background(), "executor-1", "token", req)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("错误不符合预期：%v", err)
+			}
+			if repo.addCalls != 0 {
+				t.Fatalf("非法候选不应访问仓储，实际调用 %d 次", repo.addCalls)
+			}
+		})
 	}
 }
 
@@ -305,6 +357,20 @@ func TestBatchSaveRejects201ItemsBeforeRepositoryAccess(t *testing.T) {
 	}
 	if repo.batchDataCalls != 0 || repo.saveCalls != 0 {
 		t.Fatalf("201 项不应访问仓储：batch=%d save=%d", repo.batchDataCalls, repo.saveCalls)
+	}
+}
+
+func TestBatchSaveRejectsEmptyActorBeforeRepositoryAccess(t *testing.T) {
+	service, repo := newCaptureCandidateTestService(validCaptureCandidate(1, "save", testFingerprintA))
+	_, err := service.BatchSave(context.Background(), " ", model.CandidateBatchSaveRequest{
+		SessionID: "session-1",
+		Items:     []model.CandidateSaveItem{{CandidateID: 1, Resolution: "create"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "操作人不能为空") {
+		t.Fatalf("空 actor 错误不符合预期：%v", err)
+	}
+	if repo.batchDataCalls != 0 || repo.saveCalls != 0 {
+		t.Fatalf("空 actor 不应访问仓储：batch=%d save=%d", repo.batchDataCalls, repo.saveCalls)
 	}
 }
 
@@ -526,6 +592,120 @@ func TestBatchSaveResolutionAndEffectiveTargetMatrix(t *testing.T) {
 				t.Fatalf("预检失败不应启动保存事务，实际调用 %d 次", repo.saveCalls)
 			}
 		})
+	}
+}
+
+func TestBatchSaveUsesDistinctExplicitTargetsWhenCandidatesShareStaleTarget(t *testing.T) {
+	first := validCaptureCandidate(1, "save-one", testFingerprintA)
+	first.DuplicateElementID = 11
+	first.DuplicateElementPageID = 8
+	second := validCaptureCandidate(2, "save-two", testFingerprintA)
+	second.DuplicateElementID = 11
+	second.DuplicateElementPageID = 8
+	service, repo := newCaptureCandidateTestService(first, second)
+	repo.existingFingerprints = map[string][]int64{testFingerprintA: {11, 12}}
+
+	_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{
+		SessionID: "session-1",
+		Items: []model.CandidateSaveItem{
+			{CandidateID: 1, Resolution: "update", TargetElementID: 11},
+			{CandidateID: 2, Resolution: "update", TargetElementID: 12},
+		},
+	})
+	if err != nil {
+		t.Fatalf("不同显式目标被旧候选目标误判为重复：%v", err)
+	}
+	if repo.saveCalls != 1 || !repo.saveSucceeded {
+		t.Fatalf("合法显式目标未通过锁后复检：saveCalls=%d succeeded=%v", repo.saveCalls, repo.saveSucceeded)
+	}
+}
+
+func TestBatchSaveRevalidatesEffectiveTargetAgainstLockedFingerprintChanges(t *testing.T) {
+	tests := []struct {
+		name                  string
+		preflightFingerprints map[string][]int64
+		lockedFingerprints    map[string][]int64
+		item                  model.CandidateSaveItem
+		wantField             string
+		wantSuccess           bool
+	}{
+		{
+			name:                  "preflight single target becomes ambiguous after lock",
+			preflightFingerprints: map[string][]int64{testFingerprintA: {11}},
+			lockedFingerprints:    map[string][]int64{testFingerprintA: {11, 12}},
+			item:                  model.CandidateSaveItem{CandidateID: 1, Resolution: "update"},
+			wantField:             "targetElementId",
+		},
+		{
+			name:                  "explicit target is deleted before lock",
+			preflightFingerprints: map[string][]int64{testFingerprintA: {11, 12}},
+			lockedFingerprints:    map[string][]int64{testFingerprintA: {11}},
+			item:                  model.CandidateSaveItem{CandidateID: 1, Resolution: "update", TargetElementID: 12},
+			wantField:             "targetElementId",
+		},
+		{
+			name:                  "explicit target changes fingerprint before lock",
+			preflightFingerprints: map[string][]int64{testFingerprintA: {11, 12}},
+			lockedFingerprints: map[string][]int64{
+				testFingerprintA: {11},
+				testFingerprintB: {12},
+			},
+			item:      model.CandidateSaveItem{CandidateID: 1, Resolution: "update", TargetElementID: 12},
+			wantField: "targetElementId",
+		},
+		{
+			name:                  "automatic target follows the new locked singleton",
+			preflightFingerprints: map[string][]int64{testFingerprintA: {11}},
+			lockedFingerprints:    map[string][]int64{testFingerprintA: {12}},
+			item:                  model.CandidateSaveItem{CandidateID: 1, Resolution: "update"},
+			wantSuccess:           true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := validCaptureCandidate(1, "save", testFingerprintA)
+			candidate.DuplicateElementID = 11
+			candidate.DuplicateElementPageID = 8
+			service, repo := newCaptureCandidateTestService(candidate)
+			repo.existingFingerprints = tt.preflightFingerprints
+			repo.lockedFingerprints = tt.lockedFingerprints
+
+			_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{
+				SessionID: "session-1",
+				Items:     []model.CandidateSaveItem{tt.item},
+			})
+			if tt.wantSuccess {
+				if err != nil {
+					t.Fatalf("锁后唯一目标变化应继续通过：%v", err)
+				}
+				if repo.saveCalls != 1 || !repo.saveSucceeded {
+					t.Fatalf("锁后唯一目标变化未完成保存：saveCalls=%d succeeded=%v", repo.saveCalls, repo.saveSucceeded)
+				}
+				return
+			}
+			issues := requireCandidateIssues(t, err)
+			requireIssueField(t, issues, tt.wantField)
+			if repo.saveCalls != 1 || repo.saveSucceeded {
+				t.Fatalf("锁后目标变化未阻止事务：saveCalls=%d succeeded=%v", repo.saveCalls, repo.saveSucceeded)
+			}
+		})
+	}
+}
+
+func TestBatchSaveRejectsExistingNameOwnedByAnotherElement(t *testing.T) {
+	candidate := validCaptureCandidate(1, "save", testFingerprintA)
+	service, repo := newCaptureCandidateTestService(candidate)
+	repo.existingFingerprints = map[string][]int64{testFingerprintA: {11}}
+	repo.existingNames = map[string][]int64{"save": {12}}
+
+	_, err := service.BatchSave(context.Background(), "admin", model.CandidateBatchSaveRequest{
+		SessionID: "session-1",
+		Items:     []model.CandidateSaveItem{{CandidateID: 1, Resolution: "update", TargetElementID: 11}},
+	})
+	issues := requireCandidateIssues(t, err)
+	requireIssueField(t, issues, "name")
+	if repo.saveCalls != 0 {
+		t.Fatalf("非 self 名称冲突不应启动保存事务，实际调用 %d 次", repo.saveCalls)
 	}
 }
 

@@ -25,23 +25,30 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 	if err != nil {
 		t.Fatalf("打开 PostgreSQL：%v", err)
 	}
-	defer adminDB.Close()
+	schema := ""
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if schema != "" {
+			if _, err := adminDB.ExecContext(cleanupCtx, `drop schema if exists `+schema+` cascade`); err != nil {
+				t.Errorf("清理临时 schema %s：%v", schema, err)
+			}
+		}
+		if err := adminDB.Close(); err != nil {
+			t.Errorf("关闭 PostgreSQL 管理连接：%v", err)
+		}
+	})
 	if err := adminDB.PingContext(ctx); err != nil {
 		t.Fatalf("连接 PostgreSQL：%v", err)
 	}
 
-	schema := fmt.Sprintf("element_capture_migration_%d", time.Now().UnixNano())
+	schema = fmt.Sprintf("element_capture_migration_%d", time.Now().UnixNano())
 	if !regexp.MustCompile(`^element_capture_migration_[0-9]+$`).MatchString(schema) {
 		t.Fatalf("临时 schema 名称无效：%q", schema)
 	}
 	if _, err := adminDB.ExecContext(ctx, `create schema `+schema); err != nil {
 		t.Fatalf("创建临时 schema：%v", err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		_, _ = adminDB.ExecContext(cleanupCtx, `drop schema if exists `+schema+` cascade`)
-	})
 
 	scopedDSN, err := postgresDSNWithSearchPath(dsn, schema)
 	if err != nil {
@@ -51,7 +58,11 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 	if err != nil {
 		t.Fatalf("打开临时 schema 连接：%v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("关闭临时 schema 连接：%v", err)
+		}
+	}()
 	db.SetMaxOpenConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		t.Fatalf("连接临时 schema：%v", err)
@@ -65,6 +76,7 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 			fingerprint text not null default '',
 			deleted_at timestamptz
 		)`,
+		`create unique index uq_page_elements_active_fingerprint on page_elements(page_id,fingerprint) where deleted_at is null and fingerprint <> ''`,
 		`create table element_capture_sessions (
 			id text primary key,
 			executor_id text not null,
@@ -72,9 +84,11 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 		)`,
 		`create table element_capture_candidates (
 			id text primary key,
+			cursor_id bigserial unique,
 			session_id text not null,
 			expires_at timestamptz not null
 		)`,
+		`create unique index uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
 		`insert into element_capture_sessions(id,executor_id,status) values('legacy-session','legacy-executor','completed')`,
 		`insert into element_capture_candidates(id,session_id,expires_at) values('legacy-candidate','legacy-session',now()+interval '1 hour')`,
 	}
@@ -98,6 +112,47 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 	}
 	if cursorID <= 0 {
 		t.Fatalf("旧候选未回填正数游标：%d", cursorID)
+	}
+
+	var legacyFingerprintIndexCount int
+	if err := db.QueryRowContext(ctx, `
+		select count(*) from pg_class i
+		join pg_namespace n on n.oid=i.relnamespace
+		where n.nspname=current_schema() and i.relkind='i' and i.relname='uq_page_elements_active_fingerprint'
+	`).Scan(&legacyFingerprintIndexCount); err != nil {
+		t.Fatalf("检查旧 fingerprint 索引：%v", err)
+	}
+	if legacyFingerprintIndexCount != 0 {
+		t.Fatalf("旧 fingerprint 唯一索引仍存在：%d", legacyFingerprintIndexCount)
+	}
+
+	var automaticCursorConstraintCount int
+	if err := db.QueryRowContext(ctx, `
+		select count(*) from pg_constraint c
+		join pg_class r on r.oid=c.conrelid
+		join pg_namespace n on n.oid=r.relnamespace
+		where n.nspname=current_schema() and r.relname='element_capture_candidates'
+		  and c.conname='element_capture_candidates_cursor_id_key'
+	`).Scan(&automaticCursorConstraintCount); err != nil {
+		t.Fatalf("检查旧 cursor 自动约束：%v", err)
+	}
+	if automaticCursorConstraintCount != 0 {
+		t.Fatalf("旧 cursor 自动唯一约束仍存在：%d", automaticCursorConstraintCount)
+	}
+
+	var namedCursorIndexCount int
+	var namedCursorIndexUnique bool
+	if err := db.QueryRowContext(ctx, `
+		select count(*),coalesce(bool_and(x.indisunique),false)
+		from pg_index x
+		join pg_class i on i.oid=x.indexrelid
+		join pg_namespace n on n.oid=i.relnamespace
+		where n.nspname=current_schema() and i.relname='uq_element_capture_candidates_cursor_id'
+	`).Scan(&namedCursorIndexCount, &namedCursorIndexUnique); err != nil {
+		t.Fatalf("检查命名 cursor 唯一索引：%v", err)
+	}
+	if namedCursorIndexCount != 1 || !namedCursorIndexUnique {
+		t.Fatalf("命名 cursor 唯一索引状态错误：count=%d unique=%v", namedCursorIndexCount, namedCursorIndexUnique)
 	}
 
 	for _, indexName := range []string{

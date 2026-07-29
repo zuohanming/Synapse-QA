@@ -46,7 +46,7 @@ func captureCandidateRows(rows ...[]driver.Value) *sqlmock.Rows {
 
 func captureCandidateRow(id string, cursorID int64, name, fingerprint string, locators []byte, quality float64, duplicateID, duplicatePageID int64, status string) []driver.Value {
 	return []driver.Value{
-		id, cursorID, "session-1", name, fingerprint, "https://example.test/page", "button", strings.Title(name),
+		id, cursorID, "session-1", name, fingerprint, "https://example.test/page", "button", name,
 		locators, quality, duplicateID, duplicatePageID, "", "", status, time.Now().Add(time.Hour),
 	}
 }
@@ -136,6 +136,60 @@ func TestElementCaptureRepositoryRequiresMatchingTokenAndActiveSession(t *testin
 	}
 }
 
+func TestElementCaptureRepositoryAddCandidateDuplicateDetectionMatrix(t *testing.T) {
+	tests := []struct {
+		name               string
+		duplicateRows      *sqlmock.Rows
+		wantDuplicateID    int64
+		wantConflictStatus string
+	}{
+		{
+			name:               "active same-page fingerprint marks duplicate",
+			duplicateRows:      sqlmock.NewRows([]string{"id"}).AddRow(42),
+			wantDuplicateID:    42,
+			wantConflictStatus: "duplicate",
+		},
+		{
+			name:          "soft-deleted same-page fingerprint is ignored",
+			duplicateRows: sqlmock.NewRows([]string{"id"}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, mock := newElementCaptureRepositoryMock(t)
+			mock.ExpectBegin()
+			mock.ExpectQuery(`select page_id, candidate_count from element_capture_sessions[\s\S]*status = 'active'[\s\S]*for update`).
+				WithArgs("session-1", "executor-1", "token-hash").
+				WillReturnRows(sqlmock.NewRows([]string{"page_id", "candidate_count"}).AddRow(8, 0))
+			mock.ExpectQuery(`select id from page_elements where page_id = \$1 and fingerprint = \$2 and deleted_at is null order by id limit 1`).
+				WithArgs(8, repositoryFingerprintA).
+				WillReturnRows(tt.duplicateRows)
+			mock.ExpectQuery(`insert into element_capture_candidates`).
+				WithArgs(sqlmock.AnyArg(), "session-1", "submit", repositoryFingerprintA, "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95.0, tt.wantDuplicateID, tt.wantConflictStatus, "", sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"cursor_id"}).AddRow(1))
+			mock.ExpectExec(`update element_capture_sessions set candidate_count=\$1`).
+				WithArgs(1, "session-1").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+
+			added, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{
+				SessionID: "session-1", Name: "submit", Fingerprint: repositoryFingerprintA,
+				CaptureURL: "https://example.test", TagName: "button", AccessibleName: "Submit",
+				Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95,
+			}, "executor-1", "token-hash")
+			if err != nil {
+				t.Fatalf("AddCandidate 返回错误：%v", err)
+			}
+			if added.DuplicateElementID != tt.wantDuplicateID || added.ConflictStatus != tt.wantConflictStatus {
+				t.Fatalf("重复识别错误：%+v", added)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestElementCaptureRepositoryListsVisibleCandidatesByCursorAndLimit(t *testing.T) {
 	repo, mock := newElementCaptureRepositoryMock(t)
 	mock.ExpectQuery(`from element_capture_candidates c join element_capture_sessions s on s\.id=c\.session_id join users u on u\.username=s\.created_by[\s\S]*u\.id=\$2[\s\S]*c\.cursor_id>\$3 order by c\.cursor_id asc limit \$4`).
@@ -202,8 +256,8 @@ func TestElementCaptureRepositoryBatchSaveCommitsCreateUpdateIgnoreVersionsAndAu
 	elements := sqlmock.NewRows([]string{"id", "name", "fingerprint"}).AddRow(42, "existing", repositoryFingerprintB)
 	expectCandidateSaveLockPrefix(mock, rows, elements)
 
-	mock.ExpectQuery(`insert into page_elements`).
-		WithArgs(8, "create", "testid", "create", "0", "", "", "", "", "", "", repositoryFingerprintA, "https://example.test/page", "button", "Create", 95.0, "admin").
+	mock.ExpectQuery(`insert into page_elements[\s\S]*captured_at,current_version\)[\s\S]*now\(\),1\) returning id`).
+		WithArgs(8, "create", "testid", "create", "0", "", "", "", "", "", "", repositoryFingerprintA, "https://example.test/page", "button", "create", 95.0, "admin").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(101))
 	mock.ExpectExec(`insert into page_element_versions`).
 		WithArgs(int64(101), 1, sqlmock.AnyArg(), "采集候选项审核入库", "admin").
@@ -212,8 +266,8 @@ func TestElementCaptureRepositoryBatchSaveCommitsCreateUpdateIgnoreVersionsAndAu
 		WithArgs("create", int64(1), "session-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectQuery(`update page_elements set name=\$1`).
-		WithArgs("updated", "css", "#updated", "1", "", "", "", "", "", "", repositoryFingerprintB, "https://example.test/page", "button", "Updated", 90.0, "admin", int64(42), int64(8)).
+	mock.ExpectQuery(`update page_elements set[\s\S]*current_version=current_version\+1[\s\S]*returning id,current_version`).
+		WithArgs("updated", "css", "#updated", "1", "", "", "", "", "", "", repositoryFingerprintB, "https://example.test/page", "button", "updated", 90.0, "admin", int64(42), int64(8)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "current_version"}).AddRow(42, 3))
 	mock.ExpectExec(`insert into page_element_versions`).
 		WithArgs(int64(42), 3, sqlmock.AnyArg(), "采集候选项审核入库", "admin").
@@ -253,6 +307,48 @@ func TestElementCaptureRepositoryBatchSaveCommitsCreateUpdateIgnoreVersionsAndAu
 	}
 	if !validated || len(result.SavedCandidateIDs) != 2 || result.SavedCandidateIDs[0] != 1 || result.SavedCandidateIDs[1] != 2 || len(result.IgnoredCandidateIDs) != 1 || result.IgnoredCandidateIDs[0] != 3 {
 		t.Fatalf("事务结果错误：validated=%v result=%+v", validated, result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryBatchSaveUsesNewLockedSingletonTarget(t *testing.T) {
+	repo, mock := newElementCaptureRepositoryMock(t)
+	locators := []byte(`[{"type":"testid","value":"save","score":95,"unique":true}]`)
+	rows := captureCandidateRows(
+		captureCandidateRow("candidate-update", 1, "save", repositoryFingerprintA, locators, 95, 11, 8, "pending"),
+	)
+	elements := sqlmock.NewRows([]string{"id", "name", "fingerprint"}).AddRow(12, "existing", repositoryFingerprintA)
+	expectCandidateSaveLockPrefix(mock, rows, elements)
+	mock.ExpectQuery(`update page_elements set[\s\S]*current_version=current_version\+1[\s\S]*returning id,current_version`).
+		WithArgs("save", "testid", "save", "", "", "", "", "", "", "", repositoryFingerprintA, "https://example.test/page", "button", "save", 95.0, "admin", int64(12), int64(8)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "current_version"}).AddRow(12, 2))
+	mock.ExpectExec(`insert into page_element_versions`).
+		WithArgs(int64(12), 2, sqlmock.AnyArg(), "采集候选项审核入库", "admin").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`update element_capture_candidates set status='saved',conflict_resolution=\$1`).
+		WithArgs("update", int64(1), "session-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`insert into operation_logs`).
+		WithArgs("admin", "session-1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.SaveCandidates(context.Background(), "admin", model.CandidateBatchSaveRequest{
+		SessionID: "session-1",
+		Items:     []model.CandidateSaveItem{{CandidateID: 1, Resolution: "update"}},
+	}, func(data model.CaptureBatchData) error {
+		if len(data.Candidates) != 1 || data.Candidates[0].DuplicateElementID != 12 {
+			t.Fatalf("锁后唯一目标未替换旧目标：%+v", data.Candidates)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SaveCandidates 返回错误：%v", err)
+	}
+	if len(result.SavedCandidateIDs) != 1 || result.SavedCandidateIDs[0] != 1 {
+		t.Fatalf("保存结果错误：%+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
