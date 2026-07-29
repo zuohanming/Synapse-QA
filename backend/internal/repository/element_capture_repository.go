@@ -35,6 +35,17 @@ func (r *ElementCaptureRepository) PageExists(ctx context.Context, pageID int64)
 	return exists, err
 }
 
+// PageAccessible 限定为页面创建者或管理员。页面目前没有 project_id，不能伪造 project_members 授权。
+func (r *ElementCaptureRepository) PageAccessible(ctx context.Context, pageID int64, actor string) (bool, error) {
+	var allowed bool
+	err := r.db.QueryRowContext(ctx, `
+		select exists(select 1 from ui_assets p where p.id=$1 and p.asset_type='page' and p.deleted_at is null and (
+			p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+		))
+	`, pageID, actor).Scan(&allowed)
+	return allowed, err
+}
+
 func (r *ElementCaptureRepository) HasActiveCapture(ctx context.Context, executorID string) (bool, error) {
 	var exists bool
 	err := r.db.QueryRowContext(ctx, `
@@ -52,6 +63,142 @@ func (r *ElementCaptureRepository) CreateSession(ctx context.Context, session mo
 	`, session.ID, session.PageID, session.ExecutorID, session.BrowserContextID, session.BrowserChannel, session.CreatedBy,
 		session.Status, session.Mode, session.CurrentURL, session.TokenHash, session.LastHeartbeatAt, session.ExpiresAt)
 	return err
+}
+
+func (r *ElementCaptureRepository) CreateSessionWithStartCommand(ctx context.Context, actor string, session model.ElementCaptureSession, command model.ElementCaptureCommand) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedPageID int64
+	if err = tx.QueryRowContext(ctx, `select p.id from ui_assets p where p.id=$1 and p.asset_type='page' and p.deleted_at is null and (p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')) for update`, session.PageID, actor).Scan(&lockedPageID); errors.Is(err, sql.ErrNoRows) {
+		return model.NewDomainError(model.ErrNotFound, "页面不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `insert into element_capture_sessions(id,page_id,executor_id,browser_context_id,browser_channel,created_by,status,mode,current_url,token_hash,last_heartbeat_at,expires_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, session.ID, session.PageID, session.ExecutorID, session.BrowserContextID, session.BrowserChannel, session.CreatedBy, session.Status, session.Mode, session.CurrentURL, session.TokenHash, session.LastHeartbeatAt, session.ExpiresAt); err != nil {
+		return err
+	}
+	if err = insertCaptureCommand(ctx, tx, command, session.ExecutorID, session.ExpiresAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertCaptureCommand(ctx context.Context, tx *sql.Tx, command model.ElementCaptureCommand, executorID string, expiresAt time.Time) error {
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,payload,status,expires_at) values($1,$2,$3,$4,'pending',$5)`, command.SessionID, executorID, command.Type, payload, expiresAt)
+	return err
+}
+
+func (r *ElementCaptureRepository) SetModeWithCommand(ctx context.Context, actor, sessionID, mode string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var executorID string
+	err = tx.QueryRowContext(ctx, `select executor_id from element_capture_sessions where id=$1 and status in ('starting','active','interrupted') and (created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')) for update`, sessionID, actor).Scan(&executorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, r.captureSessionAccessError(ctx, sessionID, actor)
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `update element_capture_sessions set mode=$1,updated_at=now() where id=$2`, mode, sessionID); err != nil {
+		return false, err
+	}
+	if err = insertCaptureCommand(ctx, tx, model.ElementCaptureCommand{SessionID: sessionID, Type: "set_mode", Mode: mode}, executorID, time.Now().Add(30*time.Minute)); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+func (r *ElementCaptureRepository) StopSessionWithCommand(ctx context.Context, actor, sessionID string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var executorID, status string
+	err = tx.QueryRowContext(ctx, `select executor_id,status from element_capture_sessions where id=$1 and (created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')) for update`, sessionID, actor).Scan(&executorID, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+	}
+	if err != nil {
+		return false, err
+	}
+	if status == "completed" || status == "expired" || status == "failed" {
+		return true, tx.Commit()
+	}
+	if _, err = tx.ExecContext(ctx, `update element_capture_sessions set status='completed',updated_at=now() where id=$1`, sessionID); err != nil {
+		return false, err
+	}
+	if err = insertCaptureCommand(ctx, tx, model.ElementCaptureCommand{SessionID: sessionID, Type: "stop"}, executorID, time.Now().Add(30*time.Minute)); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+func (r *ElementCaptureRepository) captureSessionAccessError(ctx context.Context, sessionID, actor string) error {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `select exists(select 1 from element_capture_sessions where id=$1 and (created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')))`, sessionID, actor).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return model.NewDomainError(model.ErrConflict, "采集会话已结束")
+	}
+	return model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+}
+
+func (r *ElementCaptureRepository) AuthorizeCommandExecutor(ctx context.Context, executorID, token string) (bool, error) {
+	var allowed bool
+	err := r.db.QueryRowContext(ctx, `select exists(select 1 from executors e where e.executor_id=$1 and (e.executor_token=$2 or (e.executor_token='' and exists(select 1 from platform_settings where key='executor_shared_token' and value=$2))))`, executorID, token).Scan(&allowed)
+	return allowed, err
+}
+
+func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID string, limit int) ([]model.ElementCaptureCommand, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `update element_capture_commands set status='expired' where status='pending' and expires_at <= now()`); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `delete from element_capture_commands where status in ('claimed','expired') and created_at < now()-interval '24 hours'`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `with picked as (select id from element_capture_commands where executor_id=$1 and status='pending' and expires_at>now() order by id for update skip locked limit $2) update element_capture_commands c set status='claimed',claimed_at=now() from picked where c.id=picked.id returning c.id,c.session_id,c.command_type,c.payload`, executorID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []model.ElementCaptureCommand{}
+	for rows.Next() {
+		var item model.ElementCaptureCommand
+		var payload []byte
+		if err = rows.Scan(&item.ID, &item.SessionID, &item.Type, &payload); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(payload, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (r *ElementCaptureRepository) GetSession(ctx context.Context, userID int64, sessionID string) (model.ElementCaptureSessionDetail, error) {
@@ -151,26 +298,49 @@ func (r *ElementCaptureRepository) Heartbeat(ctx context.Context, sessionID, exe
 }
 
 func (r *ElementCaptureRepository) ExpireSessions(ctx context.Context, now time.Time) error {
-	if _, err := r.db.ExecContext(ctx, `
-		update element_capture_sessions
-		set status = 'expired', updated_at = now()
-		where status in ('starting', 'active', 'interrupted') and expires_at <= $1
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = r.expireSessionsAndEnqueue(ctx, tx, `
+		update element_capture_sessions set status='expired',updated_at=now()
+		where status in ('starting','active','interrupted') and expires_at <= $1 returning id,executor_id
 	`, now); err != nil {
 		return err
 	}
-	if _, err := r.db.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		update element_capture_sessions
 		set status = 'interrupted', interrupted_at = $1, recovery_expires_at = $2, updated_at = now()
 		where status = 'active' and expires_at > $1 and last_heartbeat_at < $3
 	`, now, now.Add(captureRecoveryWindow), now.Add(-captureRecoveryWindow)); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `
-		update element_capture_sessions
-		set status = 'expired', updated_at = now()
-		where status = 'interrupted' and recovery_expires_at <= $1
-	`, now)
-	return err
+	if err = r.expireSessionsAndEnqueue(ctx, tx, `
+		update element_capture_sessions set status='expired',updated_at=now()
+		where status='interrupted' and recovery_expires_at <= $1 returning id,executor_id
+	`, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *ElementCaptureRepository) expireSessionsAndEnqueue(ctx context.Context, tx *sql.Tx, query string, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, query, now)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sessionID, executorID string
+		if err = rows.Scan(&sessionID, &executorID); err != nil {
+			return err
+		}
+		if err = insertCaptureCommand(ctx, tx, model.ElementCaptureCommand{SessionID: sessionID, Type: "expire"}, executorID, now.Add(30*time.Minute)); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (r *ElementCaptureRepository) FailSession(ctx context.Context, sessionID, executorID, tokenHash, reason string) (bool, error) {
@@ -182,8 +352,18 @@ func (r *ElementCaptureRepository) FailSession(ctx context.Context, sessionID, e
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	if err != nil || rows == 0 {
-		return rows > 0, err
+	if err != nil {
+		return false, err
+	}
+	if rows == 0 {
+		var terminal bool
+		if err = r.db.QueryRowContext(ctx, `select exists(select 1 from element_capture_sessions where id=$1 and executor_id=$2 and token_hash=$3 and status in ('completed','expired','failed'))`, sessionID, executorID, tokenHash).Scan(&terminal); err != nil {
+			return false, err
+		}
+		if terminal {
+			return false, model.NewDomainError(model.ErrConflict, "采集会话已结束")
+		}
+		return false, nil
 	}
 	_, err = r.db.ExecContext(ctx, `insert into operation_logs(actor,action,target) values($1,'element_capture.failed',$2)`, executorID, sessionID+":"+reason)
 	return true, err
@@ -349,13 +529,13 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 		for update
 	`, candidate.SessionID, executorID, tokenHash).Scan(&pageID, &count)
 	if errors.Is(err, sql.ErrNoRows) {
-		return candidate, errors.New("采集会话不存在、执行器或令牌无效，或会话未激活")
+		return candidate, model.NewDomainError(model.ErrUnauthorized, "执行器或会话令牌无效")
 	}
 	if err != nil {
 		return candidate, err
 	}
 	if count >= 500 {
-		return candidate, errors.New("单个采集会话最多 500 个候选项")
+		return candidate, model.NewDomainError(model.ErrConflict, "单个采集会话最多 500 个候选项")
 	}
 	var duplicateID sql.NullInt64
 	err = tx.QueryRowContext(ctx, `
@@ -395,6 +575,13 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 }
 
 func (r *ElementCaptureRepository) ListCandidates(ctx context.Context, userID int64, sessionID string, afterID int64, limit int) ([]model.ElementCaptureCandidate, error) {
+	var accessible bool
+	if err := r.db.QueryRowContext(ctx, `select exists(select 1 from element_capture_sessions s where s.id=$1 and (s.created_by=(select username from users where id=$2 and deleted_at is null) or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$2 and u.deleted_at is null and ro.code='admin')))`, sessionID, userID).Scan(&accessible); err != nil {
+		return nil, err
+	}
+	if !accessible {
+		return nil, model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,
 		       coalesce(c.duplicate_element_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
@@ -436,7 +623,7 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
-			return false, errors.New("页面元素名称冲突")
+			return false, model.NewDomainError(model.ErrConflict, "页面元素名称冲突")
 		}
 		return false, err
 	}
@@ -601,7 +788,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 				if updateErr != nil {
 					return result, updateErr
 				}
-				return result, errors.New("候选项状态已被并发修改")
+				return result, model.NewDomainError(model.ErrConflict, "候选项状态已被并发修改")
 			}
 			result.IgnoredCandidateIDs = append(result.IgnoredCandidateIDs, candidate.CursorID)
 			continue
@@ -610,7 +797,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
-				return result, fmt.Errorf("候选项 %d：页面元素名称冲突", candidate.CursorID)
+				return result, model.NewDomainError(model.ErrConflict, fmt.Sprintf("候选项 %d：页面元素名称冲突", candidate.CursorID))
 			}
 			return result, err
 		}
@@ -630,7 +817,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 			if updateErr != nil {
 				return result, updateErr
 			}
-			return result, errors.New("候选项状态已被并发修改")
+			return result, model.NewDomainError(model.ErrConflict, "候选项状态已被并发修改")
 		}
 		result.SavedCandidateIDs = append(result.SavedCandidateIDs, candidate.CursorID)
 	}

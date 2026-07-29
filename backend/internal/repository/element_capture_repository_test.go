@@ -50,6 +50,65 @@ func TestElementCaptureRepositoryPageExistsAcceptsOnlyPageAssets(t *testing.T) {
 	}
 }
 
+func TestElementCaptureRepositoryPageAccessibleUsesOwnerOrAdminForRealPageAssets(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`from ui_assets p[\s\S]*asset_type='page'[\s\S]*p\.created_by=\$2[\s\S]*ro\.code='admin'`).WithArgs(int64(8), "owner").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	allowed, err := NewElementCaptureRepository(db).PageAccessible(context.Background(), 8, "owner")
+	if err != nil || !allowed {
+		t.Fatalf("allowed=%v err=%v", allowed, err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryClaimsPersistentCommandsOnceWithSkipLocked(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec(`update element_capture_commands set status='expired'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`delete from element_capture_commands`).WillReturnResult(sqlmock.NewResult(0, 0))
+	payload := []byte(`{"sessionId":"session-1","type":"start","token":"one-time"}`)
+	mock.ExpectQuery(`for update skip locked[\s\S]*status='claimed'`).WithArgs("exec-1", 50).WillReturnRows(sqlmock.NewRows([]string{"id", "session_id", "command_type", "payload"}).AddRow(7, "session-1", "start", payload))
+	mock.ExpectCommit()
+	items, err := NewElementCaptureRepository(db).ClaimCommands(context.Background(), "exec-1", 50)
+	if err != nil || len(items) != 1 || items[0].ID != 7 || items[0].Token != "one-time" {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryCreatesSessionAndStartCommandAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`select p\.id from ui_assets p[\s\S]*asset_type='page'[\s\S]*for update`).WithArgs(int64(8), "owner").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
+	mock.ExpectExec(`insert into element_capture_sessions`).WithArgs("session-1", int64(8), "exec-1", "", "chrome", "owner", "starting", "pick", "https://example.test", "hash", now, now.Add(30*time.Minute)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`insert into element_capture_commands`).WithArgs("session-1", "exec-1", "start", sqlmock.AnyArg(), now.Add(30*time.Minute)).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	session := model.ElementCaptureSession{ID: "session-1", PageID: 8, ExecutorID: "exec-1", BrowserChannel: "chrome", CreatedBy: "owner", Status: "starting", Mode: "pick", CurrentURL: "https://example.test", TokenHash: "hash", LastHeartbeatAt: now, ExpiresAt: now.Add(30 * time.Minute)}
+	err = NewElementCaptureRepository(db).CreateSessionWithStartCommand(context.Background(), "owner", session, model.ElementCaptureCommand{SessionID: "session-1", Type: "start", Token: "one-time"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -93,13 +152,16 @@ func TestElementCaptureRepositoryExpiresTimedOutAndInterruptedSessions(t *testin
 	defer db.Close()
 
 	now := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
-	mock.ExpectExec(regexp.QuoteMeta("update element_capture_sessions\n\t\tset status = 'expired', updated_at = now()")).
-		WithArgs(now).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`update element_capture_sessions set status='expired'[\s\S]*returning id,executor_id`).
+		WithArgs(now).WillReturnRows(sqlmock.NewRows([]string{"id", "executor_id"}).AddRow("session-1", "exec-1"))
+	mock.ExpectExec(`insert into element_capture_commands`).WithArgs("session-1", "exec-1", "expire", sqlmock.AnyArg(), now.Add(30*time.Minute)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("update element_capture_sessions").
 		WithArgs(now, now.Add(captureRecoveryWindow), now.Add(-captureRecoveryWindow)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("update element_capture_sessions").
-		WithArgs(now).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`update element_capture_sessions set status='expired'[\s\S]*recovery_expires_at <= \$1[\s\S]*returning id,executor_id`).
+		WithArgs(now).WillReturnRows(sqlmock.NewRows([]string{"id", "executor_id"}))
+	mock.ExpectCommit()
 
 	if err := NewElementCaptureRepository(db).ExpireSessions(context.Background(), now); err != nil {
 		t.Fatalf("ExpireSessions returned error: %v", err)

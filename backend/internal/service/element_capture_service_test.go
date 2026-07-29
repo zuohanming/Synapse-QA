@@ -56,6 +56,7 @@ type fakeCaptureRepo struct {
 	authorizedID   string
 	authorizedExec string
 	authorizedHash string
+	commands       []model.ElementCaptureCommand
 }
 
 type fakeExecutorReader struct {
@@ -245,6 +246,48 @@ func (f *fakeCaptureRepo) CreateSession(_ context.Context, session model.Element
 	return f.createErr
 }
 
+func (f *fakeCaptureRepo) PageAccessible(_ context.Context, _ int64, _ string) (bool, error) {
+	return f.pageExists, nil
+}
+
+func (f *fakeCaptureRepo) CreateSessionWithStartCommand(ctx context.Context, _ string, session model.ElementCaptureSession, command model.ElementCaptureCommand) error {
+	if err := f.CreateSession(ctx, session); err != nil {
+		return err
+	}
+	f.commands = append(f.commands, command)
+	return nil
+}
+
+func (f *fakeCaptureRepo) SetModeWithCommand(ctx context.Context, actor, sessionID, mode string) (bool, error) {
+	updated, err := f.SetMode(ctx, actor, sessionID, mode)
+	if updated && err == nil {
+		f.commands = append(f.commands, model.ElementCaptureCommand{SessionID: sessionID, Type: "set_mode", Mode: mode})
+	}
+	return updated, err
+}
+
+func (f *fakeCaptureRepo) StopSessionWithCommand(ctx context.Context, actor, sessionID string) (bool, error) {
+	updated, err := f.StopSession(ctx, actor, sessionID)
+	if updated && err == nil {
+		f.commands = append(f.commands, model.ElementCaptureCommand{SessionID: sessionID, Type: "stop"})
+	}
+	return updated, err
+}
+
+func (f *fakeCaptureRepo) AuthorizeCommandExecutor(_ context.Context, executorID, token string) (bool, error) {
+	f.authorizedExec = executorID
+	return f.authorized && token == "long-token", nil
+}
+
+func (f *fakeCaptureRepo) ClaimCommands(_ context.Context, executorID string, _ int) ([]model.ElementCaptureCommand, error) {
+	if executorID != "exec-1" {
+		return nil, nil
+	}
+	items := f.commands
+	f.commands = nil
+	return items, nil
+}
+
 func (f *fakeCaptureRepo) SetMode(_ context.Context, _, _ string, mode string) (bool, error) {
 	f.setMode = mode
 	return f.setModeUpdated, nil
@@ -421,7 +464,7 @@ func TestElementCaptureHeartbeatRequiresBrowserContextOnFirstActivation(t *testi
 	service := NewElementCaptureService(&fakeCaptureRepo{heartbeat: true}, fakeExecutorReader{online: true}, []byte("secret"))
 
 	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "", "https://example.test")
-	if err == nil || err.Error() != "浏览器上下文不能为空" {
+	if !errors.Is(err, model.ErrConflict) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -483,9 +526,8 @@ func TestElementCaptureStateTransitionsBindAndRecoverBrowserContext(t *testing.T
 	}
 }
 
-func TestElementCaptureStopSessionRejectsTerminalSessionWithConflict(t *testing.T) {
+func TestElementCaptureStopSessionRejectsInvisibleSession(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
-
 	if err := service.StopSession(context.Background(), "admin", "completed-session"); !errors.Is(err, model.ErrConflict) {
 		t.Fatalf("StopSession error=%v", err)
 	}
@@ -504,17 +546,17 @@ func TestElementCaptureQueuesConsumableCommandsForAuthorizedExecutor(t *testing.
 	if err = svc.StopSession(context.Background(), "admin", created.Session.ID); err != nil {
 		t.Fatalf("StopSession: %v", err)
 	}
-	commands, err := svc.ListCommands(context.Background(), "exec-1", created.Session.ID, created.Token)
+	commands, err := svc.ListCommands(context.Background(), "exec-1", "", "long-token")
 	if err != nil {
 		t.Fatalf("ListCommands: %v", err)
 	}
 	if len(commands) != 3 || commands[0].Type != "start" || commands[1].Type != "set_mode" || commands[2].Type != "stop" {
 		t.Fatalf("commands=%+v", commands)
 	}
-	if repo.authorizedID != created.Session.ID || repo.authorizedExec != "exec-1" {
-		t.Fatalf("authorization=%q/%q", repo.authorizedID, repo.authorizedExec)
+	if repo.authorizedExec != "exec-1" {
+		t.Fatalf("authorization=%q", repo.authorizedExec)
 	}
-	commands, err = svc.ListCommands(context.Background(), "exec-1", created.Session.ID, created.Token)
+	commands, err = svc.ListCommands(context.Background(), "exec-1", "", "long-token")
 	if err != nil || len(commands) != 0 {
 		t.Fatalf("commands should be consumed: %+v err=%v", commands, err)
 	}
@@ -522,7 +564,7 @@ func TestElementCaptureQueuesConsumableCommandsForAuthorizedExecutor(t *testing.
 
 func TestElementCaptureRejectsUnauthorizedCommandRead(t *testing.T) {
 	svc := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
-	_, err := svc.ListCommands(context.Background(), "exec-1", "session-1", "bad")
+	_, err := svc.ListCommands(context.Background(), "exec-1", "", "bad")
 	if !errors.Is(err, model.ErrUnauthorized) {
 		t.Fatalf("err=%v", err)
 	}

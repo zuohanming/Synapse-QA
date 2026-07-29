@@ -33,3 +33,10 @@
 - 验证：controller、repository/service 聚焦、后端全量测试和 vet 均已通过；最终提交前将再次执行 diff-check。
 
 本轮修复已提交：`fix: secure element capture APIs`。
+
+## Fix round 2：持久化命令与认证解环
+
+- 命令表 `element_capture_commands` 通过幂等启动迁移创建；start、set_mode、stop 和 expire 与相应会话状态变化使用一个事务提交，轮询以 `FOR UPDATE SKIP LOCKED` 原子领取，过期命令标记失效并对已领取/失效命令执行 24 小时留存清理。
+- 命令轮询不再要求尚未领取 start 命令的执行器知晓会话令牌。它使用现有 `executors.executor_token`/共享令牌机制的 `X-Executor-Token` 和 executor ID；start payload 只投递一次会话令牌，心跳、候选和失败回调继续使用该令牌。
+- 页面资源的真实类型经 Bootstrap、UI 路由和创建调用核查为 `page`；`page_element` 仅代表元素列表资产，未被误作页面。创建会话先检查页面 owner/admin，创建事务内再锁定并复查，避免 TOCTOU。
+- 候选项路由在 AuthMiddleware 之前安装 no-store 中间件，因此 JWT 401 响应同样禁止缓存；候选容量、并发、名称唯一和终态失败均映射为类型化领域错误。

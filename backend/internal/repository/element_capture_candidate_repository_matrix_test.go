@@ -128,7 +128,7 @@ func TestElementCaptureRepositoryRequiresMatchingTokenAndActiveSession(t *testin
 	mock.ExpectRollback()
 
 	_, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{SessionID: "session-1"}, "executor-1", "wrong-token-hash")
-	if err == nil || !strings.Contains(err.Error(), "令牌无效") || !strings.Contains(err.Error(), "未激活") {
+	if !errors.Is(err, model.ErrUnauthorized) {
 		t.Fatalf("token/active 校验错误：%v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -192,6 +192,8 @@ func TestElementCaptureRepositoryAddCandidateDuplicateDetectionMatrix(t *testing
 
 func TestElementCaptureRepositoryListsVisibleCandidatesByCursorAndLimit(t *testing.T) {
 	repo, mock := newElementCaptureRepositoryMock(t)
+	mock.ExpectQuery(`select exists\(select 1 from element_capture_sessions s[\s\S]*s\.id=\$1`).
+		WithArgs("session-1", int64(7)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`from element_capture_candidates c join element_capture_sessions s on s\.id=c\.session_id[\s\S]*c\.cursor_id>\$3[\s\S]*created_by=\(select username from users where id=\$2[\s\S]*limit \$4`).
 		WithArgs("session-1", int64(7), int64(5), 20).
 		WillReturnRows(sqlmock.NewRows([]string{

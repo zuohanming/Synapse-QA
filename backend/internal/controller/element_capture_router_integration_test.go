@@ -138,8 +138,8 @@ func TestElementCaptureProductionRouterRegistersAllRoutesAndEnforcesBoundaries(t
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("executor authentication status=%d", response.Code)
 	}
-	request = httptest.NewRequest(http.MethodGet, "/api/executor/element-capture/commands?executorId=exec-1&sessionId=session-1", nil)
-	request.Header.Set("Authorization", "Bearer session-token")
+	request = httptest.NewRequest(http.MethodGet, "/api/executor/element-capture/commands?executorId=exec-1", nil)
+	request.Header.Set("X-Executor-Token", "long-token")
 	response = httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

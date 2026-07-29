@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -72,6 +71,19 @@ type CaptureExecutorRepository interface {
 	AuthorizeExecutor(ctx context.Context, sessionID, executorID, tokenHash string) (bool, error)
 }
 
+// CaptureCommandRepository 将命令和会话状态放在同一数据库事务中，避免进程重启丢失控制命令。
+type CaptureCommandRepository interface {
+	CreateSessionWithStartCommand(ctx context.Context, actor string, session model.ElementCaptureSession, command model.ElementCaptureCommand) error
+	SetModeWithCommand(ctx context.Context, actor, sessionID, mode string) (bool, error)
+	StopSessionWithCommand(ctx context.Context, actor, sessionID string) (bool, error)
+	ClaimCommands(ctx context.Context, executorID string, limit int) ([]model.ElementCaptureCommand, error)
+	AuthorizeCommandExecutor(ctx context.Context, executorID, token string) (bool, error)
+}
+
+type PageAccessRepository interface {
+	PageAccessible(ctx context.Context, pageID int64, actor string) (bool, error)
+}
+
 type captureLocator struct {
 	Type   string  `json:"type"`
 	Value  string  `json:"value"`
@@ -83,32 +95,10 @@ type ElementCaptureService struct {
 	repo           ElementCaptureRepository
 	executorReader CaptureExecutorReader
 	now            func() time.Time
-	commands       *captureCommandQueue
-}
-
-type captureCommandQueue struct {
-	mu    sync.Mutex
-	items map[string][]model.ElementCaptureCommand
-}
-
-func newCaptureCommandQueue() *captureCommandQueue {
-	return &captureCommandQueue{items: map[string][]model.ElementCaptureCommand{}}
-}
-func (q *captureCommandQueue) enqueue(sessionID string, command model.ElementCaptureCommand) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.items[sessionID] = append(q.items[sessionID], command)
-}
-func (q *captureCommandQueue) take(sessionID string) []model.ElementCaptureCommand {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	items := append([]model.ElementCaptureCommand(nil), q.items[sessionID]...)
-	delete(q.items, sessionID)
-	return items
 }
 
 func NewElementCaptureService(repo ElementCaptureRepository, executorReader CaptureExecutorReader, _ []byte) *ElementCaptureService {
-	return &ElementCaptureService{repo: repo, executorReader: executorReader, now: time.Now, commands: newCaptureCommandQueue()}
+	return &ElementCaptureService{repo: repo, executorReader: executorReader, now: time.Now}
 }
 
 func captureError(kind error, message string) error { return model.NewDomainError(kind, message) }
@@ -118,7 +108,7 @@ func notFound(message string) error                 { return captureError(model.
 func unauthorized(message string) error             { return captureError(model.ErrUnauthorized, message) }
 
 func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string, req model.CaptureSessionCreateRequest) (model.CaptureSessionCreated, error) {
-	pageExists, err := s.repo.PageExists(ctx, req.PageID)
+	pageExists, err := s.pageAccessible(ctx, req.PageID, actor)
 	if err != nil {
 		return model.CaptureSessionCreated{}, err
 	}
@@ -182,15 +172,27 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 		LastHeartbeatAt:  now,
 		ExpiresAt:        now.Add(30 * time.Minute),
 	}
-	if err := s.repo.CreateSession(ctx, session); err != nil {
+	command := model.ElementCaptureCommand{SessionID: session.ID, Type: "start", Mode: session.Mode, URL: session.CurrentURL, BrowserChannel: session.BrowserChannel, Token: token}
+	if commandRepo, ok := s.repo.(CaptureCommandRepository); ok {
+		err = commandRepo.CreateSessionWithStartCommand(ctx, actor, session, command)
+	} else {
+		err = s.repo.CreateSession(ctx, session)
+	}
+	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return model.CaptureSessionCreated{}, conflict("执行器正在采集页面元素")
 		}
 		return model.CaptureSessionCreated{}, err
 	}
-	s.commands.enqueue(session.ID, model.ElementCaptureCommand{SessionID: session.ID, Type: "start", Mode: session.Mode, URL: session.CurrentURL, BrowserChannel: session.BrowserChannel})
 	return model.CaptureSessionCreated{Session: session, Token: token}, nil
+}
+
+func (s *ElementCaptureService) pageAccessible(ctx context.Context, pageID int64, actor string) (bool, error) {
+	if repo, ok := s.repo.(PageAccessRepository); ok {
+		return repo.PageAccessible(ctx, pageID, actor)
+	}
+	return s.repo.PageExists(ctx, pageID)
 }
 
 func newCaptureToken() (string, error) {
@@ -213,14 +215,19 @@ func (s *ElementCaptureService) SetMode(ctx context.Context, actor, sessionID, m
 	if mode != "pick" && mode != "operate" {
 		return validation("仅支持 pick 或 operate 模式")
 	}
-	updated, err := s.repo.SetMode(ctx, actor, sessionID, mode)
+	var updated bool
+	var err error
+	if repo, ok := s.repo.(CaptureCommandRepository); ok {
+		updated, err = repo.SetModeWithCommand(ctx, actor, sessionID, mode)
+	} else {
+		updated, err = s.repo.SetMode(ctx, actor, sessionID, mode)
+	}
 	if err != nil {
 		return err
 	}
 	if !updated {
 		return notFound("采集会话不存在或已结束")
 	}
-	s.commands.enqueue(sessionID, model.ElementCaptureCommand{SessionID: sessionID, Type: "set_mode", Mode: mode})
 	return nil
 }
 
@@ -229,20 +236,25 @@ func (s *ElementCaptureService) GetSession(ctx context.Context, userID int64, se
 }
 
 func (s *ElementCaptureService) StopSession(ctx context.Context, actor, sessionID string) error {
-	updated, err := s.repo.StopSession(ctx, actor, sessionID)
+	var updated bool
+	var err error
+	if repo, ok := s.repo.(CaptureCommandRepository); ok {
+		updated, err = repo.StopSessionWithCommand(ctx, actor, sessionID)
+	} else {
+		updated, err = s.repo.StopSession(ctx, actor, sessionID)
+	}
 	if err != nil {
 		return err
 	}
 	if !updated {
 		return notFound("采集会话不存在")
 	}
-	s.commands.enqueue(sessionID, model.ElementCaptureCommand{SessionID: sessionID, Type: "stop"})
 	return nil
 }
 
 func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, browserContextID, currentURL string) error {
 	if browserContextID == "" {
-		return validation("浏览器上下文不能为空")
+		return conflict("浏览器上下文与会话状态冲突")
 	}
 	if !isCaptureURL(currentURL) {
 		return validation("页面地址必须是绝对 http/https URL")
@@ -300,11 +312,19 @@ func (s *ElementCaptureService) AuthorizeExecutor(ctx context.Context, sessionID
 	return nil
 }
 
-func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, sessionID, token string) ([]model.ElementCaptureCommand, error) {
-	if err := s.AuthorizeExecutor(ctx, sessionID, executorID, token); err != nil {
+func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, _ string, token string) ([]model.ElementCaptureCommand, error) {
+	repo, ok := s.repo.(CaptureCommandRepository)
+	if !ok {
+		return nil, errors.New("采集命令仓储未配置")
+	}
+	allowed, err := repo.AuthorizeCommandExecutor(ctx, executorID, token)
+	if err != nil {
 		return nil, err
 	}
-	return s.commands.take(sessionID), nil
+	if !allowed {
+		return nil, unauthorized("执行器长期令牌无效")
+	}
+	return repo.ClaimCommands(ctx, executorID, 50)
 }
 
 func (s *ElementCaptureService) ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error) {

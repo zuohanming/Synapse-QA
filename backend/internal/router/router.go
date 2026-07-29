@@ -42,6 +42,9 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/api-automation/test-runs/tasks/:taskId/callback", deps.APIAutomationController.TestRunCallback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
+	// 候选项响应始终先设置 no-store，连 JWT 认证失败响应也不例外。
+	captureNoStoreAuthed := api.Group("", captureNoStore(), deps.AuthMiddleware)
+	registerCaptureCandidateRoutes(captureNoStoreAuthed, deps)
 
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
@@ -189,11 +192,15 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	capture.GET("/capture-sessions/:id", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.GetSession)
 	capture.PATCH("/capture-sessions/:id/mode", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SetMode)
 	capture.POST("/capture-sessions/:id/stop", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.StopSession)
-	capture.GET("/capture-sessions/:id/candidates", captureNoStore(), controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
-	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", captureNoStore(), controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
-	capture.POST("/capture-sessions/:id/save", captureNoStore(), controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
 	capture.GET("/:id/versions", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListVersions)
 	capture.POST("/:id/versions/:version/rollback", controller.RequirePermission("ui.element.rollback"), deps.ElementCaptureController.RollbackVersion)
+}
+
+func registerCaptureCandidateRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	capture := authed.Group("/ui/page-elements")
+	capture.GET("/capture-sessions/:id/candidates", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
+	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
+	capture.POST("/capture-sessions/:id/save", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
 }
 
 func captureNoStore() gin.HandlerFunc {

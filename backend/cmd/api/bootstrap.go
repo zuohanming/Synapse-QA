@@ -675,6 +675,19 @@ func elementCaptureMigrationStatements() []string {
 		`create unique index if not exists uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
 		`drop index if exists uq_element_capture_sessions_active_executor`,
 		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,
+		`create table if not exists element_capture_commands (
+			id bigserial primary key,
+			session_id text not null references element_capture_sessions(id) on delete cascade,
+			executor_id text not null references executors(executor_id),
+			command_type text not null,
+			payload jsonb not null default '{}'::jsonb,
+			status text not null default 'pending',
+			expires_at timestamptz not null,
+			claimed_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_element_capture_commands_pending on element_capture_commands(executor_id, id) where status='pending'`,
+		`create index if not exists idx_element_capture_commands_retention on element_capture_commands(status, created_at)`,
 	}
 }
 

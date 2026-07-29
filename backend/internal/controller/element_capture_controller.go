@@ -288,7 +288,7 @@ func (ctl *ElementCaptureController) FailSession(c *gin.Context) {
 }
 
 func (ctl *ElementCaptureController) ListCommands(c *gin.Context) {
-	executorID, token, authorized := executorCredentials(c)
+	executorID, token, authorized := executorLongCredentials(c)
 	if !authorized {
 		return
 	}
@@ -352,6 +352,18 @@ func executorCredentials(c *gin.Context) (string, string, bool) {
 		return "", "", false
 	}
 	return executorID, strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")), true
+}
+func executorLongCredentials(c *gin.Context) (string, string, bool) {
+	executorID := strings.TrimSpace(c.GetHeader("X-Executor-ID"))
+	if executorID == "" {
+		executorID = strings.TrimSpace(c.Query("executorId"))
+	}
+	token := strings.TrimSpace(c.GetHeader("X-Executor-Token"))
+	if executorID == "" || token == "" {
+		fail(c, http.StatusUnauthorized, "执行器认证失败")
+		return "", "", false
+	}
+	return executorID, token, true
 }
 func unauthorizedExecutorError() error {
 	return model.NewDomainError(model.ErrUnauthorized, "执行器或会话令牌无效")
