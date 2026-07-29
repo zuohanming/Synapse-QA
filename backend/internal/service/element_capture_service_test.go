@@ -581,3 +581,15 @@ func TestAddCandidateRejectsInvalidFingerprint(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidateBatchSaveRequiresExplicitTargetForMultipleFingerprintMatches(t *testing.T) {
+	data := model.CaptureBatchData{
+		Session:              model.ElementCaptureSession{PageID: 8, Status: CaptureActive},
+		Candidates:           []model.ElementCaptureCandidate{{CursorID: 1, ID: "candidate-1", Name: "save", Fingerprint: "fp", Status: "pending", QualityScore: 95, Locators: []byte(`[{"type":"testid","value":"save","score":95,"unique":true}]`)}},
+		ExistingFingerprints: map[string][]int64{"fp": {11, 12}},
+	}
+	issues := validateBatchSave(data, model.CandidateBatchSaveRequest{Items: []model.CandidateSaveItem{{CandidateID: 1, Resolution: "update"}}})
+	if len(issues) == 0 || !strings.Contains(issues[0].Message, "请选择目标") {
+		t.Fatalf("expected ambiguous target issue, got %+v", issues)
+	}
+}

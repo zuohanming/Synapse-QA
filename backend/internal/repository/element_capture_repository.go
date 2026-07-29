@@ -179,7 +179,7 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 	}
 	var duplicateID sql.NullInt64
 	err = tx.QueryRowContext(ctx, `
-		select id from page_elements where page_id = $1 and fingerprint = $2 and deleted_at is null limit 1
+		select id from page_elements where page_id = $1 and fingerprint = $2 and deleted_at is null order by id limit 1
 	`, pageID, candidate.Fingerprint).Scan(&duplicateID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return candidate, err
@@ -249,6 +249,10 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 		and not exists(select 1 from page_elements p where p.page_id=s.page_id and p.deleted_at is null and lower(p.name)=lower($1) and p.id <> coalesce(c.duplicate_element_id,0))
 	`, strings.TrimSpace(req.Name), req.Locators, req.QualityScore, req.ConflictResolution, candidateID, sessionID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
+			return false, errors.New("页面元素名称冲突")
+		}
 		return false, err
 	}
 	rows, err := result.RowsAffected()
@@ -315,16 +319,10 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	if err = tx.QueryRowContext(ctx, `select id from ui_assets where id=$1 and deleted_at is null for update`, pageID).Scan(&lockedPageID); err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	args := []any{req.SessionID}
-	placeholders := make([]string, 0, len(req.Items))
-	for index, item := range req.Items {
-		placeholders = append(placeholders, fmt.Sprintf("$%d", index+2))
-		args = append(args, item.CandidateID)
-	}
 	currentRows, err := tx.QueryContext(ctx, `
 		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,coalesce(c.duplicate_element_id,0),coalesce(p.page_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
 		from element_capture_candidates c left join page_elements p on p.id=c.duplicate_element_id and p.deleted_at is null
-		where c.session_id=$1 and c.cursor_id in (`+strings.Join(placeholders, ",")+`) for update of c`, args...)
+		where c.session_id=$1 order by c.cursor_id for update of c`, req.SessionID)
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
@@ -340,9 +338,19 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	if err = currentRows.Close(); err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	if len(locked.Candidates) != len(req.Items) {
-		return model.BatchSaveResult{}, errors.New("候选项不存在或不属于该会话")
+	byCursor := make(map[int64]model.ElementCaptureCandidate, len(locked.Candidates))
+	for _, candidate := range locked.Candidates {
+		byCursor[candidate.CursorID] = candidate
 	}
+	selected := make([]model.ElementCaptureCandidate, 0, len(req.Items))
+	for _, item := range req.Items {
+		candidate, ok := byCursor[item.CandidateID]
+		if !ok {
+			return model.BatchSaveResult{}, fmt.Errorf("候选项 %d 不存在或不属于该会话", item.CandidateID)
+		}
+		selected = append(selected, candidate)
+	}
+	locked.Candidates = selected
 	nameRows, err := tx.QueryContext(ctx, `select id,lower(name),fingerprint from page_elements where page_id=$1 and deleted_at is null for update`, pageID)
 	if err != nil {
 		return model.BatchSaveResult{}, err
@@ -368,7 +376,10 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		}
 		for candidateIndex := range locked.Candidates {
 			candidate := &locked.Candidates[candidateIndex]
-			if candidate.CursorID == item.CandidateID && len(locked.ExistingFingerprints[candidate.Fingerprint]) == 1 {
+			if candidate.CursorID == item.CandidateID && item.TargetElementID != 0 {
+				candidate.DuplicateElementID = item.TargetElementID
+				candidate.DuplicateElementPageID = pageID
+			} else if candidate.CursorID == item.CandidateID && len(locked.ExistingFingerprints[candidate.Fingerprint]) == 1 {
 				candidate.DuplicateElementID = locked.ExistingFingerprints[candidate.Fingerprint][0]
 				candidate.DuplicateElementPageID = pageID
 			}

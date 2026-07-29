@@ -45,7 +45,7 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	mock.ExpectQuery(regexp.QuoteMeta("select id from ui_assets where id=$1 and deleted_at is null for update")).
 		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
 	mock.ExpectQuery("from element_capture_candidates c left join page_elements p").
-		WithArgs("session-1", 1).WillReturnRows(sqlmock.NewRows([]string{"id", "cursor_id", "session_id", "name", "fingerprint", "capture_url", "tag_name", "accessible_name", "locators", "quality_score", "duplicate_element_id", "page_id", "conflict_status", "conflict_resolution", "status", "expires_at"}).AddRow("candidate-1", 1, "session-1", "submit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95, 0, 0, "", "", "pending", time.Now()))
+		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"id", "cursor_id", "session_id", "name", "fingerprint", "capture_url", "tag_name", "accessible_name", "locators", "quality_score", "duplicate_element_id", "page_id", "conflict_status", "conflict_resolution", "status", "expires_at"}).AddRow("candidate-1", 1, "session-1", "submit", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95, 0, 0, "", "", "pending", time.Now()))
 	mock.ExpectQuery(regexp.QuoteMeta("select id,lower(name),fingerprint from page_elements where page_id=$1 and deleted_at is null for update")).
 		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "fingerprint"}))
 	mock.ExpectQuery("insert into page_elements").

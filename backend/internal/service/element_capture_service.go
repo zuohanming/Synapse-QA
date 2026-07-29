@@ -377,8 +377,11 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 			updateTargets[candidate.DuplicateElementID] = true
 		}
 		if targets := data.ExistingFingerprints[candidate.Fingerprint]; len(targets) > 0 {
-			if item.Resolution == "update" && len(targets) > 1 && !containsElementID(targets, candidate.DuplicateElementID) {
-				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前指纹对应多个元素，必须选择更新目标"})
+			if item.Resolution == "update" && len(targets) > 1 && item.TargetElementID == 0 {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "当前指纹对应多个元素，请选择目标"})
+			}
+			if item.Resolution == "update" && item.TargetElementID != 0 && !containsElementID(targets, item.TargetElementID) {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "更新目标不是当前同指纹元素"})
 			}
 		} else if item.Resolution == "update" {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前不存在可更新的重复元素"})

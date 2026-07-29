@@ -75,8 +75,9 @@ type CaptureSessionCreateRequest struct {
 }
 
 type CandidateSaveItem struct {
-	CandidateID int64  `json:"candidateId"`
-	Resolution  string `json:"resolution"`
+	CandidateID     int64  `json:"candidateId"`
+	Resolution      string `json:"resolution"`
+	TargetElementID int64  `json:"targetElementId,omitempty"`
 }
 
 type CandidateBatchSaveRequest struct {
