@@ -37,6 +37,7 @@ class Settings:
     executor_shared_token = _environment_value("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token")
     platform_base_url = os.getenv("PLATFORM_BASE_URL", "http://127.0.0.1:8080")
     heartbeat_interval_seconds = int(os.getenv("EXECUTOR_HEARTBEAT_INTERVAL_SECONDS", "10"))
+    capture_command_poll_interval_seconds = 2
     max_workers = int(os.getenv("EXECUTOR_MAX_WORKERS", "2"))
     default_timeout_seconds = int(os.getenv("EXECUTOR_DEFAULT_TIMEOUT_SECONDS", "300"))
     artifacts_dir = os.getenv("EXECUTOR_ARTIFACTS_DIR", "artifacts")

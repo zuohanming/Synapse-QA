@@ -30,8 +30,7 @@ if sys.stderr is None:
 
 import uvicorn
 
-from app.api.routes import create_app
-from app.api.routes import heartbeat_client
+from app.api.routes import configure_gui_callbacks, create_app, heartbeat_client
 from app.core.config import save_executor_token, settings
 
 
@@ -107,6 +106,7 @@ class ExecutorGui:
         self.login_message_var = tk.StringVar(value="请输入执行器专属 Token")
         self.login_button: ttk.Button | None = None
         self.authenticated = False
+        self.capture_active = False
 
         self._setup_logging()
         self._setup_style()
@@ -330,7 +330,10 @@ class ExecutorGui:
 
     def _show_main(self) -> None:
         self.authenticated = True
-        heartbeat_client.set_auth_failure_handler(lambda: self.root.after(0, self._auth_expired))
+        configure_gui_callbacks(
+            self.queue_capture_status,
+            lambda: self.root.after(0, self._auth_expired),
+        )
         self._build_ui()
         self.authenticated = True
         self.root.after(300, self._drain_logs)
@@ -389,6 +392,19 @@ class ExecutorGui:
         self.status_var.set(value)
         self._apply_state_badges()
 
+    def queue_capture_status(self, active: bool, page_title: str) -> None:
+        """供采集轮询线程调用，把 Tk 状态更新切回主线程。"""
+        self.root.after(0, self._apply_capture_status, active, page_title)
+
+    def _apply_capture_status(self, active: bool, page_title: str) -> None:
+        self.capture_active = active
+        if active:
+            self._set_status(f"正在采集 · {page_title or '页面元素'}")
+        elif self.server_thread is not None and self.server_thread.is_alive():
+            self._set_status("运行中")
+        else:
+            self._set_status("已停止")
+
     def _set_health(self, value: str) -> None:
         self.health_var.set(value)
         self._apply_state_badges()
@@ -406,7 +422,7 @@ class ExecutorGui:
     def _configure_badge(self, badge: tk.Label | None, value: str) -> None:
         if badge is None:
             return
-        if value in {"运行中", "正常"}:
+        if value in {"运行中", "正常"} or value.startswith("正在采集 · "):
             badge.configure(bg="#e6f4ed", fg=SUCCESS)
         elif value in {"启动中", "停止中", "等待启动"}:
             badge.configure(bg="#f7efe3", fg=WARNING)
@@ -453,7 +469,8 @@ class ExecutorGui:
         try:
             with urllib.request.urlopen(settings.executor_endpoint.rstrip("/") + "/health", timeout=1.5) as response:
                 if response.status == 200:
-                    self._set_status("运行中")
+                    if not self.capture_active:
+                        self._set_status("运行中")
                     self._set_health("正常")
                 else:
                     self._set_health(f"异常 HTTP {response.status}")

@@ -1,6 +1,49 @@
-from typing import Any
+from enum import Enum
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class CaptureMode(str, Enum):
+    pick = "pick"
+    operate = "operate"
+
+
+class CaptureCommand(BaseModel):
+    """平台租约命令；receipt 只驻留内存，绝不写入日志或本地文件。"""
+
+    id: int = Field(gt=0)
+    session_id: str = Field(alias="sessionId", min_length=1)
+    type: Literal["start", "set_mode", "stop", "expire"]
+    mode: CaptureMode | None = None
+    url: str = ""
+    browser_channel: str = Field(default="", alias="browserChannel")
+    token: str = Field(default="", repr=False)
+    receipt: str = Field(default="", repr=False)
+    headless: bool = False
+
+    model_config = {"populate_by_name": True}
+
+
+class CaptureStartCommand(CaptureCommand):
+    type: Literal["start"] = "start"
+    mode: CaptureMode = CaptureMode.pick
+    url: str = Field(min_length=1)
+    browser_channel: str = Field(alias="browserChannel", min_length=1)
+    token: str = Field(min_length=1, repr=False)
+    receipt: str = Field(min_length=1, repr=False)
+
+
+class CaptureState(BaseModel):
+    """可对本地 health/GUI 暴露的非敏感会话状态。"""
+
+    session_id: str = Field(alias="sessionId")
+    browser_context_id: str = Field(alias="browserContextId")
+    mode: CaptureMode
+    page_title: str = Field(default="", alias="pageTitle")
+    active: bool = True
+
+    model_config = {"populate_by_name": True}
 
 
 class ElementSnapshot(BaseModel):
