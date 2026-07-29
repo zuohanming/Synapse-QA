@@ -31,6 +31,85 @@ type fakeExecutorReader struct {
 	uiUnsupported bool
 }
 
+type statefulCaptureRepo struct {
+	session model.ElementCaptureSession
+	now     time.Time
+}
+
+func (r *statefulCaptureRepo) PageExists(_ context.Context, _ int64) (bool, error) {
+	return true, nil
+}
+
+func (r *statefulCaptureRepo) HasActiveCapture(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+func (r *statefulCaptureRepo) CreateSession(_ context.Context, session model.ElementCaptureSession) error {
+	r.session = session
+	return nil
+}
+
+func (r *statefulCaptureRepo) GetSession(_ context.Context, _ int64, _ string) (model.ElementCaptureSessionDetail, error) {
+	return model.ElementCaptureSessionDetail{ElementCaptureSession: r.session}, nil
+}
+
+func (r *statefulCaptureRepo) SetMode(_ context.Context, _, _ string, mode string) (bool, error) {
+	r.session.Mode = mode
+	return true, nil
+}
+
+func (r *statefulCaptureRepo) StopSession(_ context.Context, _, _ string) (bool, error) {
+	if r.session.Status == CaptureCompleted || r.session.Status == CaptureExpired {
+		return false, nil
+	}
+	r.session.Status = CaptureCompleted
+	return true, nil
+}
+
+func (r *statefulCaptureRepo) Heartbeat(_ context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL string) (bool, error) {
+	if r.session.ID != sessionID || r.session.ExecutorID != executorID || r.session.TokenHash != tokenHash || !r.now.Before(r.session.ExpiresAt) {
+		return false, nil
+	}
+	if r.session.Status == CaptureInterrupted && (r.session.RecoveryExpiresAt == nil || r.now.After(*r.session.RecoveryExpiresAt)) {
+		return false, nil
+	}
+	if r.session.Status == CaptureStarting {
+		if r.session.BrowserContextID != "" || browserContextID == "" {
+			return false, nil
+		}
+		r.session.BrowserContextID = browserContextID
+	} else if (r.session.Status != CaptureActive && r.session.Status != CaptureInterrupted) || r.session.BrowserContextID != browserContextID {
+		return false, nil
+	}
+	r.session.Status = CaptureActive
+	r.session.CurrentURL = currentURL
+	r.session.LastHeartbeatAt = r.now
+	r.session.InterruptedAt = nil
+	r.session.RecoveryExpiresAt = nil
+	return true, nil
+}
+
+func (r *statefulCaptureRepo) ExpireSessions(_ context.Context, now time.Time) error {
+	r.now = now
+	if r.session.Status == CaptureStarting || r.session.Status == CaptureActive || r.session.Status == CaptureInterrupted {
+		if !now.Before(r.session.ExpiresAt) {
+			r.session.Status = CaptureExpired
+			return nil
+		}
+	}
+	if r.session.Status == CaptureActive && now.Sub(r.session.LastHeartbeatAt) > 60*time.Second {
+		r.session.Status = CaptureInterrupted
+		r.session.InterruptedAt = &now
+		recovery := now.Add(60 * time.Second)
+		r.session.RecoveryExpiresAt = &recovery
+		return nil
+	}
+	if r.session.Status == CaptureInterrupted && r.session.RecoveryExpiresAt != nil && !now.Before(*r.session.RecoveryExpiresAt) {
+		r.session.Status = CaptureExpired
+	}
+	return nil
+}
+
 func (f *fakeCaptureRepo) HasActiveCapture(_ context.Context, executorID string) (bool, error) {
 	return f.activeExecutor == executorID, nil
 }
@@ -53,7 +132,7 @@ func (f *fakeCaptureRepo) StopSession(_ context.Context, _, _ string) (bool, err
 	return f.stopped, nil
 }
 
-func (f *fakeCaptureRepo) Heartbeat(_ context.Context, _, _, tokenHash, _ string) (bool, error) {
+func (f *fakeCaptureRepo) Heartbeat(_ context.Context, _, _, tokenHash, _, _ string) (bool, error) {
 	f.heartbeatHash = tokenHash
 	return f.heartbeat, nil
 }
@@ -111,6 +190,20 @@ func TestElementCaptureCreateSessionReturnsOneTimeTokenAndPersistsOnlyHash(t *te
 	if repo.created.Status != CaptureStarting || repo.created.Mode != "pick" || repo.created.ExpiresAt.Sub(service.now()) != 30*time.Minute {
 		t.Fatalf("unexpected persisted session: %+v", repo.created)
 	}
+	if repo.created.BrowserContextID != "" {
+		t.Fatalf("starting session must wait for first heartbeat context binding: %+v", repo.created)
+	}
+}
+
+func TestElementCaptureCreateSessionRejectsInvalidFinalCurrentURL(t *testing.T) {
+	service := NewElementCaptureService(&fakeCaptureRepo{pageExists: true}, fakeExecutorReader{online: true}, []byte("secret"))
+
+	_, err := service.CreateSession(context.Background(), "admin", model.CaptureSessionCreateRequest{
+		PageID: 8, ExecutorID: "exec-1", URL: "https://example.test", CurrentURL: "javascript:alert(1)", BrowserChannel: "chrome",
+	})
+	if err == nil || err.Error() != "页面地址必须是绝对 http/https URL" {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestElementCaptureCreateSessionMapsExecutorSessionRace(t *testing.T) {
@@ -162,7 +255,7 @@ func TestElementCaptureSetModeUpdatesPickOrOperate(t *testing.T) {
 func TestElementCaptureHeartbeatRejectsWrongExecutorOrToken(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
 
-	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "https://example.test")
+	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "context-1", "https://example.test")
 	if err == nil || err.Error() != "采集会话不存在、执行器或令牌无效，或恢复窗口已过期" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,12 +265,87 @@ func TestElementCaptureHeartbeatHashesOneTimeToken(t *testing.T) {
 	repo := &fakeCaptureRepo{heartbeat: true}
 	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
 
-	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "https://example.test/path"); err != nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/path"); err != nil {
 		t.Fatalf("Heartbeat returned error: %v", err)
 	}
 	hash := sha256.Sum256([]byte("token-1"))
 	if repo.heartbeatHash != hex.EncodeToString(hash[:]) {
 		t.Fatalf("unexpected token hash: %q", repo.heartbeatHash)
+	}
+}
+
+func TestElementCaptureHeartbeatRejectsInvalidCurrentURL(t *testing.T) {
+	service := NewElementCaptureService(&fakeCaptureRepo{heartbeat: true}, fakeExecutorReader{online: true}, []byte("secret"))
+
+	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "file:///secret")
+	if err == nil || err.Error() != "页面地址必须是绝对 http/https URL" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestElementCaptureHeartbeatRequiresBrowserContextOnFirstActivation(t *testing.T) {
+	service := NewElementCaptureService(&fakeCaptureRepo{heartbeat: true}, fakeExecutorReader{online: true}, []byte("secret"))
+
+	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "", "https://example.test")
+	if err == nil || err.Error() != "浏览器上下文不能为空" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestElementCaptureStateTransitionsBindAndRecoverBrowserContext(t *testing.T) {
+	base := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	tokenHash := sha256.Sum256([]byte("token-1"))
+	repo := &statefulCaptureRepo{now: base, session: model.ElementCaptureSession{
+		ID: "session-1", ExecutorID: "exec-1", TokenHash: hex.EncodeToString(tokenHash[:]), Status: CaptureStarting,
+		ExpiresAt: base.Add(30 * time.Minute), LastHeartbeatAt: base,
+	}}
+	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
+
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test"); err != nil {
+		t.Fatalf("first Heartbeat returned error: %v", err)
+	}
+	if repo.session.Status != CaptureActive || repo.session.BrowserContextID != "context-1" {
+		t.Fatalf("starting session was not activated and bound: %+v", repo.session)
+	}
+
+	idleAt := base.Add(61 * time.Second)
+	if err := service.ExpireSessions(context.Background(), idleAt); err != nil {
+		t.Fatalf("ExpireSessions returned error: %v", err)
+	}
+	if repo.session.Status != CaptureInterrupted || repo.session.RecoveryExpiresAt == nil || !repo.session.RecoveryExpiresAt.Equal(idleAt.Add(60*time.Second)) {
+		t.Fatalf("active session was not interrupted with 60 second recovery: %+v", repo.session)
+	}
+	if err := service.Heartbeat(context.Background(), "session-1", "other-executor", "token-1", "context-1", "https://example.test"); err == nil {
+		t.Fatal("expected original executor enforcement")
+	}
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "other-context", "https://example.test"); err == nil {
+		t.Fatal("expected browser context immutability")
+	}
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/recovered"); err != nil {
+		t.Fatalf("original executor did not recover session: %v", err)
+	}
+	if repo.session.Status != CaptureActive || repo.session.RecoveryExpiresAt != nil {
+		t.Fatalf("session did not recover: %+v", repo.session)
+	}
+
+	repo.session.LastHeartbeatAt = idleAt
+	if err := service.ExpireSessions(context.Background(), idleAt.Add(61*time.Second)); err != nil {
+		t.Fatalf("second interruption returned error: %v", err)
+	}
+	expiredAt := idleAt.Add(121 * time.Second)
+	if err := service.ExpireSessions(context.Background(), expiredAt); err != nil {
+		t.Fatalf("recovery expiry returned error: %v", err)
+	}
+	if repo.session.Status != CaptureExpired {
+		t.Fatalf("session did not expire after recovery window: %+v", repo.session)
+	}
+
+	expiringRepo := &statefulCaptureRepo{now: base, session: model.ElementCaptureSession{Status: CaptureStarting, ExpiresAt: base.Add(30 * time.Minute)}}
+	if err := NewElementCaptureService(expiringRepo, fakeExecutorReader{online: true}, []byte("secret")).ExpireSessions(context.Background(), base.Add(30*time.Minute)); err != nil {
+		t.Fatalf("30 minute expiry returned error: %v", err)
+	}
+	if expiringRepo.session.Status != CaptureExpired {
+		t.Fatalf("session did not expire after 30 minutes: %+v", expiringRepo.session)
 	}
 }
 

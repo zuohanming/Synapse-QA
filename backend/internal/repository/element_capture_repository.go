@@ -91,17 +91,20 @@ func (r *ElementCaptureRepository) StopSession(ctx context.Context, actor, sessi
 	return rows > 0, err
 }
 
-func (r *ElementCaptureRepository) Heartbeat(ctx context.Context, sessionID, executorID, tokenHash, currentURL string) (bool, error) {
+func (r *ElementCaptureRepository) Heartbeat(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL string) (bool, error) {
 	var id string
 	err := r.db.QueryRowContext(ctx, `
 		update element_capture_sessions
 		set status = 'active', last_heartbeat_at = now(), interrupted_at = null,
-		    recovery_expires_at = null, current_url = $3, updated_at = now()
-		where id = $1 and executor_id = $2 and token_hash = $4
+		    recovery_expires_at = null, browser_context_id = case when status = 'starting' then $3 else browser_context_id end,
+		    current_url = $4, updated_at = now()
+		where id = $1 and executor_id = $2 and token_hash = $5 and expires_at > now()
 		  and status in ('starting', 'active', 'interrupted')
 		  and (status <> 'interrupted' or recovery_expires_at >= now())
+		  and ((status = 'starting' and browser_context_id = '' and $3 <> '') or
+		       (status in ('active', 'interrupted') and browser_context_id = $3))
 		returning id
-	`, sessionID, executorID, currentURL, tokenHash).Scan(&id)
+	`, sessionID, executorID, browserContextID, currentURL, tokenHash).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

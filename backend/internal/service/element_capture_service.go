@@ -32,7 +32,7 @@ type ElementCaptureRepository interface {
 	GetSession(ctx context.Context, userID int64, sessionID string) (model.ElementCaptureSessionDetail, error)
 	SetMode(ctx context.Context, actor, sessionID, mode string) (bool, error)
 	StopSession(ctx context.Context, actor, sessionID string) (bool, error)
-	Heartbeat(ctx context.Context, sessionID, executorID, tokenHash, currentURL string) (bool, error)
+	Heartbeat(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL string) (bool, error)
 	ExpireSessions(ctx context.Context, now time.Time) error
 }
 
@@ -97,12 +97,15 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 	if currentURL == "" {
 		currentURL = req.URL
 	}
+	if !isCaptureURL(currentURL) {
+		return model.CaptureSessionCreated{}, errors.New("页面地址必须是绝对 http/https URL")
+	}
 	tokenHash := sha256.Sum256([]byte(token))
 	session := model.ElementCaptureSession{
 		ID:               newCaptureID(),
 		PageID:           req.PageID,
 		ExecutorID:       req.ExecutorID,
-		BrowserContextID: req.BrowserContextID,
+		BrowserContextID: "",
 		BrowserChannel:   req.BrowserChannel,
 		CreatedBy:        actor,
 		Status:           CaptureStarting,
@@ -161,9 +164,15 @@ func (s *ElementCaptureService) StopSession(ctx context.Context, actor, sessionI
 	return err
 }
 
-func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, currentURL string) error {
+func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, browserContextID, currentURL string) error {
+	if browserContextID == "" {
+		return errors.New("浏览器上下文不能为空")
+	}
+	if !isCaptureURL(currentURL) {
+		return errors.New("页面地址必须是绝对 http/https URL")
+	}
 	tokenHash := sha256.Sum256([]byte(token))
-	updated, err := s.repo.Heartbeat(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), currentURL)
+	updated, err := s.repo.Heartbeat(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), browserContextID, currentURL)
 	if err != nil {
 		return err
 	}

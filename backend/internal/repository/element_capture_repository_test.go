@@ -17,10 +17,10 @@ func TestElementCaptureRepositoryHeartbeatUsesConditionalStateTransition(t *test
 	defer db.Close()
 
 	mock.ExpectQuery("update element_capture_sessions").
-		WithArgs("session-1", "exec-1", "https://example.test", "token-hash").
+		WithArgs("session-1", "exec-1", "context-1", "https://example.test", "token-hash").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("session-1"))
 
-	updated, err := NewElementCaptureRepository(db).Heartbeat(context.Background(), "session-1", "exec-1", "token-hash", "https://example.test")
+	updated, err := NewElementCaptureRepository(db).Heartbeat(context.Background(), "session-1", "exec-1", "token-hash", "context-1", "https://example.test")
 	if err != nil || !updated {
 		t.Fatalf("Heartbeat returned updated=%v err=%v", updated, err)
 	}
