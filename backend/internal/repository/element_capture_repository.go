@@ -417,7 +417,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
-				return result, fmt.Errorf("候选项 %d：页面元素名称或指纹冲突", candidate.CursorID)
+				return result, fmt.Errorf("候选项 %d：页面元素名称冲突", candidate.CursorID)
 			}
 			return result, err
 		}

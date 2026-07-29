@@ -364,28 +364,45 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		if candidate.Status != "pending" {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "status", Message: "候选项已处理"})
 		}
+		if !isResolution(item.Resolution) {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "resolution", Message: "冲突处理方式无效"})
+		}
+		if candidate.ConflictStatus == "duplicate" && item.Resolution == "" {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "resolution", Message: "重复候选项必须明确处理方式"})
+		}
+		if item.TargetElementID != 0 && item.Resolution != "update" {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "仅 update 可以指定目标元素"})
+		}
 		if item.Resolution == "ignore" {
 			continue
 		}
-		if candidate.DuplicateElementID != 0 && candidate.DuplicateElementPageID != data.Session.PageID {
-			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "重复元素不属于会话页面"})
-		}
+
+		targets := data.ExistingFingerprints[candidate.Fingerprint]
+		effectiveTarget := int64(0)
 		if item.Resolution == "update" {
-			if updateTargets[candidate.DuplicateElementID] {
-				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "同一批次不能重复更新同一元素"})
+			if item.TargetElementID != 0 {
+				effectiveTarget = item.TargetElementID
+			} else if len(targets) == 1 {
+				effectiveTarget = targets[0]
 			}
-			updateTargets[candidate.DuplicateElementID] = true
-		}
-		if targets := data.ExistingFingerprints[candidate.Fingerprint]; len(targets) > 0 {
-			if item.Resolution == "update" && len(targets) > 1 && item.TargetElementID == 0 {
+
+			switch {
+			case len(targets) == 0 && item.TargetElementID != 0:
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "更新目标不属于会话页面、已失效或不是当前同指纹元素"})
+			case len(targets) == 0:
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前不存在可更新的重复元素"})
+			case effectiveTarget == 0:
 				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "当前指纹对应多个元素，请选择目标"})
+			case !containsElementID(targets, effectiveTarget):
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "更新目标不属于会话页面、已失效或不是当前同指纹元素"})
+			default:
+				if updateTargets[effectiveTarget] {
+					issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "同一批次不能重复更新同一元素"})
+				}
+				updateTargets[effectiveTarget] = true
 			}
-			if item.Resolution == "update" && item.TargetElementID != 0 && !containsElementID(targets, item.TargetElementID) {
-				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "targetElementId", Message: "更新目标不是当前同指纹元素"})
-			}
-		} else if item.Resolution == "update" {
-			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前不存在可更新的重复元素"})
 		}
+
 		issues = append(issues, validateCandidateForSave(candidate, item)...)
 		name := strings.ToLower(strings.TrimSpace(candidate.Name))
 		if names[name] {
@@ -393,7 +410,7 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		}
 		if len(data.ExistingNames[name]) > 0 {
 			for _, existingID := range data.ExistingNames[name] {
-				if item.Resolution != "update" || existingID != candidate.DuplicateElementID {
+				if item.Resolution != "update" || existingID != effectiveTarget {
 					issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "name", Message: "页面内元素名称重复"})
 					break
 				}
@@ -413,7 +430,7 @@ func containsElementID(ids []int64, wanted int64) bool {
 	return false
 }
 
-func validateCandidateForSave(candidate model.ElementCaptureCandidate, item model.CandidateSaveItem) []model.CandidateIssue {
+func validateCandidateForSave(candidate model.ElementCaptureCandidate, _ model.CandidateSaveItem) []model.CandidateIssue {
 	issues := make([]model.CandidateIssue, 0)
 	issue := func(field, message string) {
 		issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: field, Message: message})
@@ -439,12 +456,6 @@ func validateCandidateForSave(candidate model.ElementCaptureCandidate, item mode
 			issue("locators", "候选项没有可靠唯一定位器")
 		}
 	}
-	if !isResolution(item.Resolution) {
-		issue("resolution", "冲突处理方式无效")
-	}
-	if candidate.ConflictStatus == "duplicate" && item.Resolution == "" {
-		issue("resolution", "重复候选项必须明确处理方式")
-	}
 	return issues
 }
 
@@ -452,16 +463,29 @@ func isResolution(value string) bool {
 	return value == "update" || value == "ignore" || value == "create"
 }
 
-func candidateIssuesError(issues []model.CandidateIssue) error {
-	parts := make([]string, 0, len(issues))
-	for _, issue := range issues {
+// CandidateIssuesError 保留批量审核的逐候选结构化问题，同时兼容既有错误文本。
+type CandidateIssuesError struct {
+	Issues []model.CandidateIssue
+}
+
+func (e *CandidateIssuesError) Error() string {
+	parts := make([]string, 0, len(e.Issues))
+	for _, issue := range e.Issues {
 		if issue.CandidateID == 0 {
 			parts = append(parts, issue.Message)
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("候选项 %d：%s", issue.CandidateID, issue.Message))
 	}
-	return errors.New(strings.Join(parts, "；"))
+	return strings.Join(parts, "；")
+}
+
+func (e *CandidateIssuesError) CandidateIssues() []model.CandidateIssue {
+	return append([]model.CandidateIssue(nil), e.Issues...)
+}
+
+func candidateIssuesError(issues []model.CandidateIssue) error {
+	return &CandidateIssuesError{Issues: append([]model.CandidateIssue(nil), issues...)}
 }
 
 func supportsUI(types []string) bool {
