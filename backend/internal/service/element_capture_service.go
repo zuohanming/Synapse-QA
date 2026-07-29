@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -56,18 +58,18 @@ type CandidateCaptureRepository interface {
 	AddCandidate(ctx context.Context, candidate model.ElementCaptureCandidate, executorID, tokenHash string) (model.ElementCaptureCandidate, error)
 	ListCandidates(ctx context.Context, userID int64, sessionID string, afterID int64, limit int) ([]model.ElementCaptureCandidate, error)
 	UpdateCandidate(ctx context.Context, actor, sessionID string, candidateID int64, req model.CaptureCandidateUpdateRequest) (bool, error)
-	GetBatchSaveData(ctx context.Context, sessionID string, candidateIDs []int64) (model.CaptureBatchData, error)
+	GetBatchSaveData(ctx context.Context, actor, sessionID string, candidateIDs []int64) (model.CaptureBatchData, error)
 	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error)
 }
 
 type CaptureVersionRepository interface {
-	ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error)
+	ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error)
 	RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error)
 }
 
 type CaptureExecutorRepository interface {
 	FailSession(ctx context.Context, sessionID, executorID, tokenHash, reason string) (bool, error)
-	ListCommands(ctx context.Context, executorID string) ([]model.ElementCaptureCommand, error)
+	AuthorizeExecutor(ctx context.Context, sessionID, executorID, tokenHash string) (bool, error)
 }
 
 type captureLocator struct {
@@ -81,11 +83,39 @@ type ElementCaptureService struct {
 	repo           ElementCaptureRepository
 	executorReader CaptureExecutorReader
 	now            func() time.Time
+	commands       *captureCommandQueue
+}
+
+type captureCommandQueue struct {
+	mu    sync.Mutex
+	items map[string][]model.ElementCaptureCommand
+}
+
+func newCaptureCommandQueue() *captureCommandQueue {
+	return &captureCommandQueue{items: map[string][]model.ElementCaptureCommand{}}
+}
+func (q *captureCommandQueue) enqueue(sessionID string, command model.ElementCaptureCommand) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items[sessionID] = append(q.items[sessionID], command)
+}
+func (q *captureCommandQueue) take(sessionID string) []model.ElementCaptureCommand {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	items := append([]model.ElementCaptureCommand(nil), q.items[sessionID]...)
+	delete(q.items, sessionID)
+	return items
 }
 
 func NewElementCaptureService(repo ElementCaptureRepository, executorReader CaptureExecutorReader, _ []byte) *ElementCaptureService {
-	return &ElementCaptureService{repo: repo, executorReader: executorReader, now: time.Now}
+	return &ElementCaptureService{repo: repo, executorReader: executorReader, now: time.Now, commands: newCaptureCommandQueue()}
 }
+
+func captureError(kind error, message string) error { return model.NewDomainError(kind, message) }
+func validation(message string) error               { return captureError(model.ErrValidation, message) }
+func conflict(message string) error                 { return captureError(model.ErrConflict, message) }
+func notFound(message string) error                 { return captureError(model.ErrNotFound, message) }
+func unauthorized(message string) error             { return captureError(model.ErrUnauthorized, message) }
 
 func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string, req model.CaptureSessionCreateRequest) (model.CaptureSessionCreated, error) {
 	pageExists, err := s.repo.PageExists(ctx, req.PageID)
@@ -93,33 +123,33 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 		return model.CaptureSessionCreated{}, err
 	}
 	if !pageExists {
-		return model.CaptureSessionCreated{}, errors.New("页面不存在")
+		return model.CaptureSessionCreated{}, notFound("页面不存在")
 	}
 	executor, err := s.executorReader.GetByID(ctx, req.ExecutorID)
 	if err != nil {
 		return model.CaptureSessionCreated{}, err
 	}
 	if executor.Status != "online" {
-		return model.CaptureSessionCreated{}, errors.New("执行器不在线")
+		return model.CaptureSessionCreated{}, conflict("执行器不在线")
 	}
 	if !supportsUI(executor.SupportedTypes) {
-		return model.CaptureSessionCreated{}, errors.New("执行器不支持 UI")
+		return model.CaptureSessionCreated{}, validation("执行器不支持 UI")
 	}
 	if !isCaptureURL(req.URL) {
-		return model.CaptureSessionCreated{}, errors.New("页面地址必须是绝对 http/https URL")
+		return model.CaptureSessionCreated{}, validation("页面地址必须是绝对 http/https URL")
 	}
 	if req.BrowserChannel != "chrome" && req.BrowserChannel != "msedge" {
-		return model.CaptureSessionCreated{}, errors.New("仅支持 Chrome 或 Edge 浏览器")
+		return model.CaptureSessionCreated{}, validation("仅支持 Chrome 或 Edge 浏览器")
 	}
 	if req.Mode != "" && req.Mode != "pick" && req.Mode != "operate" {
-		return model.CaptureSessionCreated{}, errors.New("仅支持 pick 或 operate 模式")
+		return model.CaptureSessionCreated{}, validation("仅支持 pick 或 operate 模式")
 	}
 	busy, err := s.repo.HasActiveCapture(ctx, req.ExecutorID)
 	if err != nil {
 		return model.CaptureSessionCreated{}, err
 	}
 	if busy {
-		return model.CaptureSessionCreated{}, errors.New("执行器正在采集页面元素")
+		return model.CaptureSessionCreated{}, conflict("执行器正在采集页面元素")
 	}
 	token, err := newCaptureToken()
 	if err != nil {
@@ -135,7 +165,7 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 		currentURL = req.URL
 	}
 	if !isCaptureURL(currentURL) {
-		return model.CaptureSessionCreated{}, errors.New("页面地址必须是绝对 http/https URL")
+		return model.CaptureSessionCreated{}, validation("页面地址必须是绝对 http/https URL")
 	}
 	tokenHash := sha256.Sum256([]byte(token))
 	session := model.ElementCaptureSession{
@@ -155,10 +185,11 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return model.CaptureSessionCreated{}, errors.New("执行器正在采集页面元素")
+			return model.CaptureSessionCreated{}, conflict("执行器正在采集页面元素")
 		}
 		return model.CaptureSessionCreated{}, err
 	}
+	s.commands.enqueue(session.ID, model.ElementCaptureCommand{SessionID: session.ID, Type: "start", Mode: session.Mode, URL: session.CurrentURL, BrowserChannel: session.BrowserChannel})
 	return model.CaptureSessionCreated{Session: session, Token: token}, nil
 }
 
@@ -180,15 +211,16 @@ func newCaptureID() string {
 
 func (s *ElementCaptureService) SetMode(ctx context.Context, actor, sessionID, mode string) error {
 	if mode != "pick" && mode != "operate" {
-		return errors.New("仅支持 pick 或 operate 模式")
+		return validation("仅支持 pick 或 operate 模式")
 	}
 	updated, err := s.repo.SetMode(ctx, actor, sessionID, mode)
 	if err != nil {
 		return err
 	}
 	if !updated {
-		return errors.New("采集会话不存在或已结束")
+		return notFound("采集会话不存在或已结束")
 	}
+	s.commands.enqueue(sessionID, model.ElementCaptureCommand{SessionID: sessionID, Type: "set_mode", Mode: mode})
 	return nil
 }
 
@@ -197,16 +229,23 @@ func (s *ElementCaptureService) GetSession(ctx context.Context, userID int64, se
 }
 
 func (s *ElementCaptureService) StopSession(ctx context.Context, actor, sessionID string) error {
-	_, err := s.repo.StopSession(ctx, actor, sessionID)
-	return err
+	updated, err := s.repo.StopSession(ctx, actor, sessionID)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return notFound("采集会话不存在")
+	}
+	s.commands.enqueue(sessionID, model.ElementCaptureCommand{SessionID: sessionID, Type: "stop"})
+	return nil
 }
 
 func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, browserContextID, currentURL string) error {
 	if browserContextID == "" {
-		return errors.New("浏览器上下文不能为空")
+		return validation("浏览器上下文不能为空")
 	}
 	if !isCaptureURL(currentURL) {
-		return errors.New("页面地址必须是绝对 http/https URL")
+		return validation("页面地址必须是绝对 http/https URL")
 	}
 	tokenHash := sha256.Sum256([]byte(token))
 	updated, err := s.repo.Heartbeat(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), browserContextID, currentURL)
@@ -214,7 +253,7 @@ func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, execut
 		return err
 	}
 	if !updated {
-		return errors.New("采集会话不存在、执行器或令牌无效，或恢复窗口已过期")
+		return unauthorized("执行器或会话令牌无效")
 	}
 	return nil
 }
@@ -229,7 +268,7 @@ func (s *ElementCaptureService) FailSession(ctx context.Context, sessionID, exec
 		return errors.New("采集执行器仓储未配置")
 	}
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(executorID) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(reason) == "" {
-		return errors.New("采集失败回调参数无效")
+		return validation("采集失败回调参数无效")
 	}
 	hash := sha256.Sum256([]byte(token))
 	updated, err := repo.FailSession(ctx, sessionID, executorID, hex.EncodeToString(hash[:]), strings.TrimSpace(reason))
@@ -237,31 +276,46 @@ func (s *ElementCaptureService) FailSession(ctx context.Context, sessionID, exec
 		return err
 	}
 	if !updated {
-		return errors.New("采集会话不存在、执行器或令牌无效")
+		return unauthorized("执行器或会话令牌无效")
 	}
 	return nil
 }
 
-func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID string) ([]model.ElementCaptureCommand, error) {
+func (s *ElementCaptureService) AuthorizeExecutor(ctx context.Context, sessionID, executorID, token string) error {
 	repo, ok := s.repo.(CaptureExecutorRepository)
 	if !ok {
-		return nil, errors.New("采集执行器仓储未配置")
+		return errors.New("采集执行器仓储未配置")
 	}
-	if strings.TrimSpace(executorID) == "" {
-		return nil, errors.New("executorId 不能为空")
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(executorID) == "" || strings.TrimSpace(token) == "" {
+		return unauthorized("执行器或会话令牌无效")
 	}
-	return repo.ListCommands(ctx, executorID)
+	hash := sha256.Sum256([]byte(token))
+	allowed, err := repo.AuthorizeExecutor(ctx, sessionID, executorID, hex.EncodeToString(hash[:]))
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return unauthorized("执行器或会话令牌无效")
+	}
+	return nil
 }
 
-func (s *ElementCaptureService) ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error) {
+func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, sessionID, token string) ([]model.ElementCaptureCommand, error) {
+	if err := s.AuthorizeExecutor(ctx, sessionID, executorID, token); err != nil {
+		return nil, err
+	}
+	return s.commands.take(sessionID), nil
+}
+
+func (s *ElementCaptureService) ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error) {
 	repo, ok := s.repo.(CaptureVersionRepository)
 	if !ok {
 		return nil, errors.New("页面元素版本仓储未配置")
 	}
 	if elementID <= 0 {
-		return nil, errors.New("页面元素 ID 无效")
+		return nil, validation("页面元素 ID 无效")
 	}
-	return repo.ListVersions(ctx, elementID)
+	return repo.ListVersions(ctx, userID, elementID)
 }
 
 func (s *ElementCaptureService) RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error) {
@@ -270,9 +324,13 @@ func (s *ElementCaptureService) RollbackVersion(ctx context.Context, actor strin
 		return model.PageElementVersion{}, errors.New("页面元素版本仓储未配置")
 	}
 	if strings.TrimSpace(actor) == "" || elementID <= 0 || version <= 0 {
-		return model.PageElementVersion{}, errors.New("版本回滚参数无效")
+		return model.PageElementVersion{}, validation("版本回滚参数无效")
 	}
-	return repo.RollbackVersion(ctx, actor, elementID, version)
+	item, err := repo.RollbackVersion(ctx, actor, elementID, version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.PageElementVersion{}, notFound("页面元素或版本不存在")
+	}
+	return item, err
 }
 
 func (s *ElementCaptureService) AddCandidate(ctx context.Context, executorID, token string, req model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {
@@ -298,13 +356,13 @@ func (s *ElementCaptureService) ListCandidates(ctx context.Context, userID int64
 		return nil, err
 	}
 	if afterID < 0 {
-		return nil, errors.New("afterID 不能小于 0")
+		return nil, validation("afterID 不能小于 0")
 	}
 	if limit == 0 {
 		limit = 100
 	}
 	if limit < 0 || limit > maxBatchSaveCandidates {
-		return nil, errors.New("limit 必须在 1 到 200 之间")
+		return nil, validation("limit 必须在 1 到 200 之间")
 	}
 	return repo.ListCandidates(ctx, userID, sessionID, afterID, limit)
 }
@@ -315,10 +373,10 @@ func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sess
 		return err
 	}
 	if strings.TrimSpace(actor) == "" || candidateID <= 0 || strings.TrimSpace(sessionID) == "" {
-		return errors.New("采集候选项参数无效")
+		return validation("采集候选项参数无效")
 	}
 	if req.Name != "" && strings.TrimSpace(req.Name) == "" {
-		return errors.New("候选项名称不能为空")
+		return validation("候选项名称不能为空")
 	}
 	if req.Locators != nil {
 		if _, err := parseCaptureLocators(req.Locators); err != nil {
@@ -326,17 +384,17 @@ func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sess
 		}
 	}
 	if req.QualityScore != nil && *req.QualityScore < 0 {
-		return errors.New("质量评分不能小于 0")
+		return validation("质量评分不能小于 0")
 	}
 	if req.ConflictResolution != "" && !isResolution(req.ConflictResolution) {
-		return errors.New("冲突处理方式无效")
+		return validation("冲突处理方式无效")
 	}
 	updated, err := repo.UpdateCandidate(ctx, actor, sessionID, candidateID, req)
 	if err != nil {
 		return err
 	}
 	if !updated {
-		return errors.New("采集候选项不存在或会话不可审核")
+		return notFound("采集候选项不存在或会话不可审核")
 	}
 	return nil
 }
@@ -347,16 +405,16 @@ func (s *ElementCaptureService) BatchSave(ctx context.Context, actor string, req
 		return model.BatchSaveResult{}, err
 	}
 	if strings.TrimSpace(actor) == "" {
-		return model.BatchSaveResult{}, errors.New("操作人不能为空")
+		return model.BatchSaveResult{}, validation("操作人不能为空")
 	}
 	if strings.TrimSpace(req.SessionID) == "" || len(req.Items) == 0 || len(req.Items) > maxBatchSaveCandidates {
-		return model.BatchSaveResult{}, errors.New("批量保存项必须在 1 到 200 之间")
+		return model.BatchSaveResult{}, validation("批量保存项必须在 1 到 200 之间")
 	}
 	ids := make([]int64, 0, len(req.Items))
 	for _, item := range req.Items {
 		ids = append(ids, item.CandidateID)
 	}
-	data, err := repo.GetBatchSaveData(ctx, req.SessionID, ids)
+	data, err := repo.GetBatchSaveData(ctx, actor, req.SessionID, ids)
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
@@ -383,10 +441,10 @@ func (s *ElementCaptureService) candidateRepo() (CandidateCaptureRepository, err
 
 func validateCandidateCreate(req model.CaptureCandidateCreateRequest) error {
 	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.Name) == "" || !isCaptureURL(req.CaptureURL) {
-		return errors.New("候选项会话、名称和采集地址无效")
+		return validation("候选项会话、名称和采集地址无效")
 	}
 	if !captureFingerprintPattern.MatchString(req.Fingerprint) {
-		return errors.New("fingerprint 必须是 64 位小写十六进制 SHA-256")
+		return validation("fingerprint 必须是 64 位小写十六进制 SHA-256")
 	}
 	_, err := parseCaptureLocators(req.Locators)
 	return err
@@ -395,11 +453,11 @@ func validateCandidateCreate(req model.CaptureCandidateCreateRequest) error {
 func parseCaptureLocators(raw json.RawMessage) ([]captureLocator, error) {
 	var locators []captureLocator
 	if len(raw) == 0 || json.Unmarshal(raw, &locators) != nil || len(locators) == 0 || len(locators) > 3 {
-		return nil, errors.New("locators 必须是非空数组")
+		return nil, validation("locators 必须是非空数组")
 	}
 	for _, locator := range locators {
 		if strings.TrimSpace(locator.Type) == "" || strings.TrimSpace(locator.Value) == "" {
-			return nil, errors.New("locators 包含无效定位器")
+			return nil, validation("locators 包含无效定位器")
 		}
 	}
 	return locators, nil

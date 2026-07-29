@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"testing"
@@ -32,6 +34,22 @@ func TestElementCaptureRepositoryHeartbeatUsesConditionalStateTransition(t *test
 	}
 }
 
+func TestElementCaptureRepositoryPageExistsAcceptsOnlyPageAssets(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`from ui_assets where id = \$1 and asset_type = 'page' and deleted_at is null`).WithArgs(int64(8)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	exists, err := NewElementCaptureRepository(db).PageExists(context.Background(), 8)
+	if err != nil || !exists {
+		t.Fatalf("exists=%v err=%v", exists, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -40,8 +58,8 @@ func TestElementCaptureRepositoryBatchSaveRollsBackWhenVersionWriteFails(t *test
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') for update")).
-		WithArgs("session-1").WillReturnRows(sqlmock.NewRows([]string{"page_id", "status"}).AddRow(8, "active"))
+	mock.ExpectQuery(`select page_id,status from element_capture_sessions[\s\S]*created_by=\$2[\s\S]*for update`).
+		WithArgs("session-1", "admin").WillReturnRows(sqlmock.NewRows([]string{"page_id", "status"}).AddRow(8, "active"))
 	mock.ExpectQuery(regexp.QuoteMeta("select id from ui_assets where id=$1 and deleted_at is null for update")).
 		WithArgs(8).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
 	mock.ExpectQuery("from element_capture_candidates c left join page_elements p").
@@ -99,10 +117,10 @@ func TestElementCaptureRepositoryRollbackWritesNextVersionInOneTransaction(t *te
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("select current_version from page_elements where id=$1 and deleted_at is null for update")).
-		WithArgs(int64(22)).WillReturnRows(sqlmock.NewRows([]string{"current_version"}).AddRow(3))
+	mock.ExpectQuery(`select e\.current_version from page_elements e join ui_assets p[\s\S]*p\.created_by=\$2[\s\S]*for update of e,p`).
+		WithArgs(int64(22), "admin").WillReturnRows(sqlmock.NewRows([]string{"current_version"}).AddRow(3))
 	mock.ExpectQuery(regexp.QuoteMeta("select snapshot from page_element_versions where page_element_id=$1 and version=$2")).
-		WithArgs(int64(22), 1).WillReturnRows(sqlmock.NewRows([]string{"snapshot"}).AddRow([]byte(`{"name":"submit","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","captureUrl":"https://example.test","tagName":"button","accessibleName":"Submit","locators":[{"type":"testid","value":"submit","index":""}],"qualityScore":95}`)))
+		WithArgs(int64(22), 1).WillReturnRows(sqlmock.NewRows([]string{"snapshot"}).AddRow([]byte(`{"id":22,"version":1,"name":"submit","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","captureUrl":"https://example.test","tagName":"button","accessibleName":"Submit","locators":[{"type":"testid","value":"submit","index":"","score":95,"unique":true}],"qualityScore":95}`)))
 	mock.ExpectExec("update page_elements set name=\\$1").
 		WithArgs("submit", "testid", "submit", "", "", "", "", "", "", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rollback", "https://example.test", "button", "Submit", 95.0, "admin", 4, int64(22)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -115,6 +133,46 @@ func TestElementCaptureRepositoryRollbackWritesNextVersionInOneTransaction(t *te
 	version, err := NewElementCaptureRepository(db).RollbackVersion(context.Background(), "admin", 22, 1)
 	if err != nil || version.Version != 4 || version.PageElementID != 22 {
 		t.Fatalf("version=%+v err=%v", version, err)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(version.Snapshot, &snapshot); err != nil || snapshot["id"].(float64) != 22 || snapshot["version"].(float64) != 4 || snapshot["source"] != "rollback" {
+		t.Fatalf("snapshot=%s err=%v", version.Snapshot, err)
+	}
+	locator := snapshot["locators"].([]any)[0].(map[string]any)
+	if locator["score"].(float64) != 95 || locator["unique"] != true {
+		t.Fatalf("locator=%+v", locator)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryListVersionsRejectsInvisiblePage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`select exists\([\s\S]*page_elements e join ui_assets p[\s\S]*asset_type='page'`).WithArgs(int64(22), int64(7)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	_, err = NewElementCaptureRepository(db).ListVersions(context.Background(), 7, 22)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("err=%v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryAuthorizesExecutorBySessionAndTokenHash(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`select exists\(select 1 from element_capture_sessions where id=\$1 and executor_id=\$2 and token_hash=\$3\)`).WithArgs("session-1", "exec-1", "hash").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	allowed, err := NewElementCaptureRepository(db).AuthorizeExecutor(context.Background(), "session-1", "exec-1", "hash")
+	if err != nil || !allowed {
+		t.Fatalf("allowed=%v err=%v", allowed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

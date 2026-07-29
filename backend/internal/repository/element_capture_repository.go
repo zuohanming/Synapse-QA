@@ -30,7 +30,7 @@ func NewElementCaptureRepository(db *sql.DB) *ElementCaptureRepository {
 func (r *ElementCaptureRepository) PageExists(ctx context.Context, pageID int64) (bool, error) {
 	var exists bool
 	err := r.db.QueryRowContext(ctx, `
-		select exists(select 1 from ui_assets where id = $1 and deleted_at is null)
+		select exists(select 1 from ui_assets where id = $1 and asset_type = 'page' and deleted_at is null)
 	`, pageID).Scan(&exists)
 	return exists, err
 }
@@ -60,8 +60,10 @@ func (r *ElementCaptureRepository) GetSession(ctx context.Context, userID int64,
 		       s.created_by, s.status, s.mode, s.current_url, s.token_hash, s.candidate_count,
 		       s.last_heartbeat_at, s.interrupted_at, s.recovery_expires_at, s.expires_at
 		from element_capture_sessions s
-		join users u on u.username = s.created_by
-		where s.id = $1 and u.id = $2
+		where s.id = $1 and (
+			s.created_by=(select username from users where id=$2 and deleted_at is null)
+			or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$2 and u.deleted_at is null and ro.code='admin')
+		)
 	`, sessionID, userID)
 	var detail model.ElementCaptureSessionDetail
 	err := row.Scan(
@@ -76,12 +78,27 @@ func (r *ElementCaptureRepository) SetMode(ctx context.Context, actor, sessionID
 	result, err := r.db.ExecContext(ctx, `
 		update element_capture_sessions
 		set mode = $1, updated_at = now()
-		where id = $2 and created_by = $3 and status in ('starting', 'active', 'interrupted')
+		where id = $2 and status in ('starting', 'active', 'interrupted') and (
+			created_by=$3 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$3 and u.deleted_at is null and ro.code='admin')
+		)
 	`, mode, sessionID, actor)
 	if err != nil {
 		return false, err
 	}
 	rows, err := result.RowsAffected()
+	if err == nil && rows == 0 {
+		var exists bool
+		if checkErr := r.db.QueryRowContext(ctx, `
+			select exists(select 1 from element_capture_sessions where id=$1 and (
+				created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+			))
+		`, sessionID, actor).Scan(&exists); checkErr != nil {
+			return false, checkErr
+		} else if exists {
+			return false, model.NewDomainError(model.ErrConflict, "采集会话已结束")
+		}
+		return false, model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+	}
 	return rows > 0, err
 }
 
@@ -89,12 +106,27 @@ func (r *ElementCaptureRepository) StopSession(ctx context.Context, actor, sessi
 	result, err := r.db.ExecContext(ctx, `
 		update element_capture_sessions
 		set status = 'completed', updated_at = now()
-		where id = $1 and created_by = $2 and status in ('starting', 'active', 'interrupted')
+		where id = $1 and status in ('starting', 'active', 'interrupted') and (
+			created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+		)
 	`, sessionID, actor)
 	if err != nil {
 		return false, err
 	}
 	rows, err := result.RowsAffected()
+	if err == nil && rows == 0 {
+		var exists bool
+		if checkErr := r.db.QueryRowContext(ctx, `
+			select exists(select 1 from element_capture_sessions where id=$1 and (
+				created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+			))
+		`, sessionID, actor).Scan(&exists); checkErr != nil {
+			return false, checkErr
+		} else if exists {
+			return false, model.NewDomainError(model.ErrConflict, "采集会话已结束")
+		}
+		return false, model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+	}
 	return rows > 0, err
 }
 
@@ -157,12 +189,30 @@ func (r *ElementCaptureRepository) FailSession(ctx context.Context, sessionID, e
 	return true, err
 }
 
-func (r *ElementCaptureRepository) ListCommands(_ context.Context, _ string) ([]model.ElementCaptureCommand, error) {
-	// 会话令牌只以摘要形式保存；启动命令由创建会话的响应安全下发，不能从数据库重新生成。
-	return []model.ElementCaptureCommand{}, nil
+func (r *ElementCaptureRepository) AuthorizeExecutor(ctx context.Context, sessionID, executorID, tokenHash string) (bool, error) {
+	var allowed bool
+	err := r.db.QueryRowContext(ctx, `
+		select exists(select 1 from element_capture_sessions where id=$1 and executor_id=$2 and token_hash=$3)
+	`, sessionID, executorID, tokenHash).Scan(&allowed)
+	return allowed, err
 }
 
-func (r *ElementCaptureRepository) ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error) {
+func (r *ElementCaptureRepository) ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error) {
+	var authorized bool
+	if err := r.db.QueryRowContext(ctx, `
+		select exists(
+			select 1 from page_elements e join ui_assets p on p.id=e.page_id
+			where e.id=$1 and e.deleted_at is null and p.deleted_at is null and p.asset_type='page' and (
+				p.created_by=(select username from users where id=$2 and deleted_at is null)
+				or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$2 and u.deleted_at is null and ro.code='admin')
+			)
+		)
+	`, elementID, userID).Scan(&authorized); err != nil {
+		return nil, err
+	}
+	if !authorized {
+		return nil, sql.ErrNoRows
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		select id,page_element_id,version,snapshot,change_summary,created_by,created_at
 		from page_element_versions where page_element_id=$1 order by version desc
@@ -183,6 +233,9 @@ func (r *ElementCaptureRepository) ListVersions(ctx context.Context, elementID i
 }
 
 type pageElementVersionSnapshot struct {
+	ID             int64              `json:"id"`
+	Version        int                `json:"version"`
+	Source         string             `json:"source"`
 	Name           string             `json:"name"`
 	Fingerprint    string             `json:"fingerprint"`
 	CaptureURL     string             `json:"captureUrl"`
@@ -199,7 +252,12 @@ func (r *ElementCaptureRepository) RollbackVersion(ctx context.Context, actor st
 	}
 	defer func() { _ = tx.Rollback() }()
 	var currentVersion int
-	if err = tx.QueryRowContext(ctx, `select current_version from page_elements where id=$1 and deleted_at is null for update`, elementID).Scan(&currentVersion); err != nil {
+	if err = tx.QueryRowContext(ctx, `
+		select e.current_version from page_elements e join ui_assets p on p.id=e.page_id
+		where e.id=$1 and e.deleted_at is null and p.deleted_at is null and p.asset_type='page' and (
+			p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+		) for update of e,p
+	`, elementID, actor).Scan(&currentVersion); err != nil {
 		return model.PageElementVersion{}, err
 	}
 	var raw json.RawMessage
@@ -237,7 +295,13 @@ func (r *ElementCaptureRepository) RollbackVersion(ctx context.Context, actor st
 		}
 		return model.PageElementVersion{}, sql.ErrNoRows
 	}
-	newSnapshot := map[string]any{"name": snapshot.Name, "fingerprint": snapshot.Fingerprint, "captureUrl": snapshot.CaptureURL, "tagName": snapshot.TagName, "accessibleName": snapshot.AccessibleName, "locators": snapshot.Locators, "qualityScore": snapshot.QualityScore, "source": "rollback"}
+	newSnapshot := map[string]any{}
+	if err = json.Unmarshal(raw, &newSnapshot); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	newSnapshot["id"] = elementID
+	newSnapshot["version"] = nextVersion
+	newSnapshot["source"] = "rollback"
 	encodedSnapshot, err := json.Marshal(newSnapshot)
 	if err != nil {
 		return model.PageElementVersion{}, err
@@ -256,9 +320,11 @@ func (r *ElementCaptureRepository) RollbackVersion(ctx context.Context, actor st
 }
 
 type candidateLocator struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
-	Index string `json:"index"`
+	Type   string  `json:"type"`
+	Value  string  `json:"value"`
+	Index  string  `json:"index"`
+	Score  float64 `json:"score"`
+	Unique bool    `json:"unique"`
 }
 
 func newCandidateID() (string, error) {
@@ -332,8 +398,11 @@ func (r *ElementCaptureRepository) ListCandidates(ctx context.Context, userID in
 	rows, err := r.db.QueryContext(ctx, `
 		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,
 		       coalesce(c.duplicate_element_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
-		from element_capture_candidates c join element_capture_sessions s on s.id=c.session_id join users u on u.username=s.created_by
-		where c.session_id=$1 and u.id=$2 and c.cursor_id>$3 order by c.cursor_id asc limit $4
+		from element_capture_candidates c join element_capture_sessions s on s.id=c.session_id
+		where c.session_id=$1 and c.cursor_id>$3 and (
+			s.created_by=(select username from users where id=$2 and deleted_at is null)
+			or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$2 and u.deleted_at is null and ro.code='admin')
+		) order by c.cursor_id asc limit $4
 	`, sessionID, userID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -358,10 +427,12 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 		quality_score=coalesce($3,c.quality_score),
 		conflict_resolution=case when $4='' then c.conflict_resolution else $4 end,
 		updated_at=now()
-		from element_capture_sessions s where c.session_id=s.id and c.cursor_id=$5 and c.session_id=$6
+		from element_capture_sessions s where c.session_id=s.id and c.cursor_id=$5 and c.session_id=$6 and (
+			s.created_by=$7 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$7 and u.deleted_at is null and ro.code='admin')
+		)
 		and s.status in ('active','completed') and c.status='pending'
 		and not exists(select 1 from page_elements p where p.page_id=s.page_id and p.deleted_at is null and lower(p.name)=lower($1) and p.id <> coalesce(c.duplicate_element_id,0))
-	`, strings.TrimSpace(req.Name), req.Locators, req.QualityScore, req.ConflictResolution, candidateID, sessionID)
+	`, strings.TrimSpace(req.Name), req.Locators, req.QualityScore, req.ConflictResolution, candidateID, sessionID, actor)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
@@ -373,9 +444,13 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 	return rows > 0, err
 }
 
-func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, sessionID string, _ []int64) (model.CaptureBatchData, error) {
+func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, actor, sessionID string, _ []int64) (model.CaptureBatchData, error) {
 	var data model.CaptureBatchData
-	err := r.db.QueryRowContext(ctx, `select id,page_id,status from element_capture_sessions where id=$1`, sessionID).Scan(&data.Session.ID, &data.Session.PageID, &data.Session.Status)
+	err := r.db.QueryRowContext(ctx, `
+		select id,page_id,status from element_capture_sessions where id=$1 and (
+			created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+		)
+	`, sessionID, actor).Scan(&data.Session.ID, &data.Session.PageID, &data.Session.Status)
 	if err != nil {
 		return data, err
 	}
@@ -426,7 +501,11 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	defer func() { _ = tx.Rollback() }()
 	var pageID int64
 	var sessionStatus string
-	if err = tx.QueryRowContext(ctx, `select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') for update`, req.SessionID).Scan(&pageID, &sessionStatus); err != nil {
+	if err = tx.QueryRowContext(ctx, `
+		select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') and (
+			created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
+		) for update
+	`, req.SessionID, actor).Scan(&pageID, &sessionStatus); err != nil {
 		return model.BatchSaveResult{}, err
 	}
 	var lockedPageID int64

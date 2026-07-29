@@ -65,9 +65,11 @@ type PageElementVersion struct {
 }
 
 type ElementCaptureCommand struct {
-	SessionID string `json:"sessionId"`
-	Type      string `json:"type"`
-	Mode      string `json:"mode,omitempty"`
+	SessionID      string `json:"sessionId"`
+	Type           string `json:"type"`
+	Mode           string `json:"mode,omitempty"`
+	URL            string `json:"url,omitempty"`
+	BrowserChannel string `json:"browserChannel,omitempty"`
 }
 
 type CaptureHeartbeatRequest struct {

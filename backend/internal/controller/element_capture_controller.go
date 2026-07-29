@@ -24,9 +24,10 @@ type elementCaptureService interface {
 	BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error)
 	Heartbeat(context.Context, string, string, string, string, string) error
 	AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error)
+	AuthorizeExecutor(context.Context, string, string, string) error
 	FailSession(context.Context, string, string, string, string) error
-	ListCommands(context.Context, string) ([]model.ElementCaptureCommand, error)
-	ListVersions(context.Context, int64) ([]model.PageElementVersion, error)
+	ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error)
+	ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error)
 	RollbackVersion(context.Context, string, int64, int) (model.PageElementVersion, error)
 }
 
@@ -99,6 +100,7 @@ func (ctl *ElementCaptureController) StopSession(c *gin.Context) {
 }
 
 func (ctl *ElementCaptureController) ListCandidates(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	claims, authorized := claimsFromContext(c)
 	if !authorized {
 		return
@@ -108,8 +110,8 @@ func (ctl *ElementCaptureController) ListCandidates(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "afterId 无效")
 		return
 	}
-	limit, err := queryInt(c, "limit", 100)
-	if err != nil {
+	limit, present, err := queryInt(c, "limit", 100)
+	if err != nil || (present && limit == 0) {
 		fail(c, http.StatusBadRequest, "limit 无效")
 		return
 	}
@@ -118,11 +120,11 @@ func (ctl *ElementCaptureController) ListCandidates(c *gin.Context) {
 		failCaptureError(c, err)
 		return
 	}
-	c.Header("Cache-Control", "no-store")
 	ok(c, items)
 }
 
 func (ctl *ElementCaptureController) UpdateCandidate(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	claims, authorized := claimsFromContext(c)
 	if !authorized {
 		return
@@ -141,11 +143,11 @@ func (ctl *ElementCaptureController) UpdateCandidate(c *gin.Context) {
 		failCaptureError(c, err)
 		return
 	}
-	c.Header("Cache-Control", "no-store")
 	ok(c, gin.H{"message": "候选项已更新"})
 }
 
 func (ctl *ElementCaptureController) SaveCandidates(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	claims, authorized := claimsFromContext(c)
 	if !authorized {
 		return
@@ -161,16 +163,19 @@ func (ctl *ElementCaptureController) SaveCandidates(c *gin.Context) {
 		failCaptureError(c, err)
 		return
 	}
-	c.Header("Cache-Control", "no-store")
 	ok(c, result)
 }
 
 func (ctl *ElementCaptureController) ListVersions(c *gin.Context) {
+	claims, authorized := claimsFromContext(c)
+	if !authorized {
+		return
+	}
 	elementID, valid := idParam(c)
 	if !valid {
 		return
 	}
-	items, err := ctl.service.ListVersions(c.Request.Context(), elementID)
+	items, err := ctl.service.ListVersions(c.Request.Context(), claims.UserID, elementID)
 	if err != nil {
 		failCaptureError(c, err)
 		return
@@ -201,15 +206,24 @@ func (ctl *ElementCaptureController) RollbackVersion(c *gin.Context) {
 }
 
 func (ctl *ElementCaptureController) Heartbeat(c *gin.Context) {
+	executorID, token, authorized := executorCredentials(c)
+	if !authorized {
+		return
+	}
+	if err := ctl.service.AuthorizeExecutor(c.Request.Context(), c.Param("id"), executorID, token); err != nil {
+		failExecutorCaptureError(c, err)
+		return
+	}
 	var req model.CaptureHeartbeatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "请求参数无效")
 		return
 	}
-	if req.Token == "" {
-		req.Token = captureToken(c)
+	if req.ExecutorID != "" && req.ExecutorID != executorID {
+		failExecutorCaptureError(c, unauthorizedExecutorError())
+		return
 	}
-	if err := ctl.service.Heartbeat(c.Request.Context(), c.Param("id"), req.ExecutorID, req.Token, req.BrowserContextID, req.CurrentURL); err != nil {
+	if err := ctl.service.Heartbeat(c.Request.Context(), c.Param("id"), executorID, token, req.BrowserContextID, req.CurrentURL); err != nil {
 		failExecutorCaptureError(c, err)
 		return
 	}
@@ -217,38 +231,56 @@ func (ctl *ElementCaptureController) Heartbeat(c *gin.Context) {
 }
 
 func (ctl *ElementCaptureController) AddCandidate(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	executorID, token, authorized := executorCredentials(c)
+	if !authorized {
+		return
+	}
+	if err := ctl.service.AuthorizeExecutor(c.Request.Context(), c.Param("id"), executorID, token); err != nil {
+		failExecutorCaptureError(c, err)
+		return
+	}
 	var req model.CaptureCandidateCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "请求参数无效")
 		return
 	}
 	req.SessionID = c.Param("id")
-	if req.Token == "" {
-		req.Token = captureToken(c)
+	if req.ExecutorID != "" && req.ExecutorID != executorID {
+		failExecutorCaptureError(c, unauthorizedExecutorError())
+		return
 	}
-	if req.SessionID == "" || req.ExecutorID == "" || req.Token == "" {
+	if req.SessionID == "" {
 		fail(c, http.StatusBadRequest, "执行器候选项参数无效")
 		return
 	}
-	item, err := ctl.service.AddCandidate(c.Request.Context(), req.ExecutorID, req.Token, req)
+	item, err := ctl.service.AddCandidate(c.Request.Context(), executorID, token, req)
 	if err != nil {
 		failExecutorCaptureError(c, err)
 		return
 	}
-	c.Header("Cache-Control", "no-store")
 	created(c, item)
 }
 
 func (ctl *ElementCaptureController) FailSession(c *gin.Context) {
+	executorID, token, authorized := executorCredentials(c)
+	if !authorized {
+		return
+	}
+	if err := ctl.service.AuthorizeExecutor(c.Request.Context(), c.Param("id"), executorID, token); err != nil {
+		failExecutorCaptureError(c, err)
+		return
+	}
 	var req model.CaptureFailureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "请求参数无效")
 		return
 	}
-	if req.Token == "" {
-		req.Token = captureToken(c)
+	if req.ExecutorID != "" && req.ExecutorID != executorID {
+		failExecutorCaptureError(c, unauthorizedExecutorError())
+		return
 	}
-	if err := ctl.service.FailSession(c.Request.Context(), c.Param("id"), req.ExecutorID, req.Token, req.Reason); err != nil {
+	if err := ctl.service.FailSession(c.Request.Context(), c.Param("id"), executorID, token, req.Reason); err != nil {
 		failExecutorCaptureError(c, err)
 		return
 	}
@@ -256,7 +288,11 @@ func (ctl *ElementCaptureController) FailSession(c *gin.Context) {
 }
 
 func (ctl *ElementCaptureController) ListCommands(c *gin.Context) {
-	items, err := ctl.service.ListCommands(c.Request.Context(), c.Query("executorId"))
+	executorID, token, authorized := executorCredentials(c)
+	if !authorized {
+		return
+	}
+	items, err := ctl.service.ListCommands(c.Request.Context(), executorID, c.Query("sessionId"), token)
 	if err != nil {
 		failExecutorCaptureError(c, err)
 		return
@@ -264,23 +300,21 @@ func (ctl *ElementCaptureController) ListCommands(c *gin.Context) {
 	ok(c, items)
 }
 
-func captureToken(c *gin.Context) string {
-	return strings.TrimSpace(c.GetHeader("X-Element-Capture-Token"))
-}
 func queryInt64(c *gin.Context, key string, fallback int64) (int64, error) {
 	if c.Query(key) == "" {
 		return fallback, nil
 	}
 	return strconv.ParseInt(c.Query(key), 10, 64)
 }
-func queryInt(c *gin.Context, key string, fallback int) (int, error) {
+func queryInt(c *gin.Context, key string, fallback int) (int, bool, error) {
 	if c.Query(key) == "" {
-		return fallback, nil
+		return fallback, false, nil
 	}
-	return strconv.Atoi(c.Query(key))
+	value, err := strconv.Atoi(c.Query(key))
+	return value, true, err
 }
 func failExecutorCaptureError(c *gin.Context, err error) {
-	if strings.Contains(err.Error(), "令牌无效") || strings.Contains(err.Error(), "执行器或令牌") {
+	if errors.Is(err, model.ErrUnauthorized) {
 		fail(c, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -292,18 +326,33 @@ func failCaptureError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, model.APIResponse{Error: issues.Error(), Data: gin.H{"issues": issues.Issues}})
 		return
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, model.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 		fail(c, http.StatusNotFound, "资源不存在")
 		return
 	}
-	message := err.Error()
-	if strings.Contains(message, "不存在") {
-		fail(c, http.StatusNotFound, message)
+	if errors.Is(err, model.ErrConflict) {
+		fail(c, http.StatusConflict, err.Error())
 		return
 	}
-	if strings.Contains(message, "冲突") || strings.Contains(message, "已结束") || strings.Contains(message, "已处理") {
-		fail(c, http.StatusConflict, message)
+	if errors.Is(err, model.ErrValidation) {
+		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	fail(c, http.StatusBadRequest, message)
+	fail(c, http.StatusInternalServerError, "服务器内部错误")
+}
+
+func executorCredentials(c *gin.Context) (string, string, bool) {
+	executorID := strings.TrimSpace(c.GetHeader("X-Executor-ID"))
+	if executorID == "" {
+		executorID = strings.TrimSpace(c.Query("executorId"))
+	}
+	authorization := strings.TrimSpace(c.GetHeader("Authorization"))
+	if executorID == "" || !strings.HasPrefix(authorization, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")) == "" {
+		fail(c, http.StatusUnauthorized, "执行器认证失败")
+		return "", "", false
+	}
+	return executorID, strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")), true
+}
+func unauthorizedExecutorError() error {
+	return model.NewDomainError(model.ErrUnauthorized, "执行器或会话令牌无效")
 }

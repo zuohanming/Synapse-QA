@@ -52,13 +52,19 @@ func (s *captureControllerServiceStub) Heartbeat(context.Context, string, string
 func (s *captureControllerServiceStub) AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {
 	return model.ElementCaptureCandidate{}, nil
 }
+func (s *captureControllerServiceStub) AuthorizeExecutor(_ context.Context, _, _, token string) error {
+	if token == "" {
+		return model.NewDomainError(model.ErrUnauthorized, "执行器或会话令牌无效")
+	}
+	return nil
+}
 func (s *captureControllerServiceStub) FailSession(context.Context, string, string, string, string) error {
 	return nil
 }
-func (s *captureControllerServiceStub) ListCommands(context.Context, string) ([]model.ElementCaptureCommand, error) {
+func (s *captureControllerServiceStub) ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error) {
 	return nil, nil
 }
-func (s *captureControllerServiceStub) ListVersions(context.Context, int64) ([]model.PageElementVersion, error) {
+func (s *captureControllerServiceStub) ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error) {
 	return nil, nil
 }
 func (s *captureControllerServiceStub) RollbackVersion(_ context.Context, _ string, elementID int64, version int) (model.PageElementVersion, error) {
@@ -138,6 +144,30 @@ func TestElementCaptureCandidateIssuesUseUnifiedBadRequestResponse(t *testing.T)
 	router := captureTestRouter(model.Claims{Permissions: []string{"ui.element.read"}}, stub)
 	response := performCaptureJSON(router, http.MethodGet, "/api/ui/page-elements/capture-sessions/session-1/candidates", "")
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "候选项名称不可靠") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestElementCaptureCandidatesRejectExplicitZeroLimit(t *testing.T) {
+	router := captureTestRouter(model.Claims{Permissions: []string{"ui.element.read"}}, &captureControllerServiceStub{})
+	response := performCaptureJSON(router, http.MethodGet, "/api/ui/page-elements/capture-sessions/session-1/candidates?limit=0", "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestElementCaptureExecutorRejectsInvalidTokenBeforeParsingPayload(t *testing.T) {
+	router := captureTestRouter(model.Claims{}, &captureControllerServiceStub{})
+	response := performCaptureJSON(router, http.MethodPost, "/api/executor/element-capture/session-1/heartbeat", "{")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestElementCaptureDoesNotExposeUnknownServiceErrors(t *testing.T) {
+	router := captureTestRouter(model.Claims{Permissions: []string{"ui.element.read"}}, &captureControllerServiceStub{listErr: errors.New("database password leaked")})
+	response := performCaptureJSON(router, http.MethodGet, "/api/ui/page-elements/capture-sessions/session-1/candidates", "")
+	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "password") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

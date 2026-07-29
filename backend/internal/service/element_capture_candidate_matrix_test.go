@@ -165,7 +165,7 @@ func (r *captureCandidateTestRepo) UpdateCandidate(_ context.Context, actor, ses
 	return true, nil
 }
 
-func (r *captureCandidateTestRepo) GetBatchSaveData(context.Context, string, []int64) (model.CaptureBatchData, error) {
+func (r *captureCandidateTestRepo) GetBatchSaveData(context.Context, string, string, []int64) (model.CaptureBatchData, error) {
 	r.batchDataCalls++
 	return r.batchData(r.candidates, r.existingNames, r.existingFingerprints), nil
 }

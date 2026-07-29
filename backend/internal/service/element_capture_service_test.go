@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -51,6 +52,10 @@ type fakeCaptureRepo struct {
 	expiredAt      time.Time
 	detail         model.ElementCaptureSessionDetail
 	createErr      error
+	authorized     bool
+	authorizedID   string
+	authorizedExec string
+	authorizedHash string
 }
 
 type fakeExecutorReader struct {
@@ -136,7 +141,7 @@ func (r *candidateCaptureRepo) UpdateCandidate(_ context.Context, _, _ string, _
 	return true, nil
 }
 
-func (r *candidateCaptureRepo) GetBatchSaveData(_ context.Context, _ string, _ []int64) (model.CaptureBatchData, error) {
+func (r *candidateCaptureRepo) GetBatchSaveData(_ context.Context, _, _ string, _ []int64) (model.CaptureBatchData, error) {
 	return model.CaptureBatchData{Session: r.session, Candidates: r.candidates}, nil
 }
 
@@ -246,7 +251,10 @@ func (f *fakeCaptureRepo) SetMode(_ context.Context, _, _ string, mode string) (
 }
 
 func (f *fakeCaptureRepo) StopSession(_ context.Context, _, _ string) (bool, error) {
-	return f.stopped, nil
+	if !f.stopped {
+		return false, model.NewDomainError(model.ErrConflict, "采集会话已结束")
+	}
+	return true, nil
 }
 
 func (f *fakeCaptureRepo) Heartbeat(_ context.Context, _, _, tokenHash, _, _ string) (bool, error) {
@@ -261,6 +269,15 @@ func (f *fakeCaptureRepo) ExpireSessions(_ context.Context, now time.Time) error
 
 func (f *fakeCaptureRepo) GetSession(_ context.Context, _ int64, _ string) (model.ElementCaptureSessionDetail, error) {
 	return f.detail, nil
+}
+
+func (f *fakeCaptureRepo) AuthorizeExecutor(_ context.Context, sessionID, executorID, tokenHash string) (bool, error) {
+	f.authorizedID, f.authorizedExec, f.authorizedHash = sessionID, executorID, tokenHash
+	return f.authorized, nil
+}
+
+func (f *fakeCaptureRepo) FailSession(_ context.Context, _, _, _, _ string) (bool, error) {
+	return f.authorized, nil
 }
 
 func (f fakeExecutorReader) GetByID(_ context.Context, executorID string) (model.ExecutorView, error) {
@@ -373,7 +390,7 @@ func TestElementCaptureHeartbeatRejectsWrongExecutorOrToken(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
 
 	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "context-1", "https://example.test")
-	if err == nil || err.Error() != "采集会话不存在、执行器或令牌无效，或恢复窗口已过期" {
+	if !errors.Is(err, model.ErrUnauthorized) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -466,11 +483,48 @@ func TestElementCaptureStateTransitionsBindAndRecoverBrowserContext(t *testing.T
 	}
 }
 
-func TestElementCaptureStopSessionIsIdempotentForTerminalSession(t *testing.T) {
+func TestElementCaptureStopSessionRejectsTerminalSessionWithConflict(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
 
-	if err := service.StopSession(context.Background(), "admin", "completed-session"); err != nil {
-		t.Fatalf("StopSession returned error: %v", err)
+	if err := service.StopSession(context.Background(), "admin", "completed-session"); !errors.Is(err, model.ErrConflict) {
+		t.Fatalf("StopSession error=%v", err)
+	}
+}
+
+func TestElementCaptureQueuesConsumableCommandsForAuthorizedExecutor(t *testing.T) {
+	repo := &fakeCaptureRepo{pageExists: true, setModeUpdated: true, stopped: true, authorized: true}
+	svc := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
+	created, err := svc.CreateSession(context.Background(), "admin", model.CaptureSessionCreateRequest{PageID: 8, ExecutorID: "exec-1", URL: "https://example.test", BrowserChannel: "chrome"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err = svc.SetMode(context.Background(), "admin", created.Session.ID, "operate"); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+	if err = svc.StopSession(context.Background(), "admin", created.Session.ID); err != nil {
+		t.Fatalf("StopSession: %v", err)
+	}
+	commands, err := svc.ListCommands(context.Background(), "exec-1", created.Session.ID, created.Token)
+	if err != nil {
+		t.Fatalf("ListCommands: %v", err)
+	}
+	if len(commands) != 3 || commands[0].Type != "start" || commands[1].Type != "set_mode" || commands[2].Type != "stop" {
+		t.Fatalf("commands=%+v", commands)
+	}
+	if repo.authorizedID != created.Session.ID || repo.authorizedExec != "exec-1" {
+		t.Fatalf("authorization=%q/%q", repo.authorizedID, repo.authorizedExec)
+	}
+	commands, err = svc.ListCommands(context.Background(), "exec-1", created.Session.ID, created.Token)
+	if err != nil || len(commands) != 0 {
+		t.Fatalf("commands should be consumed: %+v err=%v", commands, err)
+	}
+}
+
+func TestElementCaptureRejectsUnauthorizedCommandRead(t *testing.T) {
+	svc := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
+	_, err := svc.ListCommands(context.Background(), "exec-1", "session-1", "bad")
+	if !errors.Is(err, model.ErrUnauthorized) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

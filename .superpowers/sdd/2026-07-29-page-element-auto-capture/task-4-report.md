@@ -22,3 +22,14 @@
 ## 范围
 
 未扩展至 Task 5+ 的执行器浏览器拾取、定位器生成或前端实现。
+
+## Fix round 1：授权、命令与错误边界
+
+- 资源授权：当前 `ui_assets` 和 `page_elements` 没有 `project_id` 或 `product_id`，因此按确认的最小安全模型在会话/候选和元素页面上使用 `created_by` owner 约束，`roles.code='admin'` 依照现有统一规则放行。查询、更新和批量保存事务锁均重复该条件；未来页面引入项目归属后再迁移为 `project_members` 授权。
+- 执行器认证：所有执行器入口在 JSON 解析前统一读取 `X-Executor-ID` 和 `Authorization: Bearer <session-token>`，通过会话令牌 SHA-256 摘要与执行器 ID 双校验。认证错误使用 `model.ErrUnauthorized`，不再按中文错误字符串判断。
+- 命令：创建、模式切换和停止写入线程安全的进程内命令队列；命令读取必须携带已验证的 executor/session/token，按会话消费并删除已领取命令。
+- 错误与缓存：新增结构化领域错误，已知参数、资源和状态错误分别映射 400/404/409，未知错误统一返回不泄露内部详情的 500。候选路由在权限中间件之前设置 `Cache-Control: no-store`，控制器也在入口重复设置。显式 `limit=0` 返回 400，未传 `limit` 才采用默认值。
+- 回滚：事务锁定有权限的页面元素，目标快照以 map 方式复制并仅更新 `id`、递增 `version` 和 `source=rollback`，保留定位器的 `score`/`unique` 与其它当前字段。
+- 验证：controller、repository/service 聚焦、后端全量测试和 vet 均已通过；最终提交前将再次执行 diff-check。
+
+本轮修复已提交：`fix: secure element capture APIs`。

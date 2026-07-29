@@ -53,8 +53,8 @@ func captureCandidateRow(id string, cursorID int64, name, fingerprint string, lo
 
 func expectCandidateSaveLockPrefix(mock sqlmock.Sqlmock, rows *sqlmock.Rows, elements *sqlmock.Rows) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("select page_id,status from element_capture_sessions where id=$1 and status in ('active','completed') for update")).
-		WithArgs("session-1").
+	mock.ExpectQuery(`select page_id,status from element_capture_sessions[\s\S]*created_by=\$2[\s\S]*for update`).
+		WithArgs("session-1", "admin").
 		WillReturnRows(sqlmock.NewRows([]string{"page_id", "status"}).AddRow(8, "active"))
 	mock.ExpectQuery(regexp.QuoteMeta("select id from ui_assets where id=$1 and deleted_at is null for update")).
 		WithArgs(8).
@@ -192,7 +192,7 @@ func TestElementCaptureRepositoryAddCandidateDuplicateDetectionMatrix(t *testing
 
 func TestElementCaptureRepositoryListsVisibleCandidatesByCursorAndLimit(t *testing.T) {
 	repo, mock := newElementCaptureRepositoryMock(t)
-	mock.ExpectQuery(`from element_capture_candidates c join element_capture_sessions s on s\.id=c\.session_id join users u on u\.username=s\.created_by[\s\S]*u\.id=\$2[\s\S]*c\.cursor_id>\$3 order by c\.cursor_id asc limit \$4`).
+	mock.ExpectQuery(`from element_capture_candidates c join element_capture_sessions s on s\.id=c\.session_id[\s\S]*c\.cursor_id>\$3[\s\S]*created_by=\(select username from users where id=\$2[\s\S]*limit \$4`).
 		WithArgs("session-1", int64(7), int64(5), 20).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "cursor_id", "session_id", "name", "fingerprint", "capture_url", "tag_name", "accessible_name",
@@ -213,8 +213,8 @@ func TestElementCaptureRepositoryListsVisibleCandidatesByCursorAndLimit(t *testi
 
 func TestElementCaptureRepositoryLoadsCurrentBatchCandidatesNamesAndFingerprints(t *testing.T) {
 	repo, mock := newElementCaptureRepositoryMock(t)
-	mock.ExpectQuery(`select id,page_id,status from element_capture_sessions where id=\$1`).
-		WithArgs("session-1").
+	mock.ExpectQuery(`select id,page_id,status from element_capture_sessions where id=\$1[\s\S]*created_by=\$2`).
+		WithArgs("session-1", "admin").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "page_id", "status"}).AddRow("session-1", 8, "completed"))
 	mock.ExpectQuery(`from element_capture_candidates c left join page_elements p[\s\S]*where c\.session_id=\$1 order by c\.cursor_id`).
 		WithArgs("session-1").
@@ -228,7 +228,7 @@ func TestElementCaptureRepositoryLoadsCurrentBatchCandidatesNamesAndFingerprints
 			AddRow(42, "submit", repositoryFingerprintA).
 			AddRow(43, "copy", repositoryFingerprintA))
 
-	data, err := repo.GetBatchSaveData(context.Background(), "session-1", []int64{1})
+	data, err := repo.GetBatchSaveData(context.Background(), "admin", "session-1", []int64{1})
 	if err != nil {
 		t.Fatalf("GetBatchSaveData 返回错误：%v", err)
 	}
@@ -412,7 +412,7 @@ func TestElementCaptureRepositoryUpdateCandidateConstraintMappingMatrix(t *testi
 			repo, mock := newElementCaptureRepositoryMock(t)
 			pgErr := &pgconn.PgError{Code: "23505", ConstraintName: tt.constraintName}
 			mock.ExpectExec(`update element_capture_candidates c set`).
-				WithArgs("renamed", sqlmock.AnyArg(), nil, "", int64(1), "session-1").
+				WithArgs("renamed", sqlmock.AnyArg(), nil, "", int64(1), "session-1", "admin").
 				WillReturnError(pgErr)
 
 			_, err := repo.UpdateCandidate(context.Background(), "admin", "session-1", 1, model.CaptureCandidateUpdateRequest{Name: "renamed"})

@@ -189,11 +189,18 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	capture.GET("/capture-sessions/:id", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.GetSession)
 	capture.PATCH("/capture-sessions/:id/mode", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SetMode)
 	capture.POST("/capture-sessions/:id/stop", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.StopSession)
-	capture.GET("/capture-sessions/:id/candidates", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
-	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
-	capture.POST("/capture-sessions/:id/save", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
+	capture.GET("/capture-sessions/:id/candidates", captureNoStore(), controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
+	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", captureNoStore(), controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
+	capture.POST("/capture-sessions/:id/save", captureNoStore(), controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
 	capture.GET("/:id/versions", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListVersions)
 	capture.POST("/:id/versions/:version/rollback", controller.RequirePermission("ui.element.rollback"), deps.ElementCaptureController.RollbackVersion)
+}
+
+func captureNoStore() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	}
 }
 
 func registerUIAssetRoutes(authed *gin.RouterGroup, path string, assetType string, deps Dependencies) {
