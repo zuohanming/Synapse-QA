@@ -168,7 +168,7 @@ func (r *ElementCaptureRepository) captureSessionAccessError(ctx context.Context
 
 func (r *ElementCaptureRepository) AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error) {
 	var allowed bool
-	err := r.db.QueryRowContext(ctx, `select exists(select 1 from executors e where e.executor_id=$1 and (e.executor_token=$2 or (e.executor_token='' and coalesce((select value from platform_settings where key='executor_shared_token'),'')=case when coalesce((select value from platform_settings where key='executor_shared_token'),'')='' then $3 else $2 end)))`, executorID, token, fallback).Scan(&allowed)
+	err := r.db.QueryRowContext(ctx, `select exists(select 1 from executors e where e.executor_id=$1 and (e.executor_token=$2 or (e.executor_token='' and $2=coalesce(nullif((select value from platform_settings where key='executor_shared_token'),''),$3))))`, executorID, token, fallback).Scan(&allowed)
 	return allowed, err
 }
 
@@ -359,6 +359,48 @@ func (r *ElementCaptureRepository) Heartbeat(ctx context.Context, sessionID, exe
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// HeartbeatAndAckStart 将首次启动确认与会话激活放在一个事务中；ACK 失败会回滚状态更新。
+func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL, receipt string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var commandStatus, receiptHash string
+	err = tx.QueryRowContext(ctx, `select status,lease_receipt_hash from element_capture_commands where session_id=$1 and executor_id=$2 and command_type='start' order by id desc limit 1 for update`, sessionID, executorID).Scan(&commandStatus, &receiptHash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil && commandStatus == "leased" {
+		hash := sha256.Sum256([]byte(receipt))
+		if receipt == "" || receiptHash != hex.EncodeToString(hash[:]) {
+			return false, model.NewDomainError(model.ErrConflict, "启动命令回执无效")
+		}
+	}
+	var id string
+	err = tx.QueryRowContext(ctx, `update element_capture_sessions set status='active',last_heartbeat_at=now(),interrupted_at=null,recovery_expires_at=null,browser_context_id=case when status='starting' then $3 else browser_context_id end,current_url=$4,updated_at=now() where id=$1 and executor_id=$2 and token_hash=$5 and expires_at>now() and status in ('starting','active','interrupted') and (status<>'interrupted' or recovery_expires_at>=now()) and ((status='starting' and browser_context_id='' and $3<>'') or (status in ('active','interrupted') and browser_context_id=$3)) returning id`, sessionID, executorID, browserContextID, currentURL, tokenHash).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if commandStatus == "leased" {
+		result, execErr := tx.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where session_id=$1 and executor_id=$2 and command_type='start' and status='leased' and lease_until>now() and lease_receipt_hash=$3`, sessionID, executorID, receiptHash)
+		if execErr != nil {
+			return false, execErr
+		}
+		rows, execErr := result.RowsAffected()
+		if execErr != nil {
+			return false, execErr
+		}
+		if rows != 1 {
+			return false, model.NewDomainError(model.ErrConflict, "启动命令租约已失效")
+		}
+	}
+	return true, tx.Commit()
 }
 
 func (r *ElementCaptureRepository) ExpireSessions(ctx context.Context, now time.Time) error {

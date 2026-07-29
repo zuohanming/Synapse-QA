@@ -51,3 +51,8 @@
 
 - 领取命令和会话到期处理都会先读取、检查并关闭 `UPDATE ... RETURNING` 的全部结果，再继续执行后续更新/插入，避免 pgx 在同一事务连接上报告 `conn busy`。真实 PostgreSQL 隔离 schema 测试覆盖 start 领取与超时会话命令写入。
 - 迁移删除旧 JSONB payload 中的 `token`，将历史 pending/claimed 命令迁移为 queued 或 expired 并清除过期 lease；后台 scheduler 独立执行命令清理。领取响应提供随机 lease receipt，数据库仅保存其 hash，普通 ACK 不能确认 start 命令。
+
+## Fix round 5：原子启动确认
+
+- 首次 heartbeat 以 `commandReceipt` 绑定当前 leased start 命令；`HeartbeatAndAckStart` 在一个 PostgreSQL 事务中验证回执、更新会话状态并 ACK start，任何一步失败都会回滚。已 ACK 的 start 允许后续 heartbeat 不重复携带回执。
+- 真实 PostgreSQL 聚焦测试已非跳过运行并通过，覆盖 start 领取、会话 token hash 写入、原子 heartbeat ACK 和过期会话命令入队；临时 schema 在 scoped 连接关闭后删除，并检查残留计数为 0。连接凭据仅注入测试进程，未写入仓库或报告。

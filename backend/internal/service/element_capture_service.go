@@ -81,6 +81,7 @@ type CaptureCommandRepository interface {
 	AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error)
 	AckCommand(ctx context.Context, executorID string, commandID int64, receipt string) (bool, error)
 	AckStartCommand(ctx context.Context, executorID, sessionID string) error
+	HeartbeatAndAckStart(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL, receipt string) (bool, error)
 }
 type CaptureCommandCleanupRepository interface {
 	CleanupCommands(context.Context, time.Time) error
@@ -245,7 +246,7 @@ func (s *ElementCaptureService) StopSession(ctx context.Context, actor, sessionI
 	return nil
 }
 
-func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, browserContextID, currentURL string) error {
+func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, executorID, token, browserContextID, currentURL, receipt string) error {
 	if browserContextID == "" {
 		return conflict("浏览器上下文与会话状态冲突")
 	}
@@ -253,17 +254,18 @@ func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, execut
 		return validation("页面地址必须是绝对 http/https URL")
 	}
 	tokenHash := sha256.Sum256([]byte(token))
-	updated, err := s.repo.Heartbeat(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), browserContextID, currentURL)
+	var updated bool
+	var err error
+	if repo, ok := s.repo.(CaptureCommandRepository); ok {
+		updated, err = repo.HeartbeatAndAckStart(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), browserContextID, currentURL, receipt)
+	} else {
+		updated, err = s.repo.Heartbeat(ctx, sessionID, executorID, hex.EncodeToString(tokenHash[:]), browserContextID, currentURL)
+	}
 	if err != nil {
 		return err
 	}
 	if !updated {
 		return conflict("采集会话状态或浏览器上下文冲突")
-	}
-	if repo, ok := s.repo.(CaptureCommandRepository); ok {
-		if err := repo.AckStartCommand(ctx, executorID, sessionID); err != nil {
-			return err
-		}
 	}
 	return nil
 }

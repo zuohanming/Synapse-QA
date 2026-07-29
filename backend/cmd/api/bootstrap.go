@@ -693,7 +693,8 @@ func elementCaptureMigrationStatements() []string {
 		`update element_capture_commands set payload=payload-'token' where payload ? 'token'`,
 		`update element_capture_commands set status='queued' where status='pending'`,
 		`update element_capture_commands set status=case when expires_at <= now() then 'expired' else 'queued' end, lease_until=null, lease_receipt_hash='' where status='claimed'`,
-		`create index if not exists idx_element_capture_commands_pending on element_capture_commands(executor_id, id) where status='pending'`,
+		`drop index if exists idx_element_capture_commands_pending`,
+		`create index if not exists idx_element_capture_commands_claim on element_capture_commands(executor_id, id) where status in ('queued','leased')`,
 		`create index if not exists idx_element_capture_commands_retention on element_capture_commands(status, created_at)`,
 	}
 }

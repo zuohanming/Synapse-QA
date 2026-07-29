@@ -47,7 +47,7 @@ func (s *captureControllerServiceStub) UpdateCandidate(context.Context, string, 
 func (s *captureControllerServiceStub) BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error) {
 	return model.BatchSaveResult{}, nil
 }
-func (s *captureControllerServiceStub) Heartbeat(context.Context, string, string, string, string, string) error {
+func (s *captureControllerServiceStub) Heartbeat(context.Context, string, string, string, string, string, string) error {
 	return s.heartbeatErr
 }
 func (s *captureControllerServiceStub) AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {

@@ -283,6 +283,9 @@ func (f *fakeCaptureRepo) AckCommand(_ context.Context, _ string, _ int64, _ str
 	return true, nil
 }
 func (f *fakeCaptureRepo) AckStartCommand(_ context.Context, _ string, _ string) error { return nil }
+func (f *fakeCaptureRepo) HeartbeatAndAckStart(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL, _ string) (bool, error) {
+	return f.Heartbeat(ctx, sessionID, executorID, tokenHash, browserContextID, currentURL)
+}
 
 func (f *fakeCaptureRepo) ClaimCommands(_ context.Context, executorID string, _ int) ([]model.ElementCaptureCommand, error) {
 	if executorID != "exec-1" {
@@ -433,7 +436,7 @@ func TestElementCaptureSetModeUpdatesPickOrOperate(t *testing.T) {
 func TestElementCaptureHeartbeatRejectsWrongExecutorOrToken(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
 
-	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "context-1", "https://example.test")
+	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "context-1", "https://example.test", "")
 	if !errors.Is(err, model.ErrConflict) {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -443,7 +446,7 @@ func TestElementCaptureHeartbeatHashesOneTimeToken(t *testing.T) {
 	repo := &fakeCaptureRepo{heartbeat: true}
 	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
 
-	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/path"); err != nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/path", ""); err != nil {
 		t.Fatalf("Heartbeat returned error: %v", err)
 	}
 	hash := sha256.Sum256([]byte("token-1"))
@@ -455,7 +458,7 @@ func TestElementCaptureHeartbeatHashesOneTimeToken(t *testing.T) {
 func TestElementCaptureHeartbeatRejectsInvalidCurrentURL(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{heartbeat: true}, fakeExecutorReader{online: true}, []byte("secret"))
 
-	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "file:///secret")
+	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "file:///secret", "")
 	if err == nil || err.Error() != "页面地址必须是绝对 http/https URL" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -464,7 +467,7 @@ func TestElementCaptureHeartbeatRejectsInvalidCurrentURL(t *testing.T) {
 func TestElementCaptureHeartbeatRequiresBrowserContextOnFirstActivation(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{heartbeat: true}, fakeExecutorReader{online: true}, []byte("secret"))
 
-	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "", "https://example.test")
+	err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "", "https://example.test", "")
 	if !errors.Is(err, model.ErrConflict) {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,7 +482,7 @@ func TestElementCaptureStateTransitionsBindAndRecoverBrowserContext(t *testing.T
 	}}
 	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
 
-	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test"); err != nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test", ""); err != nil {
 		t.Fatalf("first Heartbeat returned error: %v", err)
 	}
 	if repo.session.Status != CaptureActive || repo.session.BrowserContextID != "context-1" {
@@ -493,13 +496,13 @@ func TestElementCaptureStateTransitionsBindAndRecoverBrowserContext(t *testing.T
 	if repo.session.Status != CaptureInterrupted || repo.session.RecoveryExpiresAt == nil || !repo.session.RecoveryExpiresAt.Equal(idleAt.Add(60*time.Second)) {
 		t.Fatalf("active session was not interrupted with 60 second recovery: %+v", repo.session)
 	}
-	if err := service.Heartbeat(context.Background(), "session-1", "other-executor", "token-1", "context-1", "https://example.test"); err == nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "other-executor", "token-1", "context-1", "https://example.test", ""); err == nil {
 		t.Fatal("expected original executor enforcement")
 	}
-	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "other-context", "https://example.test"); err == nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "other-context", "https://example.test", ""); err == nil {
 		t.Fatal("expected browser context immutability")
 	}
-	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/recovered"); err != nil {
+	if err := service.Heartbeat(context.Background(), "session-1", "exec-1", "token-1", "context-1", "https://example.test/recovered", ""); err != nil {
 		t.Fatalf("original executor did not recover session: %v", err)
 	}
 	if repo.session.Status != CaptureActive || repo.session.RecoveryExpiresAt != nil {

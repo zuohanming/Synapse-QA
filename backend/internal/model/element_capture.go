@@ -85,6 +85,7 @@ type CaptureHeartbeatRequest struct {
 	Token            string `json:"token"`
 	BrowserContextID string `json:"browserContextId"`
 	CurrentURL       string `json:"currentUrl"`
+	CommandReceipt   string `json:"commandReceipt"`
 }
 
 type CaptureFailureRequest struct {

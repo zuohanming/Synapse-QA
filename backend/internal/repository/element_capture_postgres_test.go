@@ -27,12 +27,10 @@ func TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
 	schema := fmt.Sprintf("element_capture_lease_%d", time.Now().UnixNano())
 	if _, err = admin.ExecContext(ctx, `create schema `+schema); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = admin.ExecContext(context.Background(), `drop schema if exists `+schema+` cascade`) }()
 	scoped, err := leaseTestDSN(dsn, schema)
 	if err != nil {
 		t.Fatal(err)
@@ -41,10 +39,26 @@ func TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("关闭 scoped PostgreSQL：%v", err)
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.ExecContext(cleanupCtx, `drop schema if exists `+schema+` cascade`); err != nil {
+			t.Errorf("清理 schema：%v", err)
+		}
+		var count int
+		if err := admin.QueryRowContext(cleanupCtx, `select count(*) from pg_namespace where nspname=$1`, schema).Scan(&count); err != nil || count != 0 {
+			t.Errorf("schema 清理残留 count=%d err=%v", count, err)
+		}
+		if err := admin.Close(); err != nil {
+			t.Errorf("关闭 PostgreSQL 管理连接：%v", err)
+		}
+	})
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
-		`create table element_capture_sessions(id text primary key,executor_id text not null,token_hash text not null default '',status text not null,updated_at timestamptz not null default now(),expires_at timestamptz not null)`,
+		`create table element_capture_sessions(id text primary key,executor_id text not null,token_hash text not null default '',status text not null,browser_context_id text not null default '',current_url text not null default '',last_heartbeat_at timestamptz not null default now(),interrupted_at timestamptz,recovery_expires_at timestamptz,updated_at timestamptz not null default now(),expires_at timestamptz not null)`,
 		`create table element_capture_commands(id bigserial primary key,session_id text not null,executor_id text not null,command_type text not null,payload jsonb not null,status text not null,expires_at timestamptz not null,lease_until timestamptz,attempts int not null default 0,lease_receipt_hash text not null default '',acked_at timestamptz,created_at timestamptz not null default now(),claimed_at timestamptz)`,
 	} {
 		if _, err = db.ExecContext(ctx, statement); err != nil {
@@ -56,7 +70,7 @@ func TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,payload,status,expires_at) values('start','exec-1','start','{"sessionId":"start","type":"start","token":"legacy-secret"}','queued',$1)`, now.Add(time.Hour))
+	_, err = db.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,payload,status,expires_at) values('start','exec-1','start','{"sessionId":"start","type":"start"}','queued',$1)`, now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +87,14 @@ func TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection(t *t
 	if err = db.QueryRowContext(ctx, `select token_hash from element_capture_sessions where id='start'`).Scan(&hash); err != nil || hash == "" {
 		t.Fatalf("hash=%q err=%v", hash, err)
 	}
+	tokenHash := hash
+	if ok, err := repo.HeartbeatAndAckStart(ctx, "start", "exec-1", tokenHash, "ctx-1", "https://example.test", items[0].Receipt); err != nil || !ok {
+		t.Fatalf("atomic heartbeat ack=%v err=%v", ok, err)
+	}
+	var commandStatus string
+	if err = db.QueryRowContext(ctx, `select status from element_capture_commands where id=$1`, items[0].ID).Scan(&commandStatus); err != nil || commandStatus != "acked" {
+		t.Fatalf("start status=%s err=%v", commandStatus, err)
+	}
 	if err = repo.ExpireSessions(ctx, now); err != nil {
 		t.Fatalf("ExpireSessions: %v", err)
 	}
@@ -83,13 +105,15 @@ func TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection(t *t
 }
 
 func localPostgresDSN(t *testing.T) string {
-	raw, err := os.ReadFile("../../.env.local")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok && key == "DATABASE_URL" {
-			return strings.Trim(strings.TrimSpace(value), "\"'")
+	for _, path := range []string{"../../.env.local", "../../../.env.local", `F:\Synapse QA\.env.local`} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok && key == "DATABASE_URL" {
+				return strings.Trim(strings.TrimSpace(value), "\"'")
+			}
 		}
 	}
 	return ""

@@ -22,7 +22,7 @@ type elementCaptureService interface {
 	ListCandidates(context.Context, int64, string, int64, int) ([]model.ElementCaptureCandidate, error)
 	UpdateCandidate(context.Context, string, string, int64, model.CaptureCandidateUpdateRequest) error
 	BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error)
-	Heartbeat(context.Context, string, string, string, string, string) error
+	Heartbeat(context.Context, string, string, string, string, string, string) error
 	AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error)
 	AuthorizeExecutor(context.Context, string, string, string) error
 	FailSession(context.Context, string, string, string, string) error
@@ -224,7 +224,7 @@ func (ctl *ElementCaptureController) Heartbeat(c *gin.Context) {
 		failExecutorCaptureError(c, unauthorizedExecutorError())
 		return
 	}
-	if err := ctl.service.Heartbeat(c.Request.Context(), c.Param("id"), executorID, token, req.BrowserContextID, req.CurrentURL); err != nil {
+	if err := ctl.service.Heartbeat(c.Request.Context(), c.Param("id"), executorID, token, req.BrowserContextID, req.CurrentURL, req.CommandReceipt); err != nil {
 		failExecutorCaptureError(c, err)
 		return
 	}

@@ -34,7 +34,7 @@ func (routerCaptureService) UpdateCandidate(context.Context, string, string, int
 func (routerCaptureService) BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error) {
 	return model.BatchSaveResult{}, &service.CandidateIssuesError{Issues: []model.CandidateIssue{{CandidateID: 1, Field: "name", Message: "候选项名称不可靠"}}}
 }
-func (routerCaptureService) Heartbeat(context.Context, string, string, string, string, string) error {
+func (routerCaptureService) Heartbeat(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 func (routerCaptureService) AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {
