@@ -80,7 +80,6 @@ type CaptureCommandRepository interface {
 	ClaimCommands(ctx context.Context, executorID string, limit int) ([]model.ElementCaptureCommand, error)
 	AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error)
 	AckCommand(ctx context.Context, executorID string, commandID int64, receipt string) (bool, error)
-	AckStartCommand(ctx context.Context, executorID, sessionID string) error
 	HeartbeatAndAckStart(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL, receipt string) (bool, error)
 }
 type CaptureCommandCleanupRepository interface {

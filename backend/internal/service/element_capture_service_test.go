@@ -282,7 +282,6 @@ func (f *fakeCaptureRepo) AuthorizeCommandExecutor(_ context.Context, executorID
 func (f *fakeCaptureRepo) AckCommand(_ context.Context, _ string, _ int64, _ string) (bool, error) {
 	return true, nil
 }
-func (f *fakeCaptureRepo) AckStartCommand(_ context.Context, _ string, _ string) error { return nil }
 func (f *fakeCaptureRepo) HeartbeatAndAckStart(ctx context.Context, sessionID, executorID, tokenHash, browserContextID, currentURL, _ string) (bool, error) {
 	return f.Heartbeat(ctx, sessionID, executorID, tokenHash, browserContextID, currentURL)
 }

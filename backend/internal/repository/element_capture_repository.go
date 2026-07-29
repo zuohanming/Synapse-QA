@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -188,6 +189,7 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	items := []model.ElementCaptureCommand{}
 	for rows.Next() {
 		var item model.ElementCaptureCommand
@@ -235,10 +237,10 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 }
 
 func (r *ElementCaptureRepository) CleanupCommands(ctx context.Context, now time.Time) error {
-	if _, err := r.db.ExecContext(ctx, `update element_capture_commands set status='expired',lease_until=null,lease_receipt_hash='' where status in ('queued','leased') and (expires_at <= $1 or created_at < $1-interval '24 hours' or (attempts >= 5 and lease_until <= $1))`, now); err != nil {
+	if _, err := r.db.ExecContext(ctx, `update element_capture_commands set status='expired',lease_until=null,lease_receipt_hash='' where status in ('queued','leased') and (expires_at <= $1::timestamptz or created_at < ($1::timestamptz - interval '24 hours') or (attempts >= 5 and lease_until <= $1::timestamptz))`, now); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `delete from element_capture_commands where status in ('acked','expired') and created_at < $1-interval '24 hours'`, now)
+	_, err := r.db.ExecContext(ctx, `delete from element_capture_commands where status in ('acked','expired') and created_at < ($1::timestamptz - interval '24 hours')`, now)
 	return err
 }
 
@@ -252,17 +254,12 @@ func newLeasedCaptureToken() (string, error) {
 
 func (r *ElementCaptureRepository) AckCommand(ctx context.Context, executorID string, commandID int64, receipt string) (bool, error) {
 	hash := sha256.Sum256([]byte(receipt))
-	result, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where id=$1 and executor_id=$2 and command_type<>'start' and status='leased' and lease_until>now() and lease_receipt_hash=$3`, commandID, executorID, hex.EncodeToString(hash[:]))
+	result, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where id=$1 and executor_id=$2 and command_type<>'start' and status='leased' and lease_until>now() and expires_at>now() and lease_receipt_hash=$3`, commandID, executorID, hex.EncodeToString(hash[:]))
 	if err != nil {
 		return false, err
 	}
 	rows, err := result.RowsAffected()
 	return rows == 1, err
-}
-
-func (r *ElementCaptureRepository) AckStartCommand(ctx context.Context, executorID, sessionID string) error {
-	_, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null where session_id=$1 and executor_id=$2 and command_type='start' and status='leased'`, sessionID, executorID)
-	return err
 }
 
 func (r *ElementCaptureRepository) GetSession(ctx context.Context, userID int64, sessionID string) (model.ElementCaptureSessionDetail, error) {
@@ -370,14 +367,23 @@ func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, ses
 	defer func() { _ = tx.Rollback() }()
 	var commandStatus, receiptHash string
 	err = tx.QueryRowContext(ctx, `select status,lease_receipt_hash from element_capture_commands where session_id=$1 and executor_id=$2 and command_type='start' order by id desc limit 1 for update`, sessionID, executorID).Scan(&commandStatus, &receiptHash)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, model.NewDomainError(model.ErrConflict, "启动命令不存在或状态冲突")
+	}
+	if err != nil {
 		return false, err
 	}
-	if err == nil && commandStatus == "leased" {
-		hash := sha256.Sum256([]byte(receipt))
-		if receipt == "" || receiptHash != hex.EncodeToString(hash[:]) {
+	switch commandStatus {
+	case "leased":
+		if !captureReceiptMatches(receiptHash, receipt) {
 			return false, model.NewDomainError(model.ErrConflict, "启动命令回执无效")
 		}
+	case "acked":
+		if receipt != "" {
+			return false, model.NewDomainError(model.ErrConflict, "启动命令已确认，后续心跳不得携带回执")
+		}
+	default:
+		return false, model.NewDomainError(model.ErrConflict, "启动命令不存在或状态冲突")
 	}
 	var id string
 	err = tx.QueryRowContext(ctx, `update element_capture_sessions set status='active',last_heartbeat_at=now(),interrupted_at=null,recovery_expires_at=null,browser_context_id=case when status='starting' then $3 else browser_context_id end,current_url=$4,updated_at=now() where id=$1 and executor_id=$2 and token_hash=$5 and expires_at>now() and status in ('starting','active','interrupted') and (status<>'interrupted' or recovery_expires_at>=now()) and ((status='starting' and browser_context_id='' and $3<>'') or (status in ('active','interrupted') and browser_context_id=$3)) returning id`, sessionID, executorID, browserContextID, currentURL, tokenHash).Scan(&id)
@@ -388,7 +394,7 @@ func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, ses
 		return false, err
 	}
 	if commandStatus == "leased" {
-		result, execErr := tx.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where session_id=$1 and executor_id=$2 and command_type='start' and status='leased' and lease_until>now() and lease_receipt_hash=$3`, sessionID, executorID, receiptHash)
+		result, execErr := tx.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where session_id=$1 and executor_id=$2 and command_type='start' and status='leased' and lease_until>now() and expires_at>now() and lease_receipt_hash=$3`, sessionID, executorID, receiptHash)
 		if execErr != nil {
 			return false, execErr
 		}
@@ -401,6 +407,18 @@ func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, ses
 		}
 	}
 	return true, tx.Commit()
+}
+
+func captureReceiptMatches(storedHash, receipt string) bool {
+	if receipt == "" {
+		return false
+	}
+	actual := sha256.Sum256([]byte(receipt))
+	expected, err := hex.DecodeString(storedHash)
+	if err != nil || len(expected) != len(actual) {
+		return false
+	}
+	return subtle.ConstantTimeCompare(expected, actual[:]) == 1
 }
 
 func (r *ElementCaptureRepository) ExpireSessions(ctx context.Context, now time.Time) error {
@@ -436,6 +454,7 @@ func (r *ElementCaptureRepository) expireSessionsAndEnqueue(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	type expiredSession struct{ id, executorID string }
 	expired := []expiredSession{}
 	for rows.Next() {
@@ -795,6 +814,9 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, actor, 
 	if err := rows.Err(); err != nil {
 		return data, err
 	}
+	if err := rows.Close(); err != nil {
+		return data, err
+	}
 	nameRows, err := r.db.QueryContext(ctx, `select id,lower(name),fingerprint from page_elements where page_id=$1 and deleted_at is null`, data.Session.PageID)
 	if err != nil {
 		return data, err
@@ -842,6 +864,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
+	defer currentRows.Close()
 	locked := model.CaptureBatchData{Session: model.ElementCaptureSession{ID: req.SessionID, PageID: pageID, Status: sessionStatus}, ExistingNames: map[string][]int64{}, ExistingFingerprints: map[string][]int64{}}
 	for currentRows.Next() {
 		var candidate model.ElementCaptureCandidate
@@ -850,6 +873,9 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 			return model.BatchSaveResult{}, err
 		}
 		locked.Candidates = append(locked.Candidates, candidate)
+	}
+	if err = currentRows.Err(); err != nil {
+		return model.BatchSaveResult{}, err
 	}
 	if err = currentRows.Close(); err != nil {
 		return model.BatchSaveResult{}, err
@@ -871,6 +897,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
+	defer nameRows.Close()
 	for nameRows.Next() {
 		var id int64
 		var name, fingerprint string
@@ -882,6 +909,9 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		if fingerprint != "" {
 			locked.ExistingFingerprints[fingerprint] = append(locked.ExistingFingerprints[fingerprint], id)
 		}
+	}
+	if err = nameRows.Err(); err != nil {
+		return model.BatchSaveResult{}, err
 	}
 	if err = nameRows.Close(); err != nil {
 		return model.BatchSaveResult{}, err

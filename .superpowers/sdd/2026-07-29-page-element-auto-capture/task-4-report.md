@@ -56,3 +56,34 @@
 
 - 首次 heartbeat 以 `commandReceipt` 绑定当前 leased start 命令；`HeartbeatAndAckStart` 在一个 PostgreSQL 事务中验证回执、更新会话状态并 ACK start，任何一步失败都会回滚。已 ACK 的 start 允许后续 heartbeat 不重复携带回执。
 - 真实 PostgreSQL 聚焦测试已非跳过运行并通过，覆盖 start 领取、会话 token hash 写入、原子 heartbeat ACK 和过期会话命令入队；临时 schema 在 scoped 连接关闭后删除，并检查残留计数为 0。连接凭据仅注入测试进程，未写入仓库或报告。
+
+## 升级接管收尾：关闭命令状态机
+
+### 根因与修复
+
+- 第 5 轮实现只在最新 start 命令为 `leased` 时检查回执，`queued`、`expired` 和无命令行仍会继续更新会话；`acked` 路径也未拒绝多余回执。现改为封闭状态机：仅 `leased + 有效 receipt` 执行会话更新与 ACK，或 `acked + 空 receipt` 执行后续 heartbeat；其余状态统一返回 `model.ErrConflict`，错误回执、租约过期和数据库错误均由事务回滚。
+- receipt SHA-256 摘要使用 `subtle.ConstantTimeCompare` 比较；普通 ACK 同时要求非 start、leased、租约及命令有效期均有效。移除废弃 `AckStartCommand` 接口、实现和 fake。
+- `ClaimCommands`、`expireSessionsAndEnqueue`、批量读取候选等 `Rows` 路径补齐 defer/成功前显式 Close，保证扫描、解码和 `Rows.Err` 早退均关闭结果集。真实 PostgreSQL 还暴露并修复了 `CleanupCommands` 的时间参数推断问题，统一显式转换为 `timestamptz`。
+- 真实迁移 fixture 预建最小 roles/users/executors/ui_assets/session/candidate 依赖和 Fix2 版 commands，插入携带顶层 token 的 pending/claimed 历史命令，连续运行两轮 `app.migrate`；断言 token 清除、pending/claimed 状态迁移、租约/receipt 列、旧 pending 索引删除、新 claim 索引及无明文。
+
+### RED
+
+- `TestElementCaptureRepositoryHeartbeatAndAckStartStateMachine`：`queued command`、`expired command`、`missing command`、`acked follow-up rejects receipt` 首次运行均因实现继续调用 session update 而失败。
+- `TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL`：旧 fixture 首次真实运行在第 1 轮第 19 条报 `relation "executors" does not exist`（SQLSTATE 42P01）。
+- `TestElementCaptureRepositoryStateAuthorizationAndCleanupOnPostgreSQL`：首次真实运行在 `CleanupCommands` 报 `timestamp with time zone < interval`（SQLSTATE 42883），证明 sqlmock 未覆盖 PostgreSQL 参数类型推断。
+
+### GREEN
+
+- `TestElementCaptureRepositoryHeartbeatAndAckStartStateMachine`
+- `TestElementCaptureRepositoryClosesCommandRowsOnDecodeFailure`
+- `TestElementCaptureRepositoryClosesExpiredSessionRowsOnScanFailure`
+- `TestElementCaptureRepositoryAuthorizesCommandWithSuppliedFallbackWhenSettingIsAbsent`
+- `TestElementCaptureRepositoryCleanupEnforcesAttemptCapAndRetention`
+- `TestElementCaptureRepositoryAckCommandMatrix`
+- `TestElementCaptureRepositoryPageAccessibleOwnerDenyAndAdminMatrix`
+- `TestElementCaptureRepositoryRollbackVersionFailureRollsBack`
+- `TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL`（真实 PostgreSQL，两轮 migrate）
+- `TestElementCaptureLeaseAndExpiryUseRealPostgreSQLWithoutBusyConnection`（真实 PostgreSQL）
+- `TestElementCaptureRepositoryStateAuthorizationAndCleanupOnPostgreSQL`（真实 PostgreSQL）
+
+最终验证：`cd backend; go test ./... -count=1`、`cd backend; go vet ./...`、`git diff --check`。真实 PostgreSQL 凭据仅注入测试进程；迁移和仓储测试 cleanup 均断言临时 schema 残留计数为 0。
