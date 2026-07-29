@@ -188,7 +188,6 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	items := []model.ElementCaptureCommand{}
 	for rows.Next() {
 		var item model.ElementCaptureCommand
@@ -199,25 +198,48 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 		if err = json.Unmarshal(payload, &item); err != nil {
 			return nil, err
 		}
-		if item.Type == "start" {
-			item.Token, err = newLeasedCaptureToken()
-			if err != nil {
-				return nil, err
-			}
-			hash := sha256.Sum256([]byte(item.Token))
-			if _, err = tx.ExecContext(ctx, `update element_capture_sessions set token_hash=$1,updated_at=now() where id=$2 and executor_id=$3`, hex.EncodeToString(hash[:]), item.SessionID, executorID); err != nil {
-				return nil, err
-			}
-		}
 		items = append(items, item)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	// pgx 不允许在未完全关闭 RETURNING 结果集的连接上继续执行语句。
+	for index := range items {
+		items[index].Receipt, err = newLeasedCaptureToken()
+		if err != nil {
+			return nil, err
+		}
+		receiptHash := sha256.Sum256([]byte(items[index].Receipt))
+		if _, err = tx.ExecContext(ctx, `update element_capture_commands set lease_receipt_hash=$1 where id=$2 and executor_id=$3 and status='leased'`, hex.EncodeToString(receiptHash[:]), items[index].ID, executorID); err != nil {
+			return nil, err
+		}
+		if items[index].Type != "start" {
+			continue
+		}
+		items[index].Token, err = newLeasedCaptureToken()
+		if err != nil {
+			return nil, err
+		}
+		hash := sha256.Sum256([]byte(items[index].Token))
+		if _, err = tx.ExecContext(ctx, `update element_capture_sessions set token_hash=$1,updated_at=now() where id=$2 and executor_id=$3`, hex.EncodeToString(hash[:]), items[index].SessionID, executorID); err != nil {
+			return nil, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+func (r *ElementCaptureRepository) CleanupCommands(ctx context.Context, now time.Time) error {
+	if _, err := r.db.ExecContext(ctx, `update element_capture_commands set status='expired',lease_until=null,lease_receipt_hash='' where status in ('queued','leased') and (expires_at <= $1 or created_at < $1-interval '24 hours' or (attempts >= 5 and lease_until <= $1))`, now); err != nil {
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `delete from element_capture_commands where status in ('acked','expired') and created_at < $1-interval '24 hours'`, now)
+	return err
 }
 
 func newLeasedCaptureToken() (string, error) {
@@ -228,8 +250,9 @@ func newLeasedCaptureToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-func (r *ElementCaptureRepository) AckCommand(ctx context.Context, executorID string, commandID int64) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null where id=$1 and executor_id=$2 and status='leased'`, commandID, executorID)
+func (r *ElementCaptureRepository) AckCommand(ctx context.Context, executorID string, commandID int64, receipt string) (bool, error) {
+	hash := sha256.Sum256([]byte(receipt))
+	result, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where id=$1 and executor_id=$2 and command_type<>'start' and status='leased' and lease_until>now() and lease_receipt_hash=$3`, commandID, executorID, hex.EncodeToString(hash[:]))
 	if err != nil {
 		return false, err
 	}
@@ -371,17 +394,27 @@ func (r *ElementCaptureRepository) expireSessionsAndEnqueue(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type expiredSession struct{ id, executorID string }
+	expired := []expiredSession{}
 	for rows.Next() {
 		var sessionID, executorID string
 		if err = rows.Scan(&sessionID, &executorID); err != nil {
 			return err
 		}
-		if err = insertCaptureCommand(ctx, tx, model.ElementCaptureCommand{SessionID: sessionID, Type: "expire"}, executorID, now.Add(30*time.Minute)); err != nil {
+		expired = append(expired, expiredSession{sessionID, executorID})
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	for _, session := range expired {
+		if err = insertCaptureCommand(ctx, tx, model.ElementCaptureCommand{SessionID: session.id, Type: "expire"}, session.executorID, now.Add(30*time.Minute)); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (r *ElementCaptureRepository) FailSession(ctx context.Context, sessionID, executorID, tokenHash, reason string) (bool, error) {
@@ -433,7 +466,7 @@ func (r *ElementCaptureRepository) ListVersions(ctx context.Context, userID, ele
 	if err := r.db.QueryRowContext(ctx, `
 		select exists(
 			select 1 from page_elements e join ui_assets p on p.id=e.page_id
-			where e.id=$1 and e.deleted_at is null and p.deleted_at is null and p.asset_type='page' and (
+			where e.id=$1 and e.deleted_at is null and p.deleted_at is null and p.asset_type in ('page','page_element') and (
 				p.created_by=(select username from users where id=$2 and deleted_at is null)
 				or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.id=$2 and u.deleted_at is null and ro.code='admin')
 			)
@@ -485,7 +518,7 @@ func (r *ElementCaptureRepository) RollbackVersion(ctx context.Context, actor st
 	var currentVersion int
 	if err = tx.QueryRowContext(ctx, `
 		select e.current_version from page_elements e join ui_assets p on p.id=e.page_id
-		where e.id=$1 and e.deleted_at is null and p.deleted_at is null and p.asset_type='page' and (
+		where e.id=$1 and e.deleted_at is null and p.asset_type in ('page','page_element') and p.deleted_at is null and (
 			p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
 		) for update of e,p
 	`, elementID, actor).Scan(&currentVersion); err != nil {

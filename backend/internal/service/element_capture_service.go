@@ -79,8 +79,11 @@ type CaptureCommandRepository interface {
 	StopSessionWithCommand(ctx context.Context, actor, sessionID string) (bool, error)
 	ClaimCommands(ctx context.Context, executorID string, limit int) ([]model.ElementCaptureCommand, error)
 	AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error)
-	AckCommand(ctx context.Context, executorID string, commandID int64) (bool, error)
+	AckCommand(ctx context.Context, executorID string, commandID int64, receipt string) (bool, error)
 	AckStartCommand(ctx context.Context, executorID, sessionID string) error
+}
+type CaptureCommandCleanupRepository interface {
+	CleanupCommands(context.Context, time.Time) error
 }
 
 type PageAccessRepository interface {
@@ -278,6 +281,11 @@ func (s *ElementCaptureService) StartScheduler(ctx context.Context) {
 			if err := s.ExpireSessions(ctx, s.now()); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("清理采集会话失败：%v", err)
 			}
+			if repo, ok := s.repo.(CaptureCommandCleanupRepository); ok {
+				if err := repo.CleanupCommands(ctx, s.now()); err != nil && !errors.Is(err, context.Canceled) {
+					log.Printf("清理采集命令失败：%v", err)
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -340,7 +348,7 @@ func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, _ 
 	return repo.ClaimCommands(ctx, executorID, 50)
 }
 
-func (s *ElementCaptureService) AckCommand(ctx context.Context, executorID, token string, commandID int64) error {
+func (s *ElementCaptureService) AckCommand(ctx context.Context, executorID, token string, commandID int64, receipt string) error {
 	repo, ok := s.repo.(CaptureCommandRepository)
 	if !ok {
 		return errors.New("采集命令仓储未配置")
@@ -352,7 +360,10 @@ func (s *ElementCaptureService) AckCommand(ctx context.Context, executorID, toke
 	if !allowed {
 		return unauthorized("执行器长期令牌无效")
 	}
-	acked, err := repo.AckCommand(ctx, executorID, commandID)
+	if strings.TrimSpace(receipt) == "" {
+		return validation("命令回执无效")
+	}
+	acked, err := repo.AckCommand(ctx, executorID, commandID, receipt)
 	if err != nil {
 		return err
 	}

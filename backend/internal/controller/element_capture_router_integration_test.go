@@ -52,7 +52,9 @@ func (routerCaptureService) FailSession(context.Context, string, string, string,
 func (routerCaptureService) ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error) {
 	return nil, nil
 }
-func (routerCaptureService) AckCommand(context.Context, string, string, int64) error { return nil }
+func (routerCaptureService) AckCommand(context.Context, string, string, int64, string) error {
+	return nil
+}
 func (routerCaptureService) ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error) {
 	return nil, nil
 }
@@ -146,8 +148,9 @@ func TestElementCaptureProductionRouterRegistersAllRoutesAndEnforcesBoundaries(t
 	if response.Code != http.StatusOK {
 		t.Fatalf("command read status=%d", response.Code)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/1/ack?executorId=exec-1", nil)
+	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/1/ack?executorId=exec-1", strings.NewReader(`{"receipt":"receipt"}`))
 	request.Header.Set("X-Executor-Token", "long-token")
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

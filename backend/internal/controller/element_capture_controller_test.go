@@ -65,7 +65,7 @@ func (s *captureControllerServiceStub) FailSession(context.Context, string, stri
 func (s *captureControllerServiceStub) ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error) {
 	return nil, nil
 }
-func (s *captureControllerServiceStub) AckCommand(_ context.Context, _, _ string, id int64) error {
+func (s *captureControllerServiceStub) AckCommand(_ context.Context, _, _ string, id int64, _ string) error {
 	s.ackID = id
 	return nil
 }
@@ -179,8 +179,9 @@ func TestElementCaptureCommandAckRequiresLongTokenAndAcknowledgesOwnCommand(t *t
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("missing token status=%d", response.Code)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/7/ack?executorId=exec-1", nil)
+	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/7/ack?executorId=exec-1", strings.NewReader(`{"receipt":"receipt"}`))
 	request.Header.Set("X-Executor-Token", "long-token")
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || stub.ackID != 7 {

@@ -46,3 +46,8 @@
 - `element_capture_commands.payload` 只保存非敏感命令字段。领取 start 租约时才在同一事务内生成一次性会话令牌、写入其 hash 并将明文仅放入响应 DTO；重领会轮换 hash，旧令牌立即失效。
 - 命令迁移增加 `lease_until`、`attempts` 和 `acked_at`；领取将命令置为短暂 leased，ACK 将其置为 acked，未确认的 stop/expire 会在租约到期后重投。后台调度器定时调用过期清理，不依赖轮询请求。
 - 新增 `POST /api/executor/element-capture/commands/:id/ack`，使用现有执行器长期令牌和 executor ID，按命令归属原子确认。页面 owner/admin 校验兼容 `page` 与历史 `page_element` 两种页面资产。
+
+## Fix round 4：PostgreSQL 结果集与历史数据加固
+
+- 领取命令和会话到期处理都会先读取、检查并关闭 `UPDATE ... RETURNING` 的全部结果，再继续执行后续更新/插入，避免 pgx 在同一事务连接上报告 `conn busy`。真实 PostgreSQL 隔离 schema 测试覆盖 start 领取与超时会话命令写入。
+- 迁移删除旧 JSONB payload 中的 `token`，将历史 pending/claimed 命令迁移为 queued 或 expired 并清除过期 lease；后台 scheduler 独立执行命令清理。领取响应提供随机 lease receipt，数据库仅保存其 hash，普通 ACK 不能确认 start 命令。

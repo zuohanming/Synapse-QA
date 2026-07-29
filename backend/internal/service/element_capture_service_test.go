@@ -279,7 +279,7 @@ func (f *fakeCaptureRepo) AuthorizeCommandExecutor(_ context.Context, executorID
 	return f.authorized && token == "long-token", nil
 }
 
-func (f *fakeCaptureRepo) AckCommand(_ context.Context, _ string, _ int64) (bool, error) {
+func (f *fakeCaptureRepo) AckCommand(_ context.Context, _ string, _ int64, _ string) (bool, error) {
 	return true, nil
 }
 func (f *fakeCaptureRepo) AckStartCommand(_ context.Context, _ string, _ string) error { return nil }

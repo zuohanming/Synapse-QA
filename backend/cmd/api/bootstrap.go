@@ -689,7 +689,10 @@ func elementCaptureMigrationStatements() []string {
 		`alter table element_capture_commands add column if not exists lease_until timestamptz`,
 		`alter table element_capture_commands add column if not exists attempts int not null default 0`,
 		`alter table element_capture_commands add column if not exists acked_at timestamptz`,
+		`alter table element_capture_commands add column if not exists lease_receipt_hash text not null default ''`,
+		`update element_capture_commands set payload=payload-'token' where payload ? 'token'`,
 		`update element_capture_commands set status='queued' where status='pending'`,
+		`update element_capture_commands set status=case when expires_at <= now() then 'expired' else 'queued' end, lease_until=null, lease_receipt_hash='' where status='claimed'`,
 		`create index if not exists idx_element_capture_commands_pending on element_capture_commands(executor_id, id) where status='pending'`,
 		`create index if not exists idx_element_capture_commands_retention on element_capture_commands(status, created_at)`,
 	}

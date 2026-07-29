@@ -72,7 +72,12 @@ type ElementCaptureCommand struct {
 	URL            string `json:"url,omitempty"`
 	BrowserChannel string `json:"browserChannel,omitempty"`
 	// Token 仅在领取 start 命令的响应 DTO 中出现，绝不持久化。
-	Token string `json:"token,omitempty"`
+	Token   string `json:"token,omitempty"`
+	Receipt string `json:"receipt,omitempty"`
+}
+
+type CaptureCommandAckRequest struct {
+	Receipt string `json:"receipt"`
 }
 
 type CaptureHeartbeatRequest struct {

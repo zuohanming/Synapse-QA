@@ -27,7 +27,7 @@ type elementCaptureService interface {
 	AuthorizeExecutor(context.Context, string, string, string) error
 	FailSession(context.Context, string, string, string, string) error
 	ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error)
-	AckCommand(context.Context, string, string, int64) error
+	AckCommand(context.Context, string, string, int64, string) error
 	ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error)
 	RollbackVersion(context.Context, string, int64, int) (model.PageElementVersion, error)
 }
@@ -311,7 +311,12 @@ func (ctl *ElementCaptureController) AckCommand(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "命令 ID 无效")
 		return
 	}
-	if err = ctl.service.AckCommand(c.Request.Context(), executorID, token, commandID); err != nil {
+	var req model.CaptureCommandAckRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求参数无效")
+		return
+	}
+	if err = ctl.service.AckCommand(c.Request.Context(), executorID, token, commandID, req.Receipt); err != nil {
 		failExecutorCaptureError(c, err)
 		return
 	}
