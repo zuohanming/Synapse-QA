@@ -23,6 +23,16 @@ type ElementCaptureSession struct {
 	ExpiresAt         time.Time  `json:"expiresAt"`
 }
 
+// CaptureSessionCreated 仅在创建会话时返回明文令牌。
+type CaptureSessionCreated struct {
+	Session ElementCaptureSession `json:"session"`
+	Token   string                `json:"token"`
+}
+
+type ElementCaptureSessionDetail struct {
+	ElementCaptureSession
+}
+
 type ElementCaptureCandidate struct {
 	ID                 string          `json:"id"`
 	SessionID          string          `json:"sessionId"`
