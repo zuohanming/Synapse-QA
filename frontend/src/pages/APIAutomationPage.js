@@ -169,12 +169,12 @@ function InterfaceManagementPage() {
     { key: "productName", width: "12%", title: "项目/产品", render: (row) => `${row.projectName}/${row.productName}` },
     { key: "moduleName", width: "9%", title: "模块名称", render: (row) => row.moduleName || "未分组" },
     { key: "name", width: "11%", title: "接口名称" },
-    { key: "path", width: "21%", title: "方法 / 路径", render: (row) => <span><span className={`api-tag method-${row.method?.toLowerCase()}`}>{row.method}</span> <code>{row.path}</code></span> },
+    { key: "path", width: "17%", title: "方法 / 路径", render: (row) => <span><span className={`api-tag method-${row.method?.toLowerCase()}`}>{row.method}</span> <code>{row.path}</code></span> },
     { key: "endpointType", width: "7%", title: "端类型", render: (row) => <span className="api-tag endpoint">{row.endpointType}</span> },
     { key: "lifecycleStatus", width: "8%", title: "接口状态", render: (row) => <span className={`status-badge ${row.lifecycleStatus === "active" && !row.deletedAt ? "status-passed" : ""}`}>{row.deletedAt ? "已删除" : lifecycleLabel(row.lifecycleStatus)}</span> },
     { key: "lastDebugStatus", width: "8%", title: "最近调试", render: (row) => row.lastDebugStatus ? <span className={`status-badge ${row.lastDebugStatus === "success" ? "status-passed" : "status-failed"}`}>{row.lastDebugStatus === "success" ? "通过" : "失败"}</span> : "未调试" },
     { key: "updatedBy", width: "10%", title: "最近修改", render: (row) => <span>{row.updatedBy}<br /><small>{new Date(row.updatedAt).toLocaleString()}</small></span> },
-    { key: "operations", width: "7%", title: "操作", render: (row) => row.deletedAt
+    { key: "operations", className: "api-interface-operations", width: "11%", title: "操作", render: (row) => row.deletedAt
       ? <div className="action-links"><button className="link-button" disabled={busy} onClick={() => restoreRow(row.id)} type="button">恢复</button></div>
       : <div className="action-links"><button className="link-button" onClick={() => setDetailRow(row)} type="button">调试</button><button className="link-button" onClick={() => openEdit(row)} type="button">编辑</button><button className="link-button danger-link" onClick={() => removeRows([row.id])} type="button">删除</button></div> }
   ];

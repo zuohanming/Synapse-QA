@@ -54,6 +54,29 @@ async function mockApi(page) {
   });
 }
 
+async function expectFullyInsideCell(locator) {
+  const bounds = await locator.evaluate((element) => {
+    const elementRect = element.getBoundingClientRect();
+    const cellRect = element.closest("td").getBoundingClientRect();
+    const wrapRect = element.closest(".table-wrap").getBoundingClientRect();
+    return {
+      elementLeft: elementRect.left,
+      elementRight: elementRect.right,
+      elementTop: elementRect.top,
+      elementBottom: elementRect.bottom,
+      visibleLeft: Math.max(0, cellRect.left, wrapRect.left),
+      visibleRight: Math.min(window.innerWidth, cellRect.right, wrapRect.right),
+      visibleTop: Math.max(0, cellRect.top, wrapRect.top),
+      visibleBottom: Math.min(window.innerHeight, cellRect.bottom, wrapRect.bottom)
+    };
+  });
+
+  expect(bounds.elementLeft).toBeGreaterThanOrEqual(bounds.visibleLeft);
+  expect(bounds.elementRight).toBeLessThanOrEqual(bounds.visibleRight);
+  expect(bounds.elementTop).toBeGreaterThanOrEqual(bounds.visibleTop);
+  expect(bounds.elementBottom).toBeLessThanOrEqual(bounds.visibleBottom);
+}
+
 test("接口管理在桌面端保持单行搜索且列表无横向溢出", async ({ page }) => {
   await mockApi(page);
   await page.addInitScript(() => {
@@ -91,10 +114,13 @@ test("接口管理在桌面端保持单行搜索且列表无横向溢出", async
     const box = await button.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(1440);
+    await expectFullyInsideCell(button);
   }
 
   await expect(page.getByRole("checkbox", { name: "全选当前页接口" })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: "选择接口 登录接口" })).toBeVisible();
+  const rowCheckbox = page.getByRole("checkbox", { name: "选择接口 登录接口" });
+  await expect(rowCheckbox).toBeVisible();
+  await expectFullyInsideCell(rowCheckbox);
 
   const pathContent = page.locator(".api-interface-list .data-table tbody td:nth-child(6) .table-cell-content");
   expect(await pathContent.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);

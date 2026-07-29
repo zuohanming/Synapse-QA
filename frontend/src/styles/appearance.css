@@ -3155,7 +3155,9 @@ body,
 .api-interface-list .data-table[data-fit-container="true"] { min-width: 0 !important; width: 100%; }
 .api-interface-list .data-table th,
 .api-interface-list .data-table td { padding-inline: clamp(6px, .65vw, 12px); }
+.api-interface-list .data-table .api-interface-operations { padding-inline: 3px; }
 .api-interface-list .action-links { flex-wrap: nowrap; gap: 5px; white-space: nowrap; }
+.api-interface-list .api-interface-operations .action-links { gap: 2px; }
 .api-interface-list .action-links .link-button { padding-inline: 2px; }
 
 @container (max-width: 899px) {

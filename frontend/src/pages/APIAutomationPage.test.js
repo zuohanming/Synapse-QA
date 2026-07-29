@@ -43,7 +43,7 @@ describe("接口自动化项目默认请求头", () => {
     vi.unstubAllGlobals();
   });
 
-  it("接口管理列表使用视口适配列宽", async () => {
+  it("接口管理列表为路径和操作分配容器适配列宽", async () => {
     apiMock.interfaces.list.mockResolvedValue({ items: [], total: 0 });
     configMock.projects.list.mockResolvedValue({ items: [] });
     configMock.products.list.mockResolvedValue({ items: [] });
@@ -56,7 +56,7 @@ describe("接口自动化项目默认请求头", () => {
     const table = container.querySelector(".api-interface-list .data-table");
     expect(table).toHaveAttribute("data-fit-container", "true");
     expect(Array.from(table.querySelectorAll("col")).map((column) => column.style.width)).toEqual([
-      "3%", "4%", "12%", "9%", "11%", "21%", "7%", "8%", "8%", "10%", "7%"
+      "3%", "4%", "12%", "9%", "11%", "17%", "7%", "8%", "8%", "10%", "11%"
     ]);
   });
 
