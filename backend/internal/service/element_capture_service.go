@@ -60,6 +60,16 @@ type CandidateCaptureRepository interface {
 	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error)
 }
 
+type CaptureVersionRepository interface {
+	ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error)
+	RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error)
+}
+
+type CaptureExecutorRepository interface {
+	FailSession(ctx context.Context, sessionID, executorID, tokenHash, reason string) (bool, error)
+	ListCommands(ctx context.Context, executorID string) ([]model.ElementCaptureCommand, error)
+}
+
 type captureLocator struct {
 	Type   string  `json:"type"`
 	Value  string  `json:"value"`
@@ -211,6 +221,58 @@ func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, execut
 
 func (s *ElementCaptureService) ExpireSessions(ctx context.Context, now time.Time) error {
 	return s.repo.ExpireSessions(ctx, now)
+}
+
+func (s *ElementCaptureService) FailSession(ctx context.Context, sessionID, executorID, token, reason string) error {
+	repo, ok := s.repo.(CaptureExecutorRepository)
+	if !ok {
+		return errors.New("采集执行器仓储未配置")
+	}
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(executorID) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(reason) == "" {
+		return errors.New("采集失败回调参数无效")
+	}
+	hash := sha256.Sum256([]byte(token))
+	updated, err := repo.FailSession(ctx, sessionID, executorID, hex.EncodeToString(hash[:]), strings.TrimSpace(reason))
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return errors.New("采集会话不存在、执行器或令牌无效")
+	}
+	return nil
+}
+
+func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID string) ([]model.ElementCaptureCommand, error) {
+	repo, ok := s.repo.(CaptureExecutorRepository)
+	if !ok {
+		return nil, errors.New("采集执行器仓储未配置")
+	}
+	if strings.TrimSpace(executorID) == "" {
+		return nil, errors.New("executorId 不能为空")
+	}
+	return repo.ListCommands(ctx, executorID)
+}
+
+func (s *ElementCaptureService) ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error) {
+	repo, ok := s.repo.(CaptureVersionRepository)
+	if !ok {
+		return nil, errors.New("页面元素版本仓储未配置")
+	}
+	if elementID <= 0 {
+		return nil, errors.New("页面元素 ID 无效")
+	}
+	return repo.ListVersions(ctx, elementID)
+}
+
+func (s *ElementCaptureService) RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error) {
+	repo, ok := s.repo.(CaptureVersionRepository)
+	if !ok {
+		return model.PageElementVersion{}, errors.New("页面元素版本仓储未配置")
+	}
+	if strings.TrimSpace(actor) == "" || elementID <= 0 || version <= 0 {
+		return model.PageElementVersion{}, errors.New("版本回滚参数无效")
+	}
+	return repo.RollbackVersion(ctx, actor, elementID, version)
 }
 
 func (s *ElementCaptureService) AddCandidate(ctx context.Context, executorID, token string, req model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error) {

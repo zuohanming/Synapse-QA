@@ -141,6 +141,120 @@ func (r *ElementCaptureRepository) ExpireSessions(ctx context.Context, now time.
 	return err
 }
 
+func (r *ElementCaptureRepository) FailSession(ctx context.Context, sessionID, executorID, tokenHash, reason string) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+		update element_capture_sessions set status='failed',updated_at=now()
+		where id=$1 and executor_id=$2 and token_hash=$3 and status in ('starting','active','interrupted')
+	`, sessionID, executorID, tokenHash)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows == 0 {
+		return rows > 0, err
+	}
+	_, err = r.db.ExecContext(ctx, `insert into operation_logs(actor,action,target) values($1,'element_capture.failed',$2)`, executorID, sessionID+":"+reason)
+	return true, err
+}
+
+func (r *ElementCaptureRepository) ListCommands(_ context.Context, _ string) ([]model.ElementCaptureCommand, error) {
+	// 会话令牌只以摘要形式保存；启动命令由创建会话的响应安全下发，不能从数据库重新生成。
+	return []model.ElementCaptureCommand{}, nil
+}
+
+func (r *ElementCaptureRepository) ListVersions(ctx context.Context, elementID int64) ([]model.PageElementVersion, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id,page_element_id,version,snapshot,change_summary,created_by,created_at
+		from page_element_versions where page_element_id=$1 order by version desc
+	`, elementID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.PageElementVersion, 0)
+	for rows.Next() {
+		var item model.PageElementVersion
+		if err := rows.Scan(&item.ID, &item.PageElementID, &item.Version, &item.Snapshot, &item.ChangeSummary, &item.CreatedBy, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+type pageElementVersionSnapshot struct {
+	Name           string             `json:"name"`
+	Fingerprint    string             `json:"fingerprint"`
+	CaptureURL     string             `json:"captureUrl"`
+	TagName        string             `json:"tagName"`
+	AccessibleName string             `json:"accessibleName"`
+	Locators       []candidateLocator `json:"locators"`
+	QualityScore   float64            `json:"qualityScore"`
+}
+
+func (r *ElementCaptureRepository) RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.PageElementVersion{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentVersion int
+	if err = tx.QueryRowContext(ctx, `select current_version from page_elements where id=$1 and deleted_at is null for update`, elementID).Scan(&currentVersion); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	var raw json.RawMessage
+	if err = tx.QueryRowContext(ctx, `select snapshot from page_element_versions where page_element_id=$1 and version=$2`, elementID, version).Scan(&raw); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	var snapshot pageElementVersionSnapshot
+	if err = json.Unmarshal(raw, &snapshot); err != nil || snapshot.Name == "" || len(snapshot.Locators) == 0 {
+		if err == nil {
+			err = errors.New("版本快照无效")
+		}
+		return model.PageElementVersion{}, err
+	}
+	first := snapshot.Locators[0]
+	var second, third candidateLocator
+	if len(snapshot.Locators) > 1 {
+		second = snapshot.Locators[1]
+	}
+	if len(snapshot.Locators) > 2 {
+		third = snapshot.Locators[2]
+	}
+	nextVersion := currentVersion + 1
+	result, err := tx.ExecContext(ctx, `
+		update page_elements set name=$1,type1=$2,locator1=$3,index1=$4,type2=$5,locator2=$6,index2=$7,type3=$8,locator3=$9,index3=$10,
+		fingerprint=$11,capture_source=$12,capture_url=$13,tag_name=$14,accessible_name=$15,quality_score=$16,captured_by=$17,captured_at=now(),current_version=$18,updated_at=now()
+		where id=$19 and deleted_at is null
+	`, snapshot.Name, first.Type, first.Value, first.Index, second.Type, second.Value, second.Index, third.Type, third.Value, third.Index,
+		snapshot.Fingerprint, "rollback", snapshot.CaptureURL, snapshot.TagName, snapshot.AccessibleName, snapshot.QualityScore, actor, nextVersion, elementID)
+	if err != nil {
+		return model.PageElementVersion{}, err
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return model.PageElementVersion{}, rowsErr
+		}
+		return model.PageElementVersion{}, sql.ErrNoRows
+	}
+	newSnapshot := map[string]any{"name": snapshot.Name, "fingerprint": snapshot.Fingerprint, "captureUrl": snapshot.CaptureURL, "tagName": snapshot.TagName, "accessibleName": snapshot.AccessibleName, "locators": snapshot.Locators, "qualityScore": snapshot.QualityScore, "source": "rollback"}
+	encodedSnapshot, err := json.Marshal(newSnapshot)
+	if err != nil {
+		return model.PageElementVersion{}, err
+	}
+	item := model.PageElementVersion{PageElementID: elementID, Version: nextVersion, Snapshot: encodedSnapshot, ChangeSummary: fmt.Sprintf("回滚至版本 %d", version), CreatedBy: actor}
+	if err = tx.QueryRowContext(ctx, `insert into page_element_versions(page_element_id,version,snapshot,change_summary,created_by) values($1,$2,$3,$4,$5) returning id,created_at`, elementID, nextVersion, encodedSnapshot, item.ChangeSummary, actor).Scan(&item.ID, &item.CreatedAt); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `insert into operation_logs(actor,action,target) values($1,'element_capture.rollback',$2)`, actor, fmt.Sprintf("%d:%d", elementID, version)); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.PageElementVersion{}, err
+	}
+	return item, nil
+}
+
 type candidateLocator struct {
 	Type  string `json:"type"`
 	Value string `json:"value"`

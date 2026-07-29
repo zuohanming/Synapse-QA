@@ -26,6 +26,7 @@ func TestPermissionSeedsContainElementCapturePermissions(t *testing.T) {
 		"ui.element.read",
 		"ui.element.capture",
 		"ui.element.manage",
+		"ui.element.rollback",
 	} {
 		if !seedCodes[want] {
 			t.Fatalf("权限种子缺少 %q", want)

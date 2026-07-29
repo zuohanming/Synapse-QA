@@ -90,3 +90,33 @@ func TestElementCaptureRepositoryExpiresTimedOutAndInterruptedSessions(t *testin
 		t.Fatal(err)
 	}
 }
+
+func TestElementCaptureRepositoryRollbackWritesNextVersionInOneTransaction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("select current_version from page_elements where id=$1 and deleted_at is null for update")).
+		WithArgs(int64(22)).WillReturnRows(sqlmock.NewRows([]string{"current_version"}).AddRow(3))
+	mock.ExpectQuery(regexp.QuoteMeta("select snapshot from page_element_versions where page_element_id=$1 and version=$2")).
+		WithArgs(int64(22), 1).WillReturnRows(sqlmock.NewRows([]string{"snapshot"}).AddRow([]byte(`{"name":"submit","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","captureUrl":"https://example.test","tagName":"button","accessibleName":"Submit","locators":[{"type":"testid","value":"submit","index":""}],"qualityScore":95}`)))
+	mock.ExpectExec("update page_elements set name=\\$1").
+		WithArgs("submit", "testid", "submit", "", "", "", "", "", "", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rollback", "https://example.test", "button", "Submit", 95.0, "admin", 4, int64(22)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("insert into page_element_versions").
+		WithArgs(int64(22), 4, sqlmock.AnyArg(), "回滚至版本 1", "admin").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(12, time.Now()))
+	mock.ExpectExec("insert into operation_logs").WithArgs("admin", "22:1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	version, err := NewElementCaptureRepository(db).RollbackVersion(context.Background(), "admin", 22, 1)
+	if err != nil || version.Version != 4 || version.PageElementID != 22 {
+		t.Fatalf("version=%+v err=%v", version, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

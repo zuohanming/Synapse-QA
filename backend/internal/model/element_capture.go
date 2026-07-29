@@ -64,6 +64,25 @@ type PageElementVersion struct {
 	CreatedAt     time.Time       `json:"createdAt"`
 }
 
+type ElementCaptureCommand struct {
+	SessionID string `json:"sessionId"`
+	Type      string `json:"type"`
+	Mode      string `json:"mode,omitempty"`
+}
+
+type CaptureHeartbeatRequest struct {
+	ExecutorID       string `json:"executorId"`
+	Token            string `json:"token"`
+	BrowserContextID string `json:"browserContextId"`
+	CurrentURL       string `json:"currentUrl"`
+}
+
+type CaptureFailureRequest struct {
+	ExecutorID string `json:"executorId"`
+	Token      string `json:"token"`
+	Reason     string `json:"reason"`
+}
+
 type CaptureSessionCreateRequest struct {
 	PageID           int64  `json:"pageId"`
 	ExecutorID       string `json:"executorId"`
@@ -86,6 +105,8 @@ type CandidateBatchSaveRequest struct {
 }
 
 type CaptureCandidateCreateRequest struct {
+	ExecutorID     string          `json:"executorId"`
+	Token          string          `json:"token"`
 	SessionID      string          `json:"sessionId"`
 	Name           string          `json:"name"`
 	Fingerprint    string          `json:"fingerprint"`

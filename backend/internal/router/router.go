@@ -9,16 +9,17 @@ import (
 )
 
 type Dependencies struct {
-	AuthController          *controller.AuthController
-	SystemController        *controller.SystemController
-	CatalogController       *controller.CatalogController
-	AutomationController    *controller.AutomationController
-	ExecutorController      *controller.ExecutorController
-	TestCaseController      *controller.TestCaseController
-	ExecutionController     *controller.ExecutionController
-	NotificationController  *controller.NotificationController
-	APIAutomationController *controller.APIAutomationController
-	AuthMiddleware          gin.HandlerFunc
+	AuthController           *controller.AuthController
+	SystemController         *controller.SystemController
+	CatalogController        *controller.CatalogController
+	AutomationController     *controller.AutomationController
+	ExecutorController       *controller.ExecutorController
+	TestCaseController       *controller.TestCaseController
+	ExecutionController      *controller.ExecutionController
+	ElementCaptureController *controller.ElementCaptureController
+	NotificationController   *controller.NotificationController
+	APIAutomationController  *controller.APIAutomationController
+	AuthMiddleware           gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -29,6 +30,11 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	})
 	api.POST("/executors/register", deps.ExecutorController.Register)
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
+	executorCapture := api.Group("/executor/element-capture")
+	executorCapture.POST("/:id/heartbeat", deps.ElementCaptureController.Heartbeat)
+	executorCapture.POST("/:id/candidates", deps.ElementCaptureController.AddCandidate)
+	executorCapture.POST("/:id/fail", deps.ElementCaptureController.FailSession)
+	executorCapture.GET("/commands", deps.ElementCaptureController.ListCommands)
 	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
 	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
 	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
@@ -178,6 +184,16 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)
 	authed.DELETE("/ui/page-elements/:id", deps.AutomationController.DeletePageElement)
+	capture := authed.Group("/ui/page-elements")
+	capture.POST("/capture-sessions", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.CreateSession)
+	capture.GET("/capture-sessions/:id", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.GetSession)
+	capture.PATCH("/capture-sessions/:id/mode", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SetMode)
+	capture.POST("/capture-sessions/:id/stop", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.StopSession)
+	capture.GET("/capture-sessions/:id/candidates", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
+	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
+	capture.POST("/capture-sessions/:id/save", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
+	capture.GET("/:id/versions", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListVersions)
+	capture.POST("/:id/versions/:version/rollback", controller.RequirePermission("ui.element.rollback"), deps.ElementCaptureController.RollbackVersion)
 }
 
 func registerUIAssetRoutes(authed *gin.RouterGroup, path string, assetType string, deps Dependencies) {
