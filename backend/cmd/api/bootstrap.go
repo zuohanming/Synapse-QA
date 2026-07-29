@@ -365,7 +365,6 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table page_elements add column if not exists last_verified_at timestamptz`,
 		`alter table page_elements add column if not exists verification_status text not null default ''`,
 		`alter table page_elements add column if not exists current_version int not null default 1`,
-		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status = 'active'`,
 		`create index if not exists idx_element_capture_sessions_expires_at on element_capture_sessions(expires_at)`,
 		`create index if not exists idx_element_capture_candidates_expires_at on element_capture_candidates(expires_at)`,
 		`alter table projects add column if not exists status text not null default 'active'`,
@@ -636,12 +635,30 @@ func (a *app) migrate(ctx context.Context) error {
 			unique(debug_run_id, assertion_index)
 		)`,
 	}
+	statements = append(statements, elementCaptureMigrationStatements()...)
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func elementCaptureMigrationStatements() []string {
+	return []string{
+		`alter table element_capture_sessions add column if not exists token_hash text not null default ''`,
+		`alter table element_capture_sessions add column if not exists browser_channel text not null default ''`,
+		`alter table element_capture_sessions add column if not exists last_heartbeat_at timestamptz not null default now()`,
+		`alter table element_capture_sessions add column if not exists interrupted_at timestamptz`,
+		`alter table element_capture_sessions add column if not exists recovery_expires_at timestamptz`,
+		`alter table element_capture_candidates add column if not exists name text not null default ''`,
+		`alter table element_capture_candidates add column if not exists capture_url text not null default ''`,
+		`alter table element_capture_candidates add column if not exists duplicate_element_id bigint references page_elements(id)`,
+		`alter table element_capture_candidates add column if not exists conflict_status text not null default ''`,
+		`alter table element_capture_candidates add column if not exists conflict_resolution text not null default ''`,
+		`drop index if exists uq_element_capture_sessions_active_executor`,
+		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,
+	}
 }
 
 // seed 保证本地开发环境具备默认账号和基础数据。

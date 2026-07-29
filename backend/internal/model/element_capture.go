@@ -6,28 +6,38 @@ import (
 )
 
 type ElementCaptureSession struct {
-	ID               string    `json:"id"`
-	PageID           int64     `json:"pageId"`
-	ExecutorID       string    `json:"executorId"`
-	BrowserContextID string    `json:"browserContextId"`
-	CreatedBy        string    `json:"createdBy"`
-	Status           string    `json:"status"`
-	Mode             string    `json:"mode"`
-	CurrentURL       string    `json:"currentUrl"`
-	CandidateCount   int       `json:"candidateCount"`
-	ExpiresAt        time.Time `json:"expiresAt"`
+	ID                string     `json:"id"`
+	PageID            int64      `json:"pageId"`
+	ExecutorID        string     `json:"executorId"`
+	BrowserContextID  string     `json:"browserContextId"`
+	BrowserChannel    string     `json:"browserChannel"`
+	CreatedBy         string     `json:"createdBy"`
+	Status            string     `json:"status"`
+	Mode              string     `json:"mode"`
+	CurrentURL        string     `json:"currentUrl"`
+	TokenHash         string     `json:"-"`
+	CandidateCount    int        `json:"candidateCount"`
+	LastHeartbeatAt   time.Time  `json:"lastHeartbeatAt"`
+	InterruptedAt     *time.Time `json:"interruptedAt"`
+	RecoveryExpiresAt *time.Time `json:"recoveryExpiresAt"`
+	ExpiresAt         time.Time  `json:"expiresAt"`
 }
 
 type ElementCaptureCandidate struct {
-	ID             string          `json:"id"`
-	SessionID      string          `json:"sessionId"`
-	Fingerprint    string          `json:"fingerprint"`
-	TagName        string          `json:"tagName"`
-	AccessibleName string          `json:"accessibleName"`
-	Locators       json.RawMessage `json:"locators"`
-	QualityScore   float64         `json:"qualityScore"`
-	Status         string          `json:"status"`
-	ExpiresAt      time.Time       `json:"expiresAt"`
+	ID                 string          `json:"id"`
+	SessionID          string          `json:"sessionId"`
+	Name               string          `json:"name"`
+	Fingerprint        string          `json:"fingerprint"`
+	CaptureURL         string          `json:"captureUrl"`
+	TagName            string          `json:"tagName"`
+	AccessibleName     string          `json:"accessibleName"`
+	Locators           json.RawMessage `json:"locators"`
+	QualityScore       float64         `json:"qualityScore"`
+	DuplicateElementID int64           `json:"duplicateElementId"`
+	ConflictStatus     string          `json:"conflictStatus"`
+	ConflictResolution string          `json:"conflictResolution"`
+	Status             string          `json:"status"`
+	ExpiresAt          time.Time       `json:"expiresAt"`
 }
 
 type PageElementVersion struct {
@@ -44,7 +54,9 @@ type CaptureSessionCreateRequest struct {
 	PageID           int64  `json:"pageId"`
 	ExecutorID       string `json:"executorId"`
 	BrowserContextID string `json:"browserContextId"`
+	BrowserChannel   string `json:"browserChannel"`
 	Mode             string `json:"mode"`
+	URL              string `json:"url"`
 	CurrentURL       string `json:"currentUrl"`
 }
 
