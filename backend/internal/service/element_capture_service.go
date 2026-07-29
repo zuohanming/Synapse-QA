@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"regexp"
 	"strings"
@@ -77,7 +78,9 @@ type CaptureCommandRepository interface {
 	SetModeWithCommand(ctx context.Context, actor, sessionID, mode string) (bool, error)
 	StopSessionWithCommand(ctx context.Context, actor, sessionID string) (bool, error)
 	ClaimCommands(ctx context.Context, executorID string, limit int) ([]model.ElementCaptureCommand, error)
-	AuthorizeCommandExecutor(ctx context.Context, executorID, token string) (bool, error)
+	AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error)
+	AckCommand(ctx context.Context, executorID string, commandID int64) (bool, error)
+	AckStartCommand(ctx context.Context, executorID, sessionID string) error
 }
 
 type PageAccessRepository interface {
@@ -92,13 +95,14 @@ type captureLocator struct {
 }
 
 type ElementCaptureService struct {
-	repo           ElementCaptureRepository
-	executorReader CaptureExecutorReader
-	now            func() time.Time
+	repo             ElementCaptureRepository
+	executorReader   CaptureExecutorReader
+	executorFallback string
+	now              func() time.Time
 }
 
-func NewElementCaptureService(repo ElementCaptureRepository, executorReader CaptureExecutorReader, _ []byte) *ElementCaptureService {
-	return &ElementCaptureService{repo: repo, executorReader: executorReader, now: time.Now}
+func NewElementCaptureService(repo ElementCaptureRepository, executorReader CaptureExecutorReader, executorFallback []byte) *ElementCaptureService {
+	return &ElementCaptureService{repo: repo, executorReader: executorReader, executorFallback: string(executorFallback), now: time.Now}
 }
 
 func captureError(kind error, message string) error { return model.NewDomainError(kind, message) }
@@ -141,10 +145,6 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 	if busy {
 		return model.CaptureSessionCreated{}, conflict("执行器正在采集页面元素")
 	}
-	token, err := newCaptureToken()
-	if err != nil {
-		return model.CaptureSessionCreated{}, errors.New("生成采集会话令牌失败")
-	}
 	now := s.now()
 	mode := req.Mode
 	if mode == "" {
@@ -157,7 +157,6 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 	if !isCaptureURL(currentURL) {
 		return model.CaptureSessionCreated{}, validation("页面地址必须是绝对 http/https URL")
 	}
-	tokenHash := sha256.Sum256([]byte(token))
 	session := model.ElementCaptureSession{
 		ID:               newCaptureID(),
 		PageID:           req.PageID,
@@ -168,11 +167,10 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 		Status:           CaptureStarting,
 		Mode:             mode,
 		CurrentURL:       currentURL,
-		TokenHash:        hex.EncodeToString(tokenHash[:]),
 		LastHeartbeatAt:  now,
 		ExpiresAt:        now.Add(30 * time.Minute),
 	}
-	command := model.ElementCaptureCommand{SessionID: session.ID, Type: "start", Mode: session.Mode, URL: session.CurrentURL, BrowserChannel: session.BrowserChannel, Token: token}
+	command := model.ElementCaptureCommand{SessionID: session.ID, Type: "start", Mode: session.Mode, URL: session.CurrentURL, BrowserChannel: session.BrowserChannel}
 	if commandRepo, ok := s.repo.(CaptureCommandRepository); ok {
 		err = commandRepo.CreateSessionWithStartCommand(ctx, actor, session, command)
 	} else {
@@ -185,7 +183,7 @@ func (s *ElementCaptureService) CreateSession(ctx context.Context, actor string,
 		}
 		return model.CaptureSessionCreated{}, err
 	}
-	return model.CaptureSessionCreated{Session: session, Token: token}, nil
+	return model.CaptureSessionCreated{Session: session}, nil
 }
 
 func (s *ElementCaptureService) pageAccessible(ctx context.Context, pageID int64, actor string) (bool, error) {
@@ -193,14 +191,6 @@ func (s *ElementCaptureService) pageAccessible(ctx context.Context, pageID int64
 		return repo.PageAccessible(ctx, pageID, actor)
 	}
 	return s.repo.PageExists(ctx, pageID)
-}
-
-func newCaptureToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
 func newCaptureID() string {
@@ -265,13 +255,36 @@ func (s *ElementCaptureService) Heartbeat(ctx context.Context, sessionID, execut
 		return err
 	}
 	if !updated {
-		return unauthorized("执行器或会话令牌无效")
+		return conflict("采集会话状态或浏览器上下文冲突")
+	}
+	if repo, ok := s.repo.(CaptureCommandRepository); ok {
+		if err := repo.AckStartCommand(ctx, executorID, sessionID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *ElementCaptureService) ExpireSessions(ctx context.Context, now time.Time) error {
 	return s.repo.ExpireSessions(ctx, now)
+}
+
+// StartScheduler 定时清理过期会话和命令，不能依赖执行器轮询触发。
+func (s *ElementCaptureService) StartScheduler(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			if err := s.ExpireSessions(ctx, s.now()); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("清理采集会话失败：%v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
 func (s *ElementCaptureService) FailSession(ctx context.Context, sessionID, executorID, token, reason string) error {
@@ -317,7 +330,7 @@ func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, _ 
 	if !ok {
 		return nil, errors.New("采集命令仓储未配置")
 	}
-	allowed, err := repo.AuthorizeCommandExecutor(ctx, executorID, token)
+	allowed, err := repo.AuthorizeCommandExecutor(ctx, executorID, token, s.executorFallback)
 	if err != nil {
 		return nil, err
 	}
@@ -325,6 +338,28 @@ func (s *ElementCaptureService) ListCommands(ctx context.Context, executorID, _ 
 		return nil, unauthorized("执行器长期令牌无效")
 	}
 	return repo.ClaimCommands(ctx, executorID, 50)
+}
+
+func (s *ElementCaptureService) AckCommand(ctx context.Context, executorID, token string, commandID int64) error {
+	repo, ok := s.repo.(CaptureCommandRepository)
+	if !ok {
+		return errors.New("采集命令仓储未配置")
+	}
+	allowed, err := repo.AuthorizeCommandExecutor(ctx, executorID, token, s.executorFallback)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return unauthorized("执行器长期令牌无效")
+	}
+	acked, err := repo.AckCommand(ctx, executorID, commandID)
+	if err != nil {
+		return err
+	}
+	if !acked {
+		return notFound("采集命令不存在")
+	}
+	return nil
 }
 
 func (s *ElementCaptureService) ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error) {

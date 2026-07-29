@@ -686,6 +686,10 @@ func elementCaptureMigrationStatements() []string {
 			claimed_at timestamptz,
 			created_at timestamptz not null default now()
 		)`,
+		`alter table element_capture_commands add column if not exists lease_until timestamptz`,
+		`alter table element_capture_commands add column if not exists attempts int not null default 0`,
+		`alter table element_capture_commands add column if not exists acked_at timestamptz`,
+		`update element_capture_commands set status='queued' where status='pending'`,
 		`create index if not exists idx_element_capture_commands_pending on element_capture_commands(executor_id, id) where status='pending'`,
 		`create index if not exists idx_element_capture_commands_retention on element_capture_commands(status, created_at)`,
 	}

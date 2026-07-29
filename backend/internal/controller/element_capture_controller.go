@@ -27,6 +27,7 @@ type elementCaptureService interface {
 	AuthorizeExecutor(context.Context, string, string, string) error
 	FailSession(context.Context, string, string, string, string) error
 	ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error)
+	AckCommand(context.Context, string, string, int64) error
 	ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error)
 	RollbackVersion(context.Context, string, int64, int) (model.PageElementVersion, error)
 }
@@ -298,6 +299,23 @@ func (ctl *ElementCaptureController) ListCommands(c *gin.Context) {
 		return
 	}
 	ok(c, items)
+}
+
+func (ctl *ElementCaptureController) AckCommand(c *gin.Context) {
+	executorID, token, authorized := executorLongCredentials(c)
+	if !authorized {
+		return
+	}
+	commandID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || commandID <= 0 {
+		fail(c, http.StatusBadRequest, "命令 ID 无效")
+		return
+	}
+	if err = ctl.service.AckCommand(c.Request.Context(), executorID, token, commandID); err != nil {
+		failExecutorCaptureError(c, err)
+		return
+	}
+	ok(c, gin.H{"message": "采集命令已确认"})
 }
 
 func queryInt64(c *gin.Context, key string, fallback int64) (int64, error) {

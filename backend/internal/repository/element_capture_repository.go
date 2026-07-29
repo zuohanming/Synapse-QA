@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,7 +32,7 @@ func NewElementCaptureRepository(db *sql.DB) *ElementCaptureRepository {
 func (r *ElementCaptureRepository) PageExists(ctx context.Context, pageID int64) (bool, error) {
 	var exists bool
 	err := r.db.QueryRowContext(ctx, `
-		select exists(select 1 from ui_assets where id = $1 and asset_type = 'page' and deleted_at is null)
+		select exists(select 1 from ui_assets where id = $1 and asset_type in ('page','page_element') and deleted_at is null)
 	`, pageID).Scan(&exists)
 	return exists, err
 }
@@ -39,7 +41,7 @@ func (r *ElementCaptureRepository) PageExists(ctx context.Context, pageID int64)
 func (r *ElementCaptureRepository) PageAccessible(ctx context.Context, pageID int64, actor string) (bool, error) {
 	var allowed bool
 	err := r.db.QueryRowContext(ctx, `
-		select exists(select 1 from ui_assets p where p.id=$1 and p.asset_type='page' and p.deleted_at is null and (
+		select exists(select 1 from ui_assets p where p.id=$1 and p.asset_type in ('page','page_element') and p.deleted_at is null and (
 			p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')
 		))
 	`, pageID, actor).Scan(&allowed)
@@ -72,7 +74,7 @@ func (r *ElementCaptureRepository) CreateSessionWithStartCommand(ctx context.Con
 	}
 	defer func() { _ = tx.Rollback() }()
 	var lockedPageID int64
-	if err = tx.QueryRowContext(ctx, `select p.id from ui_assets p where p.id=$1 and p.asset_type='page' and p.deleted_at is null and (p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')) for update`, session.PageID, actor).Scan(&lockedPageID); errors.Is(err, sql.ErrNoRows) {
+	if err = tx.QueryRowContext(ctx, `select p.id from ui_assets p where p.id=$1 and p.asset_type in ('page','page_element') and p.deleted_at is null and (p.created_by=$2 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$2 and u.deleted_at is null and ro.code='admin')) for update`, session.PageID, actor).Scan(&lockedPageID); errors.Is(err, sql.ErrNoRows) {
 		return model.NewDomainError(model.ErrNotFound, "页面不存在")
 	}
 	if err != nil {
@@ -88,11 +90,18 @@ func (r *ElementCaptureRepository) CreateSessionWithStartCommand(ctx context.Con
 }
 
 func insertCaptureCommand(ctx context.Context, tx *sql.Tx, command model.ElementCaptureCommand, executorID string, expiresAt time.Time) error {
-	payload, err := json.Marshal(command)
+	// 命令持久化载荷不含会话明文令牌；令牌仅在领取 start 租约时临时生成。
+	payload, err := json.Marshal(struct {
+		SessionID      string `json:"sessionId"`
+		Type           string `json:"type"`
+		Mode           string `json:"mode,omitempty"`
+		URL            string `json:"url,omitempty"`
+		BrowserChannel string `json:"browserChannel,omitempty"`
+	}{command.SessionID, command.Type, command.Mode, command.URL, command.BrowserChannel})
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,payload,status,expires_at) values($1,$2,$3,$4,'pending',$5)`, command.SessionID, executorID, command.Type, payload, expiresAt)
+	_, err = tx.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,payload,status,expires_at) values($1,$2,$3,$4,'queued',$5)`, command.SessionID, executorID, command.Type, payload, expiresAt)
 	return err
 }
 
@@ -157,9 +166,9 @@ func (r *ElementCaptureRepository) captureSessionAccessError(ctx context.Context
 	return model.NewDomainError(model.ErrNotFound, "采集会话不存在")
 }
 
-func (r *ElementCaptureRepository) AuthorizeCommandExecutor(ctx context.Context, executorID, token string) (bool, error) {
+func (r *ElementCaptureRepository) AuthorizeCommandExecutor(ctx context.Context, executorID, token, fallback string) (bool, error) {
 	var allowed bool
-	err := r.db.QueryRowContext(ctx, `select exists(select 1 from executors e where e.executor_id=$1 and (e.executor_token=$2 or (e.executor_token='' and exists(select 1 from platform_settings where key='executor_shared_token' and value=$2))))`, executorID, token).Scan(&allowed)
+	err := r.db.QueryRowContext(ctx, `select exists(select 1 from executors e where e.executor_id=$1 and (e.executor_token=$2 or (e.executor_token='' and coalesce((select value from platform_settings where key='executor_shared_token'),'')=case when coalesce((select value from platform_settings where key='executor_shared_token'),'')='' then $3 else $2 end)))`, executorID, token, fallback).Scan(&allowed)
 	return allowed, err
 }
 
@@ -169,13 +178,13 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `update element_capture_commands set status='expired' where status='pending' and expires_at <= now()`); err != nil {
+	if _, err = tx.ExecContext(ctx, `update element_capture_commands set status='expired' where status in ('queued','leased') and (expires_at <= now() or created_at < now()-interval '24 hours' or (attempts >= 5 and lease_until <= now()))`); err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `delete from element_capture_commands where status in ('claimed','expired') and created_at < now()-interval '24 hours'`); err != nil {
+	if _, err = tx.ExecContext(ctx, `delete from element_capture_commands where status in ('acked','expired') and created_at < now()-interval '24 hours'`); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `with picked as (select id from element_capture_commands where executor_id=$1 and status='pending' and expires_at>now() order by id for update skip locked limit $2) update element_capture_commands c set status='claimed',claimed_at=now() from picked where c.id=picked.id returning c.id,c.session_id,c.command_type,c.payload`, executorID, limit)
+	rows, err := tx.QueryContext(ctx, `with picked as (select id from element_capture_commands where executor_id=$1 and (status='queued' or (status='leased' and lease_until <= now())) and expires_at>now() and attempts<5 order by id for update skip locked limit $2) update element_capture_commands c set status='leased',claimed_at=now(),lease_until=now()+interval '2 minutes',attempts=attempts+1 from picked where c.id=picked.id returning c.id,c.session_id,c.command_type,c.payload`, executorID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +199,16 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 		if err = json.Unmarshal(payload, &item); err != nil {
 			return nil, err
 		}
+		if item.Type == "start" {
+			item.Token, err = newLeasedCaptureToken()
+			if err != nil {
+				return nil, err
+			}
+			hash := sha256.Sum256([]byte(item.Token))
+			if _, err = tx.ExecContext(ctx, `update element_capture_sessions set token_hash=$1,updated_at=now() where id=$2 and executor_id=$3`, hex.EncodeToString(hash[:]), item.SessionID, executorID); err != nil {
+				return nil, err
+			}
+		}
 		items = append(items, item)
 	}
 	if err = rows.Err(); err != nil {
@@ -199,6 +218,28 @@ func (r *ElementCaptureRepository) ClaimCommands(ctx context.Context, executorID
 		return nil, err
 	}
 	return items, nil
+}
+
+func newLeasedCaptureToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func (r *ElementCaptureRepository) AckCommand(ctx context.Context, executorID string, commandID int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null where id=$1 and executor_id=$2 and status='leased'`, commandID, executorID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (r *ElementCaptureRepository) AckStartCommand(ctx context.Context, executorID, sessionID string) error {
+	_, err := r.db.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null where session_id=$1 and executor_id=$2 and command_type='start' and status='leased'`, sessionID, executorID)
+	return err
 }
 
 func (r *ElementCaptureRepository) GetSession(ctx context.Context, userID int64, sessionID string) (model.ElementCaptureSessionDetail, error) {
@@ -374,6 +415,16 @@ func (r *ElementCaptureRepository) AuthorizeExecutor(ctx context.Context, sessio
 	err := r.db.QueryRowContext(ctx, `
 		select exists(select 1 from element_capture_sessions where id=$1 and executor_id=$2 and token_hash=$3)
 	`, sessionID, executorID, tokenHash).Scan(&allowed)
+	if err != nil || allowed {
+		return allowed, err
+	}
+	var exists bool
+	if err = r.db.QueryRowContext(ctx, `select exists(select 1 from element_capture_sessions where id=$1)`, sessionID).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, model.NewDomainError(model.ErrNotFound, "采集会话不存在")
+	}
 	return allowed, err
 }
 
@@ -628,7 +679,17 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows > 0, err
+	if err != nil || rows > 0 {
+		return rows > 0, err
+	}
+	var exists bool
+	if err = r.db.QueryRowContext(ctx, `select exists(select 1 from element_capture_candidates c join element_capture_sessions s on s.id=c.session_id where c.cursor_id=$1 and c.session_id=$2 and (s.created_by=$3 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$3 and u.deleted_at is null and ro.code='admin')))`, candidateID, sessionID, actor).Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists {
+		return false, model.NewDomainError(model.ErrConflict, "候选项当前状态不可编辑")
+	}
+	return false, nil
 }
 
 func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, actor, sessionID string, _ []int64) (model.CaptureBatchData, error) {

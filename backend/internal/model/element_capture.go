@@ -71,7 +71,7 @@ type ElementCaptureCommand struct {
 	Mode           string `json:"mode,omitempty"`
 	URL            string `json:"url,omitempty"`
 	BrowserChannel string `json:"browserChannel,omitempty"`
-	// Token 仅随 start 命令投递一次，供执行器后续心跳和候选项回调使用。
+	// Token 仅在领取 start 命令的响应 DTO 中出现，绝不持久化。
 	Token string `json:"token,omitempty"`
 }
 

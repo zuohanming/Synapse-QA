@@ -25,6 +25,7 @@ type captureControllerServiceStub struct {
 	candidates   []model.ElementCaptureCandidate
 	rollbackID   int64
 	rollbackVer  int
+	ackID        int64
 }
 
 func (s *captureControllerServiceStub) CreateSession(context.Context, string, model.CaptureSessionCreateRequest) (model.CaptureSessionCreated, error) {
@@ -64,6 +65,10 @@ func (s *captureControllerServiceStub) FailSession(context.Context, string, stri
 func (s *captureControllerServiceStub) ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error) {
 	return nil, nil
 }
+func (s *captureControllerServiceStub) AckCommand(_ context.Context, _, _ string, id int64) error {
+	s.ackID = id
+	return nil
+}
 func (s *captureControllerServiceStub) ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error) {
 	return nil, nil
 }
@@ -83,6 +88,7 @@ func captureTestRouter(claims model.Claims, stub *captureControllerServiceStub) 
 	platform.POST("/:id/versions/:version/rollback", RequirePermission("ui.element.rollback"), controller.RollbackVersion)
 	executor := engine.Group("/api/executor/element-capture")
 	executor.POST("/:id/heartbeat", controller.Heartbeat)
+	executor.POST("/commands/:id/ack", controller.AckCommand)
 	return engine
 }
 
@@ -161,6 +167,24 @@ func TestElementCaptureExecutorRejectsInvalidTokenBeforeParsingPayload(t *testin
 	response := performCaptureJSON(router, http.MethodPost, "/api/executor/element-capture/session-1/heartbeat", "{")
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestElementCaptureCommandAckRequiresLongTokenAndAcknowledgesOwnCommand(t *testing.T) {
+	stub := &captureControllerServiceStub{}
+	router := captureTestRouter(model.Claims{}, stub)
+	request := httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/7/ack?executorId=exec-1", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token status=%d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/7/ack?executorId=exec-1", nil)
+	request.Header.Set("X-Executor-Token", "long-token")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || stub.ackID != 7 {
+		t.Fatalf("status=%d ack=%d", response.Code, stub.ackID)
 	}
 }
 

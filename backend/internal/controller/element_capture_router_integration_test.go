@@ -52,6 +52,7 @@ func (routerCaptureService) FailSession(context.Context, string, string, string,
 func (routerCaptureService) ListCommands(context.Context, string, string, string) ([]model.ElementCaptureCommand, error) {
 	return nil, nil
 }
+func (routerCaptureService) AckCommand(context.Context, string, string, int64) error { return nil }
 func (routerCaptureService) ListVersions(context.Context, int64, int64) ([]model.PageElementVersion, error) {
 	return nil, nil
 }
@@ -80,7 +81,7 @@ func TestElementCaptureProductionRouterRegistersAllRoutesAndEnforcesBoundaries(t
 		wanted[route.Method+" "+route.Path] = true
 	}
 	for _, route := range []string{
-		"POST /api/ui/page-elements/capture-sessions", "GET /api/ui/page-elements/capture-sessions/:id", "PATCH /api/ui/page-elements/capture-sessions/:id/mode", "POST /api/ui/page-elements/capture-sessions/:id/stop", "GET /api/ui/page-elements/capture-sessions/:id/candidates", "PATCH /api/ui/page-elements/capture-sessions/:id/candidates/:candidateId", "POST /api/ui/page-elements/capture-sessions/:id/save", "GET /api/ui/page-elements/:id/versions", "POST /api/ui/page-elements/:id/versions/:version/rollback", "POST /api/executor/element-capture/:id/heartbeat", "POST /api/executor/element-capture/:id/candidates", "POST /api/executor/element-capture/:id/fail", "GET /api/executor/element-capture/commands",
+		"POST /api/ui/page-elements/capture-sessions", "GET /api/ui/page-elements/capture-sessions/:id", "PATCH /api/ui/page-elements/capture-sessions/:id/mode", "POST /api/ui/page-elements/capture-sessions/:id/stop", "GET /api/ui/page-elements/capture-sessions/:id/candidates", "PATCH /api/ui/page-elements/capture-sessions/:id/candidates/:candidateId", "POST /api/ui/page-elements/capture-sessions/:id/save", "GET /api/ui/page-elements/:id/versions", "POST /api/ui/page-elements/:id/versions/:version/rollback", "POST /api/executor/element-capture/:id/heartbeat", "POST /api/executor/element-capture/:id/candidates", "POST /api/executor/element-capture/:id/fail", "GET /api/executor/element-capture/commands", "POST /api/executor/element-capture/commands/:id/ack",
 	} {
 		if !wanted[route] {
 			t.Fatalf("missing production route %s", route)
@@ -144,5 +145,12 @@ func TestElementCaptureProductionRouterRegistersAllRoutesAndEnforcesBoundaries(t
 	engine.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("command read status=%d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/executor/element-capture/commands/1/ack?executorId=exec-1", nil)
+	request.Header.Set("X-Executor-Token", "long-token")
+	response = httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("command ack status=%d", response.Code)
 	}
 }

@@ -40,3 +40,9 @@
 - 命令轮询不再要求尚未领取 start 命令的执行器知晓会话令牌。它使用现有 `executors.executor_token`/共享令牌机制的 `X-Executor-Token` 和 executor ID；start payload 只投递一次会话令牌，心跳、候选和失败回调继续使用该令牌。
 - 页面资源的真实类型经 Bootstrap、UI 路由和创建调用核查为 `page`；`page_element` 仅代表元素列表资产，未被误作页面。创建会话先检查页面 owner/admin，创建事务内再锁定并复查，避免 TOCTOU。
 - 候选项路由在 AuthMiddleware 之前安装 no-store 中间件，因此 JWT 401 响应同样禁止缓存；候选容量、并发、名称唯一和终态失败均映射为类型化领域错误。
+
+## Fix round 3：无密令牌租约交付
+
+- `element_capture_commands.payload` 只保存非敏感命令字段。领取 start 租约时才在同一事务内生成一次性会话令牌、写入其 hash 并将明文仅放入响应 DTO；重领会轮换 hash，旧令牌立即失效。
+- 命令迁移增加 `lease_until`、`attempts` 和 `acked_at`；领取将命令置为短暂 leased，ACK 将其置为 acked，未确认的 stop/expire 会在租约到期后重投。后台调度器定时调用过期清理，不依赖轮询请求。
+- 新增 `POST /api/executor/element-capture/commands/:id/ack`，使用现有执行器长期令牌和 executor ID，按命令归属原子确认。页面 owner/admin 校验兼容 `page` 与历史 `page_element` 两种页面资产。

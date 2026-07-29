@@ -274,10 +274,15 @@ func (f *fakeCaptureRepo) StopSessionWithCommand(ctx context.Context, actor, ses
 	return updated, err
 }
 
-func (f *fakeCaptureRepo) AuthorizeCommandExecutor(_ context.Context, executorID, token string) (bool, error) {
+func (f *fakeCaptureRepo) AuthorizeCommandExecutor(_ context.Context, executorID, token, _ string) (bool, error) {
 	f.authorizedExec = executorID
 	return f.authorized && token == "long-token", nil
 }
+
+func (f *fakeCaptureRepo) AckCommand(_ context.Context, _ string, _ int64) (bool, error) {
+	return true, nil
+}
+func (f *fakeCaptureRepo) AckStartCommand(_ context.Context, _ string, _ string) error { return nil }
 
 func (f *fakeCaptureRepo) ClaimCommands(_ context.Context, executorID string, _ int) ([]model.ElementCaptureCommand, error) {
 	if executorID != "exec-1" {
@@ -346,7 +351,7 @@ func TestElementCaptureCreateSessionRejectsMissingPage(t *testing.T) {
 	}
 }
 
-func TestElementCaptureCreateSessionReturnsOneTimeTokenAndPersistsOnlyHash(t *testing.T) {
+func TestElementCaptureCreateSessionDefersOneTimeTokenUntilCommandLease(t *testing.T) {
 	repo := &fakeCaptureRepo{pageExists: true}
 	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
 	service.now = func() time.Time { return time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC) }
@@ -357,12 +362,8 @@ func TestElementCaptureCreateSessionReturnsOneTimeTokenAndPersistsOnlyHash(t *te
 	if err != nil {
 		t.Fatalf("CreateSession returned error: %v", err)
 	}
-	if len(created.Token) < 43 {
-		t.Fatalf("token is too short: %q", created.Token)
-	}
-	hash := sha256.Sum256([]byte(created.Token))
-	if repo.created.TokenHash != hex.EncodeToString(hash[:]) {
-		t.Fatalf("persisted token hash does not match returned token")
+	if created.Token != "" || repo.created.TokenHash != "" || repo.commands[0].Token != "" {
+		t.Fatalf("start token must not exist before command lease: created=%q hash=%q command=%+v", created.Token, repo.created.TokenHash, repo.commands[0])
 	}
 	if repo.created.Status != CaptureStarting || repo.created.Mode != "pick" || repo.created.ExpiresAt.Sub(service.now()) != 30*time.Minute {
 		t.Fatalf("unexpected persisted session: %+v", repo.created)
@@ -433,7 +434,7 @@ func TestElementCaptureHeartbeatRejectsWrongExecutorOrToken(t *testing.T) {
 	service := NewElementCaptureService(&fakeCaptureRepo{}, fakeExecutorReader{online: true}, []byte("secret"))
 
 	err := service.Heartbeat(context.Background(), "session-1", "wrong-executor", "wrong-token", "context-1", "https://example.test")
-	if !errors.Is(err, model.ErrUnauthorized) {
+	if !errors.Is(err, model.ErrConflict) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

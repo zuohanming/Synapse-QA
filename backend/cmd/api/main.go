@@ -57,13 +57,14 @@ func main() {
 	executorService := service.NewExecutorService(executorRepo, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token"))
 	testCaseService := service.NewTestCaseService(testCaseRepo, systemRepo)
 	executionService := service.NewExecutionService(executionRepo, executorRepo, testCaseRepo, systemRepo, env("EXECUTION_CALLBACK_BASE", "http://127.0.0.1:8080"))
-	elementCaptureService := service.NewElementCaptureService(elementCaptureRepo, executorRepo, bootstrapApp.jwtSecret)
+	elementCaptureService := service.NewElementCaptureService(elementCaptureRepo, executorRepo, []byte(env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token")))
 	notificationService := service.NewNotificationService(notificationRepo)
 	apiAutomationService := service.NewAPIAutomationService(apiAutomationRepo, systemRepo, bootstrapApp.jwtSecret)
 	apiAutomationService.ConfigureDebug(executorRepo, env("EXECUTOR_CALLBACK_BASE", "http://127.0.0.1:8080"))
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(context.Background())
+	elementCaptureService.StartScheduler(context.Background())
 
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
@@ -90,7 +91,7 @@ func main() {
 func ginCORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, If-Match, X-Request-ID")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, If-Match, X-Request-ID, X-Executor-ID, X-Executor-Token")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

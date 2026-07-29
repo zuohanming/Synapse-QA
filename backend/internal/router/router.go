@@ -35,6 +35,7 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	executorCapture.POST("/:id/candidates", deps.ElementCaptureController.AddCandidate)
 	executorCapture.POST("/:id/fail", deps.ElementCaptureController.FailSession)
 	executorCapture.GET("/commands", deps.ElementCaptureController.ListCommands)
+	executorCapture.POST("/commands/:id/ack", deps.ElementCaptureController.AckCommand)
 	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
 	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
 	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
