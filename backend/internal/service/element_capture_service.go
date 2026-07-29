@@ -353,6 +353,7 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		byID[candidate.CursorID] = candidate
 	}
 	seenIDs, names := map[int64]bool{}, map[string]bool{}
+	updateTargets := map[int64]bool{}
 	for _, item := range req.Items {
 		candidate, ok := byID[item.CandidateID]
 		if !ok || seenIDs[item.CandidateID] {
@@ -366,8 +367,24 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		if item.Resolution == "ignore" {
 			continue
 		}
-		if candidate.DuplicateElementID != 0 && candidate.DuplicateElementPageID != 0 && candidate.DuplicateElementPageID != data.Session.PageID {
+		if candidate.DuplicateElementID != 0 && candidate.DuplicateElementPageID != data.Session.PageID {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "重复元素不属于会话页面"})
+		}
+		if item.Resolution == "update" {
+			if updateTargets[candidate.DuplicateElementID] {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "同一批次不能重复更新同一元素"})
+			}
+			updateTargets[candidate.DuplicateElementID] = true
+		}
+		if currentID, duplicate := data.ExistingFingerprints[candidate.Fingerprint]; duplicate {
+			if item.Resolution == "create" {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "resolution", Message: "当前指纹已存在元素，不能新建"})
+			}
+			if item.Resolution == "update" && candidate.DuplicateElementID != currentID {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "更新目标不是当前重复元素"})
+			}
+		} else if item.Resolution == "update" {
+			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前不存在可更新的重复元素"})
 		}
 		issues = append(issues, validateCandidateForSave(candidate, item)...)
 		name := strings.ToLower(strings.TrimSpace(candidate.Name))

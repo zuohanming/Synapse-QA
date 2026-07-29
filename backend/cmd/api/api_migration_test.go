@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestElementCaptureMigrationDefinesActiveElementUniqueness(t *testing.T) {
+	statements := elementCaptureMigrationStatements()
+	joined := strings.Join(statements, "\n")
+	for _, want := range []string{
+		"duplicate active page element names",
+		"duplicate active page element fingerprints",
+		"uq_page_elements_active_name",
+		"uq_page_elements_active_fingerprint",
+		"uq_element_capture_candidates_cursor_id",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing element capture migration invariant: %s", want)
+		}
+	}
+}
+
 func TestPermissionSeedsContainElementCapturePermissions(t *testing.T) {
 	seedCodes := permissionSeedCodes()
 	for _, want := range []string{

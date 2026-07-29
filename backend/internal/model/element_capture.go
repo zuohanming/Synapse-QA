@@ -114,7 +114,8 @@ type BatchSaveResult struct {
 }
 
 type CaptureBatchData struct {
-	Session       ElementCaptureSession
-	Candidates    []ElementCaptureCandidate
-	ExistingNames map[string][]int64
+	Session              ElementCaptureSession
+	Candidates           []ElementCaptureCandidate
+	ExistingNames        map[string][]int64
+	ExistingFingerprints map[string]int64
 }
