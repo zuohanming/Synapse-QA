@@ -48,7 +48,8 @@ func TestElementCaptureRepositoryHeartbeatAndAckStartStateMachine(t *testing.T) 
 		{name: "expired command", status: "expired", receipt: validReceipt, commandRow: true, wantErr: model.ErrConflict},
 		{name: "missing command", receipt: validReceipt, wantErr: model.ErrConflict},
 		{name: "acked follow-up without receipt", status: "acked", commandRow: true, wantOK: true},
-		{name: "acked follow-up rejects receipt", status: "acked", receipt: validReceipt, commandRow: true, wantErr: model.ErrConflict},
+		{name: "acked response-loss retry accepts same receipt", status: "acked", receipt: validReceipt, commandRow: true, wantOK: true},
+		{name: "acked retry rejects different receipt", status: "acked", receipt: invalidReceipt, commandRow: true, wantErr: model.ErrConflict},
 		{name: "database error rolls back", dbErr: errors.New("command read failed"), wantErr: errors.New("command read failed")},
 	}
 
@@ -74,7 +75,8 @@ func TestElementCaptureRepositoryHeartbeatAndAckStartStateMachine(t *testing.T) 
 			}
 
 			shouldUpdateSession := tt.dbErr == nil && tt.commandRow &&
-				((tt.status == "leased" && tt.receipt == validReceipt) || (tt.status == "acked" && tt.receipt == ""))
+				((tt.status == "leased" && tt.receipt == validReceipt) ||
+					(tt.status == "acked" && (tt.receipt == "" || tt.receipt == validReceipt)))
 			if shouldUpdateSession {
 				mock.ExpectQuery(`update element_capture_sessions set status='active'`).
 					WithArgs(sessionID, executorID, browserContext, currentURL, tokenHash).

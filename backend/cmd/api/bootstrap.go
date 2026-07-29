@@ -231,6 +231,7 @@ func (a *app) migrate(ctx context.Context) error {
 			id text primary key,
 			cursor_id bigserial,
 			session_id text not null references element_capture_sessions(id) on delete cascade,
+			client_capture_id text not null,
 			fingerprint text not null,
 			tag_name text not null default '',
 			accessible_name text not null default '',
@@ -654,6 +655,9 @@ func elementCaptureMigrationStatements() []string {
 		`alter table element_capture_sessions add column if not exists recovery_expires_at timestamptz`,
 		`alter table element_capture_candidates add column if not exists name text not null default ''`,
 		`alter table element_capture_candidates add column if not exists capture_url text not null default ''`,
+		`alter table element_capture_candidates add column if not exists client_capture_id text`,
+		`update element_capture_candidates set client_capture_id=id where client_capture_id is null or client_capture_id=''`,
+		`alter table element_capture_candidates alter column client_capture_id set not null`,
 		`alter table element_capture_candidates add column if not exists duplicate_element_id bigint references page_elements(id)`,
 		`alter table element_capture_candidates add column if not exists conflict_status text not null default ''`,
 		`alter table element_capture_candidates add column if not exists conflict_resolution text not null default ''`,
@@ -673,6 +677,7 @@ func elementCaptureMigrationStatements() []string {
 			end if;
 		end $$`,
 		`create unique index if not exists uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
+		`create unique index if not exists uq_element_capture_candidates_session_client_capture on element_capture_candidates(session_id,client_capture_id)`,
 		`drop index if exists uq_element_capture_sessions_active_executor`,
 		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,
 		`create table if not exists element_capture_commands (

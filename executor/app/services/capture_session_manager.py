@@ -1,23 +1,24 @@
 import asyncio
+import contextlib
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from uuid import uuid4
 
+from app.core.config import settings
 from app.models.capture import CaptureMode, CaptureStartCommand, CaptureState
-from app.services.element_picker import ElementPicker, LocalCapture, PickerSecurityError, scan_for_sensitive_data
+from app.services.capture_security import (
+    CaptureURLSecurityError,
+    contains_sensitive_data,
+    same_origin,
+    sanitize_public_url,
+    validate_network_target,
+)
+from app.services.element_picker import ElementPicker, LocalCapture, PickerSecurityError
 
 
 logger = logging.getLogger(__name__)
-
-_ALLOWED_CHANNELS = {"chrome", "msedge"}
-_SENSITIVE_QUERY_KEYS = {
-    "password", "passwd", "token", "access_token", "refresh_token", "api_key", "apikey",
-    "session", "cookie", "authorization", "secret", "client_secret",
-}
-
 
 class CaptureSessionConflict(ValueError):
     pass
@@ -46,7 +47,9 @@ class PendingCandidate:
 
     @property
     def payload(self) -> dict[str, object]:
-        return self.capture.candidate.platform_payload()
+        payload = self.capture.candidate.platform_payload()
+        payload["clientCaptureId"] = self.capture.capture_id
+        return payload
 
 
 @dataclass
@@ -96,10 +99,12 @@ class CaptureSessionManager:
         browser_factory: Any | None = None,
         picker: ElementPicker | None = None,
         state_callback: Callable[[bool, str], None] | None = None,
+        network_validator: Callable[..., str] = validate_network_target,
     ) -> None:
         self._browser_factory = browser_factory or PlaywrightBrowserFactory()
-        self._picker = picker or ElementPicker()
+        self._picker = picker or ElementPicker(rate_limit_per_second=settings.capture_rate_limit_per_second)
         self._state_callback = state_callback
+        self._network_validator = network_validator
         self._session: _ActiveSession | None = None
         self._lock = asyncio.Lock()
 
@@ -109,15 +114,14 @@ class CaptureSessionManager:
     async def start(self, command: CaptureStartCommand) -> CaptureState:
         if command.headless:
             raise ValueError("页面元素采集仅支持有头浏览器")
-        if command.browser_channel not in _ALLOWED_CHANNELS:
+        if command.browser_channel not in settings.capture_allowed_browser_channels:
             raise ValueError("浏览器通道仅允许 chrome 或 msedge")
-        _validate_navigation_url(command.url)
+        await self._validate_navigation_url(command.url)
         async with self._lock:
             if self._session:
                 if self._session.state.session_id == command.session_id:
-                    # start 租约重投会轮换一次性 token 和 receipt；浏览器资源保持幂等。
-                    self._session.token = command.token
-                    self._session.receipt = command.receipt
+                    if self._session.token != command.token or self._session.receipt != command.receipt:
+                        raise CaptureSessionConflict("重复 start 的令牌或回执不一致")
                     return self._session.state
                 raise CaptureSessionConflict("已有页面元素采集会话正在运行")
 
@@ -127,6 +131,7 @@ class CaptureSessionManager:
                 browser = lease.browser
                 context = await browser.new_context()
                 page = await context.new_page()
+                await context.route("**/*", self._request_guard(command.url, page))
                 browser_context_id = str(uuid4())
                 state = CaptureState(
                     sessionId=command.session_id,
@@ -139,7 +144,7 @@ class CaptureSessionManager:
                     token=command.token,
                     receipt=command.receipt,
                     navigation_url=command.url,
-                    current_url=_sanitize_current_url(command.url),
+                    current_url=sanitize_public_url(command.url),
                     lease=lease,
                     browser=browser,
                     context=context,
@@ -149,10 +154,10 @@ class CaptureSessionManager:
                 async def receive_pick(source: dict[str, Any], handle: Any, payload: dict[str, Any]) -> None:
                     await self._handle_pick(command.session_id, source, handle, payload)
 
-                await self._picker.install(context, page, receive_pick)
                 await page.goto(command.url, wait_until="domcontentloaded")
+                await self._picker.install(context, page, receive_pick, command.url)
                 title = _safe_page_title(await page.title())
-                self._session.current_url = _sanitize_current_url(page.url)
+                self._session.current_url = sanitize_public_url(page.url)
                 self._session.state.page_title = title
                 self._notify_state(True, title)
                 return self._session.state
@@ -160,6 +165,8 @@ class CaptureSessionManager:
                 failed = self._session
                 self._session = None
                 if failed:
+                    failed.token = ""
+                    failed.receipt = ""
                     await self._cleanup_session(failed)
                 else:
                     await self._cleanup_resources(page, context, lease)
@@ -202,7 +209,7 @@ class CaptureSessionManager:
         if not session:
             return None
         try:
-            session.current_url = _sanitize_current_url(session.page.url)
+            session.current_url = sanitize_public_url(session.page.url)
         except (ValueError, AttributeError):
             pass
         return CaptureHeartbeatContext(
@@ -239,9 +246,7 @@ class CaptureSessionManager:
         state = self._session.state
         return {
             "active": True,
-            "sessionId": state.session_id,
             "mode": state.mode.value,
-            "pageTitle": state.page_title,
         }
 
     async def _handle_pick(
@@ -253,6 +258,8 @@ class CaptureSessionManager:
     ) -> None:
         session = self._session
         if not session or session.state.session_id != session_id:
+            return
+        if len(session.pending) >= settings.capture_pending_max:
             return
         try:
             capture = await self._picker.build_capture(source, handle, raw_payload, session.current_url)
@@ -270,34 +277,78 @@ class CaptureSessionManager:
         return self._session
 
     async def _cleanup_session(self, session: _ActiveSession) -> None:
-        for pending in tuple(session.pending.values()):
-            await self._picker.remove_capture(pending.capture)
-        session.pending.clear()
         session.token = ""
         session.receipt = ""
-        await self._cleanup_resources(session.page, session.context, session.lease)
-        await self._picker.close()
+        try:
+            for pending in tuple(session.pending.values()):
+                with contextlib.suppress(Exception):
+                    await self._picker.remove_capture(pending.capture)
+            session.pending.clear()
+        finally:
+            try:
+                await self._cleanup_resources(session.page, session.context, session.lease)
+            finally:
+                with contextlib.suppress(Exception):
+                    await self._picker.close()
 
     async def _cleanup_resources(self, page: Any, context: Any, lease: Any) -> None:
-        if page is not None:
+        try:
+            if page is not None:
+                with contextlib.suppress(Exception):
+                    await self._picker.dispose(page)
+        finally:
             try:
-                await self._picker.dispose(page)
-            except Exception:
-                pass
+                if page is not None:
+                    with contextlib.suppress(Exception):
+                        await page.close()
+            finally:
+                try:
+                    if context is not None:
+                        with contextlib.suppress(Exception):
+                            await context.close()
+                finally:
+                    if lease is not None:
+                        with contextlib.suppress(Exception):
+                            await lease.close()
+
+    async def _validate_navigation_url(self, value: str) -> None:
+        try:
+            parsed = urlsplit(value)
+            if parsed.username or parsed.password:
+                raise CaptureURLSecurityError("采集 URL 不允许携带 userinfo")
+            sanitize_public_url(value)
+            await asyncio.to_thread(
+                self._network_validator,
+                value,
+                allowed_origins=settings.capture_allowed_origins,
+                allowed_private_hosts=settings.capture_allowed_private_hosts,
+            )
+        except CaptureURLSecurityError as error:
+            raise ValueError(str(error)) from error
+
+    def _request_guard(self, navigation_url: str, page: Any):
+        async def guard(route: Any, request: Any) -> None:
             try:
-                await page.close()
-            except Exception:
-                pass
-        if context is not None:
-            try:
-                await context.close()
-            except Exception:
-                pass
-        if lease is not None:
-            try:
-                await lease.close()
-            except Exception:
-                pass
+                request_url = str(request.url)
+                allowed_origins = settings.capture_allowed_origins
+                is_main_navigation = bool(
+                    getattr(request, "is_navigation_request", False)
+                    and getattr(request, "frame", None) is getattr(page, "main_frame", None)
+                )
+                if is_main_navigation and not same_origin(request_url, navigation_url):
+                    raise CaptureURLSecurityError("顶层导航重定向到不同 origin")
+                await asyncio.to_thread(
+                    self._network_validator,
+                    request_url,
+                    allowed_origins=allowed_origins,
+                    allowed_private_hosts=settings.capture_allowed_private_hosts,
+                )
+            except CaptureURLSecurityError:
+                await route.abort("blockedbyclient")
+                return
+            await route.continue_()
+
+        return guard
 
     def _notify_state(self, active: bool, title: str) -> None:
         if not self._state_callback:
@@ -308,39 +359,8 @@ class CaptureSessionManager:
             logger.exception("采集 GUI 状态回调失败")
 
 
-def _validate_navigation_url(value: str) -> None:
-    if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
-        raise ValueError("采集 URL 无效")
-    try:
-        parsed = urlsplit(value)
-        parsed.port
-    except ValueError as error:
-        raise ValueError("采集 URL 无效") from error
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("采集 URL 必须是无凭据的 HTTP(S) 地址")
-
-
-def _sanitize_current_url(value: str) -> str:
-    _validate_navigation_url(value)
-    parsed = urlsplit(value)
-    host = parsed.hostname or ""
-    netloc = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    if parsed.port:
-        netloc = f"{netloc}:{parsed.port}"
-    query = [
-        (key, item)
-        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-        if _normalized_key(key) not in _SENSITIVE_QUERY_KEYS
-    ]
-    return urlunsplit((parsed.scheme, netloc, parsed.path or "/", urlencode(query, doseq=True), ""))
-
-
 def _safe_page_title(value: Any) -> str:
     title = " ".join(str(value or "").split())[:120]
-    if not title or scan_for_sensitive_data({"pageTitle": title}):
+    if not title or contains_sensitive_data({"pageTitle": title}):
         return "页面元素采集"
     return title
-
-
-def _normalized_key(value: str) -> str:
-    return re.sub(r"[-_.:/\\\s]+", "_", value.strip().lower())

@@ -101,23 +101,9 @@ class CaptureCandidate(BaseModel):
 
 
 def _is_sanitized_http_url(value: str) -> bool:
-    from urllib.parse import parse_qsl, urlsplit
-
-    if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
-        return False
     try:
-        parsed = urlsplit(value)
-        port = parsed.port
+        from app.services.capture_security import sanitize_public_url
+
+        return bool(value) and sanitize_public_url(value) == value
     except ValueError:
         return False
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
-        return False
-    if port is not None and not 0 < port < 65536:
-        return False
-    sensitive_parts = {"password", "passwd", "token", "access_token", "refresh_token", "apikey", "api_key", "session", "cookie", "authorization", "secret", "client_secret"}
-    for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
-        normalized = key.lower().replace("-", "_").replace(".", "_")
-        parts = [part for part in normalized.replace("/", "_").replace(":", "_").split("_") if part]
-        if normalized in sensitive_parts or any(part in sensitive_parts for part in parts):
-            return False
-    return True

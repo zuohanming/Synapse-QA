@@ -1,6 +1,10 @@
 import os
 
 
+def _csv_values(name: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in os.getenv(name, "").split(",") if item.strip())
+
+
 def _environment_value(name: str, default: str) -> str:
     value = os.getenv(name)
     if value:
@@ -38,6 +42,11 @@ class Settings:
     platform_base_url = os.getenv("PLATFORM_BASE_URL", "http://127.0.0.1:8080")
     heartbeat_interval_seconds = int(os.getenv("EXECUTOR_HEARTBEAT_INTERVAL_SECONDS", "10"))
     capture_command_poll_interval_seconds = 2
+    capture_allowed_origins = _csv_values("CAPTURE_ALLOWED_ORIGINS")
+    capture_allowed_private_hosts = _csv_values("CAPTURE_ALLOWED_PRIVATE_HOSTS")
+    capture_allowed_browser_channels = frozenset({"chrome", "msedge"})
+    capture_pending_max = int(os.getenv("CAPTURE_PENDING_MAX", "100"))
+    capture_rate_limit_per_second = int(os.getenv("CAPTURE_RATE_LIMIT_PER_SECOND", "5"))
     max_workers = int(os.getenv("EXECUTOR_MAX_WORKERS", "2"))
     default_timeout_seconds = int(os.getenv("EXECUTOR_DEFAULT_TIMEOUT_SECONDS", "300"))
     artifacts_dir = os.getenv("EXECUTOR_ARTIFACTS_DIR", "artifacts")

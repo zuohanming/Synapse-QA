@@ -53,6 +53,7 @@ const (
 )
 
 var captureFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var clientCaptureIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 type CandidateCaptureRepository interface {
 	AddCandidate(ctx context.Context, candidate model.ElementCaptureCandidate, executorID, tokenHash string) (model.ElementCaptureCandidate, error)
@@ -410,7 +411,7 @@ func (s *ElementCaptureService) AddCandidate(ctx context.Context, executorID, to
 	}
 	tokenHash := sha256.Sum256([]byte(token))
 	candidate := model.ElementCaptureCandidate{
-		SessionID: req.SessionID, Name: strings.TrimSpace(req.Name), Fingerprint: req.Fingerprint,
+		SessionID: req.SessionID, ClientCaptureID: strings.ToLower(req.ClientCaptureID), Name: strings.TrimSpace(req.Name), Fingerprint: req.Fingerprint,
 		CaptureURL: req.CaptureURL, TagName: strings.TrimSpace(req.TagName), AccessibleName: strings.TrimSpace(req.AccessibleName),
 		Locators: req.Locators, QualityScore: req.QualityScore, Status: "pending",
 	}
@@ -509,6 +510,9 @@ func (s *ElementCaptureService) candidateRepo() (CandidateCaptureRepository, err
 func validateCandidateCreate(req model.CaptureCandidateCreateRequest) error {
 	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.Name) == "" || !isCaptureURL(req.CaptureURL) {
 		return validation("候选项会话、名称和采集地址无效")
+	}
+	if !clientCaptureIDPattern.MatchString(strings.ToLower(strings.TrimSpace(req.ClientCaptureID))) {
+		return validation("clientCaptureId 必须是 UUID")
 	}
 	if !captureFingerprintPattern.MatchString(req.Fingerprint) {
 		return validation("fingerprint 必须是 64 位小写十六进制 SHA-256")

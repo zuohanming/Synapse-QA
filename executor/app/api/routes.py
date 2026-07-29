@@ -25,7 +25,12 @@ capture_command_poller = CaptureCommandPoller(
 def configure_gui_callbacks(capture_status_handler, auth_failure_handler) -> None:
     """注册由 GUI 自行切回 Tk 主线程的状态和认证回调。"""
     capture_session_manager.set_state_callback(capture_status_handler)
-    heartbeat_client.set_auth_failure_handler(auth_failure_handler)
+
+    def terminate_capture_then_notify() -> None:
+        capture_command_poller.request_stop()
+        auth_failure_handler()
+
+    heartbeat_client.set_auth_failure_handler(terminate_capture_then_notify)
 
 
 def create_app() -> FastAPI:
@@ -33,13 +38,14 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        heartbeat_client.start()
-        capture_command_poller.start()
         try:
+            heartbeat_client.start()
+            capture_command_poller.start()
             yield
         finally:
             capture_command_poller.stop()
             heartbeat_client.stop()
+            await capture_session_manager.close()
 
     app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
     @app.get("/health")

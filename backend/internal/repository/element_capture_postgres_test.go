@@ -118,7 +118,7 @@ func TestElementCaptureRepositoryStateAuthorizationAndCleanupOnPostgreSQL(t *tes
 		{"wrong-receipt", "leased", "right-receipt", now.Add(time.Minute)},
 		{"expired-lease", "leased", "expired-receipt", now.Add(-time.Minute)},
 		{"queued", "queued", "", now.Add(time.Minute)},
-		{"acked", "acked", "", now.Add(time.Minute)},
+		{"acked", "acked", "acked-receipt", now.Add(time.Minute)},
 		{"db-error", "leased", "db-error-receipt", now.Add(time.Minute)},
 	} {
 		if _, err := db.ExecContext(ctx, `insert into element_capture_commands(session_id,executor_id,command_type,status,expires_at,lease_until,lease_receipt_hash) values($1,'exec-1','start',$2,$3,$4,$5)`,
@@ -165,8 +165,15 @@ func TestElementCaptureRepositoryStateAuthorizationAndCleanupOnPostgreSQL(t *tes
 		})
 	}
 
+	if ok, err := repo.HeartbeatAndAckStart(ctx, "acked", "exec-1", "token-hash", "ctx-1", "https://example.test", "acked-receipt"); err != nil || !ok {
+		t.Fatalf("DB 已提交但客户端未收到响应时，相同回执重试应成功：ok=%v err=%v", ok, err)
+	}
 	if ok, err := repo.HeartbeatAndAckStart(ctx, "acked", "exec-1", "token-hash", "ctx-1", "https://example.test", ""); err != nil || !ok {
-		t.Fatalf("acked follow-up ok=%v err=%v", ok, err)
+		t.Fatalf("重试成功后的普通心跳应成功：ok=%v err=%v", ok, err)
+	}
+	var preservedReceiptHash string
+	if err := db.QueryRowContext(ctx, `select lease_receipt_hash from element_capture_commands where session_id='acked'`).Scan(&preservedReceiptHash); err != nil || preservedReceiptHash == "" {
+		t.Fatalf("ACK 后必须保留回执摘要直到命令 retention：hash=%q err=%v", preservedReceiptHash, err)
 	}
 	assertCaptureSessionAndCommandState(t, ctx, db, "acked", "active", "acked")
 
@@ -253,6 +260,57 @@ func assertCaptureSessionAndCommandState(t *testing.T, ctx context.Context, db *
 	}
 	if commandStatus != wantCommand {
 		t.Fatalf("command %s status=%s want=%s", sessionID, commandStatus, wantCommand)
+	}
+}
+
+func TestElementCaptureCandidateRetryIsIdempotentOnPostgreSQL(t *testing.T) {
+	db, ctx := capturePostgresTestDB(t, "element_capture_candidate_idempotency")
+	for _, statement := range []string{
+		`create table page_elements(id bigserial primary key,page_id bigint not null,fingerprint text not null,deleted_at timestamptz)`,
+		`create table element_capture_sessions(id text primary key,page_id bigint not null,executor_id text not null,token_hash text not null,status text not null,candidate_count int not null default 0,expires_at timestamptz not null,updated_at timestamptz not null default now())`,
+		`create table element_capture_candidates(id text primary key,cursor_id bigserial,session_id text not null,client_capture_id text not null,name text not null,fingerprint text not null,capture_url text not null,tag_name text not null,accessible_name text not null,locators jsonb not null,quality_score double precision not null,duplicate_element_id bigint,conflict_status text not null default '',conflict_resolution text not null default '',status text not null,expires_at timestamptz not null,unique(session_id,client_capture_id))`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `insert into element_capture_sessions(id,page_id,executor_id,token_hash,status,expires_at) values('session-1',8,'exec-1','token-hash','active',now()+interval '1 hour')`); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewElementCaptureRepository(db)
+	input := model.ElementCaptureCandidate{
+		SessionID:       "session-1",
+		ClientCaptureID: repositoryClientCaptureID,
+		Name:            "original",
+		Fingerprint:     repositoryFingerprintA,
+		CaptureURL:      "https://example.test/orders",
+		TagName:         "button",
+		AccessibleName:  "Original",
+		Locators:        []byte(`[{"type":"id","value":"original","score":90,"unique":true}]`),
+		QualityScore:    90,
+	}
+	first, err := repo.AddCandidate(ctx, input, "exec-1", "token-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Name = "changed"
+	input.Fingerprint = repositoryFingerprintB
+	retry, err := repo.AddCandidate(ctx, input, "exec-1", "token-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != first.ID || retry.CursorID != first.CursorID || retry.Name != "original" || retry.CandidateCount != 1 {
+		t.Fatalf("重试未返回原始候选：first=%+v retry=%+v", first, retry)
+	}
+	var rows, count int
+	if err := db.QueryRowContext(ctx, `select count(*) from element_capture_candidates`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select candidate_count from element_capture_sessions where id='session-1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || count != 1 {
+		t.Fatalf("幂等重试产生重复：rows=%d count=%d", rows, count)
 	}
 }
 

@@ -379,8 +379,8 @@ func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, ses
 			return false, model.NewDomainError(model.ErrConflict, "启动命令回执无效")
 		}
 	case "acked":
-		if receipt != "" {
-			return false, model.NewDomainError(model.ErrConflict, "启动命令已确认，后续心跳不得携带回执")
+		if receipt != "" && !captureReceiptMatches(receiptHash, receipt) {
+			return false, model.NewDomainError(model.ErrConflict, "启动命令回执无效")
 		}
 	default:
 		return false, model.NewDomainError(model.ErrConflict, "启动命令不存在或状态冲突")
@@ -394,7 +394,7 @@ func (r *ElementCaptureRepository) HeartbeatAndAckStart(ctx context.Context, ses
 		return false, err
 	}
 	if commandStatus == "leased" {
-		result, execErr := tx.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null,lease_receipt_hash='' where session_id=$1 and executor_id=$2 and command_type='start' and status='leased' and lease_until>now() and expires_at>now() and lease_receipt_hash=$3`, sessionID, executorID, receiptHash)
+		result, execErr := tx.ExecContext(ctx, `update element_capture_commands set status='acked',acked_at=now(),lease_until=null where session_id=$1 and executor_id=$2 and command_type='start' and status='leased' and lease_until>now() and expires_at>now() and lease_receipt_hash=$3`, sessionID, executorID, receiptHash)
 		if execErr != nil {
 			return false, execErr
 		}
@@ -679,6 +679,29 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 	if err != nil {
 		return candidate, err
 	}
+	var existing model.ElementCaptureCandidate
+	err = tx.QueryRowContext(ctx, `
+		select id,cursor_id,session_id,client_capture_id,name,fingerprint,capture_url,tag_name,accessible_name,
+		       locators,quality_score,coalesce(duplicate_element_id,0),conflict_status,conflict_resolution,status,expires_at
+		from element_capture_candidates
+		where session_id=$1 and client_capture_id=$2
+		for update
+	`, candidate.SessionID, candidate.ClientCaptureID).Scan(
+		&existing.ID, &existing.CursorID, &existing.SessionID, &existing.ClientCaptureID, &existing.Name,
+		&existing.Fingerprint, &existing.CaptureURL, &existing.TagName, &existing.AccessibleName,
+		&existing.Locators, &existing.QualityScore, &existing.DuplicateElementID, &existing.ConflictStatus,
+		&existing.ConflictResolution, &existing.Status, &existing.ExpiresAt,
+	)
+	if err == nil {
+		existing.CandidateCount = count
+		if count >= 400 {
+			existing.Warning = "候选项数量已达到 400，请及时审核"
+		}
+		return existing, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return candidate, err
+	}
 	if count >= 500 {
 		return candidate, model.NewDomainError(model.ErrConflict, "单个采集会话最多 500 个候选项")
 	}
@@ -699,10 +722,10 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 	}
 	candidate.ExpiresAt = time.Now().Add(30 * time.Minute)
 	if err = tx.QueryRowContext(ctx, `
-		insert into element_capture_candidates(id,session_id,name,fingerprint,capture_url,tag_name,accessible_name,locators,quality_score,duplicate_element_id,conflict_status,conflict_resolution,status,expires_at)
-		values($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,0),$11,$12,'pending',$13)
+		insert into element_capture_candidates(id,session_id,client_capture_id,name,fingerprint,capture_url,tag_name,accessible_name,locators,quality_score,duplicate_element_id,conflict_status,conflict_resolution,status,expires_at)
+		values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,nullif($11,0),$12,$13,'pending',$14)
 		returning cursor_id
-	`, candidate.ID, candidate.SessionID, candidate.Name, candidate.Fingerprint, candidate.CaptureURL, candidate.TagName, candidate.AccessibleName, candidate.Locators, candidate.QualityScore, candidate.DuplicateElementID, candidate.ConflictStatus, candidate.ConflictResolution, candidate.ExpiresAt).Scan(&candidate.CursorID); err != nil {
+	`, candidate.ID, candidate.SessionID, candidate.ClientCaptureID, candidate.Name, candidate.Fingerprint, candidate.CaptureURL, candidate.TagName, candidate.AccessibleName, candidate.Locators, candidate.QualityScore, candidate.DuplicateElementID, candidate.ConflictStatus, candidate.ConflictResolution, candidate.ExpiresAt).Scan(&candidate.CursorID); err != nil {
 		return candidate, err
 	}
 	count++

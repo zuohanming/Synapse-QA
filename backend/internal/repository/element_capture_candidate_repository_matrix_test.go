@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	repositoryFingerprintA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	repositoryFingerprintB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	repositoryFingerprintA    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	repositoryFingerprintB    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	repositoryClientCaptureID = "550e8400-e29b-41d4-a716-446655440000"
 )
 
 var candidateColumns = []string{
@@ -67,16 +68,27 @@ func expectCandidateSaveLockPrefix(mock sqlmock.Sqlmock, rows *sqlmock.Rows, ele
 		WillReturnRows(elements)
 }
 
+func expectNoIdempotentCandidate(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`from element_capture_candidates[\s\S]*where session_id=\$1 and client_capture_id=\$2[\s\S]*for update`).
+		WithArgs("session-1", repositoryClientCaptureID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cursor_id", "session_id", "client_capture_id", "name", "fingerprint", "capture_url", "tag_name",
+			"accessible_name", "locators", "quality_score", "duplicate_element_id", "conflict_status",
+			"conflict_resolution", "status", "expires_at",
+		}))
+}
+
 func TestElementCaptureRepositoryRejects501stCandidateUnderTokenAndActiveSessionLock(t *testing.T) {
 	repo, mock := newElementCaptureRepositoryMock(t)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`select page_id, candidate_count from element_capture_sessions[\s\S]*executor_id = \$2[\s\S]*token_hash = \$3[\s\S]*status = 'active'[\s\S]*for update`).
 		WithArgs("session-1", "executor-1", "token-hash").
 		WillReturnRows(sqlmock.NewRows([]string{"page_id", "candidate_count"}).AddRow(8, 500))
+	expectNoIdempotentCandidate(mock)
 	mock.ExpectRollback()
 
 	_, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{
-		SessionID: "session-1", Name: "submit", Fingerprint: repositoryFingerprintA,
+		SessionID: "session-1", ClientCaptureID: repositoryClientCaptureID, Name: "submit", Fingerprint: repositoryFingerprintA,
 	}, "executor-1", "token-hash")
 	if err == nil || !strings.Contains(err.Error(), "最多 500") {
 		t.Fatalf("第 501 个候选未被拒绝：%v", err)
@@ -92,11 +104,12 @@ func TestElementCaptureRepositoryReturnsWarningWhenCandidateCountReaches400(t *t
 	mock.ExpectQuery(`select page_id, candidate_count from element_capture_sessions[\s\S]*status = 'active'[\s\S]*for update`).
 		WithArgs("session-1", "executor-1", "token-hash").
 		WillReturnRows(sqlmock.NewRows([]string{"page_id", "candidate_count"}).AddRow(8, 399))
+	expectNoIdempotentCandidate(mock)
 	mock.ExpectQuery(`select id from page_elements where page_id = \$1 and fingerprint = \$2 and deleted_at is null order by id limit 1`).
 		WithArgs(8, repositoryFingerprintA).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectQuery(`insert into element_capture_candidates`).
-		WithArgs(sqlmock.AnyArg(), "session-1", "submit", repositoryFingerprintA, "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95.0, int64(0), "", "", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "session-1", repositoryClientCaptureID, "submit", repositoryFingerprintA, "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95.0, int64(0), "", "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"cursor_id"}).AddRow(400))
 	mock.ExpectExec(`update element_capture_sessions set candidate_count=\$1`).
 		WithArgs(400, "session-1").
@@ -104,7 +117,7 @@ func TestElementCaptureRepositoryReturnsWarningWhenCandidateCountReaches400(t *t
 	mock.ExpectCommit()
 
 	added, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{
-		SessionID: "session-1", Name: "submit", Fingerprint: repositoryFingerprintA,
+		SessionID: "session-1", ClientCaptureID: repositoryClientCaptureID, Name: "submit", Fingerprint: repositoryFingerprintA,
 		CaptureURL: "https://example.test", TagName: "button", AccessibleName: "Submit",
 		Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95,
 	}, "executor-1", "token-hash")
@@ -113,6 +126,41 @@ func TestElementCaptureRepositoryReturnsWarningWhenCandidateCountReaches400(t *t
 	}
 	if added.CandidateCount != 400 || !strings.Contains(added.Warning, "400") {
 		t.Fatalf("400 项预警错误：%+v", added)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElementCaptureRepositoryReturnsOriginalCandidateForIdempotentRetryWithoutIncrement(t *testing.T) {
+	repo, mock := newElementCaptureRepositoryMock(t)
+	expiresAt := time.Now().Add(time.Hour)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`select page_id, candidate_count from element_capture_sessions[\s\S]*for update`).
+		WithArgs("session-1", "executor-1", "token-hash").
+		WillReturnRows(sqlmock.NewRows([]string{"page_id", "candidate_count"}).AddRow(8, 500))
+	mock.ExpectQuery(`from element_capture_candidates[\s\S]*where session_id=\$1 and client_capture_id=\$2[\s\S]*for update`).
+		WithArgs("session-1", repositoryClientCaptureID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cursor_id", "session_id", "client_capture_id", "name", "fingerprint", "capture_url", "tag_name",
+			"accessible_name", "locators", "quality_score", "duplicate_element_id", "conflict_status",
+			"conflict_resolution", "status", "expires_at",
+		}).AddRow(
+			"original-id", int64(19), "session-1", repositoryClientCaptureID, "original", repositoryFingerprintA,
+			"https://example.test", "button", "Original", []byte(`[{"type":"id","value":"original","score":90,"unique":true}]`),
+			90.0, int64(0), "", "", "pending", expiresAt,
+		))
+	mock.ExpectCommit()
+
+	added, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{
+		SessionID: "session-1", ClientCaptureID: repositoryClientCaptureID, Name: "changed",
+		Fingerprint: repositoryFingerprintB,
+	}, "executor-1", "token-hash")
+	if err != nil {
+		t.Fatalf("幂等重试返回错误：%v", err)
+	}
+	if added.ID != "original-id" || added.CursorID != 19 || added.Name != "original" || added.CandidateCount != 500 {
+		t.Fatalf("幂等重试未返回原候选：%+v", added)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -161,11 +209,12 @@ func TestElementCaptureRepositoryAddCandidateDuplicateDetectionMatrix(t *testing
 			mock.ExpectQuery(`select page_id, candidate_count from element_capture_sessions[\s\S]*status = 'active'[\s\S]*for update`).
 				WithArgs("session-1", "executor-1", "token-hash").
 				WillReturnRows(sqlmock.NewRows([]string{"page_id", "candidate_count"}).AddRow(8, 0))
+			expectNoIdempotentCandidate(mock)
 			mock.ExpectQuery(`select id from page_elements where page_id = \$1 and fingerprint = \$2 and deleted_at is null order by id limit 1`).
 				WithArgs(8, repositoryFingerprintA).
 				WillReturnRows(tt.duplicateRows)
 			mock.ExpectQuery(`insert into element_capture_candidates`).
-				WithArgs(sqlmock.AnyArg(), "session-1", "submit", repositoryFingerprintA, "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95.0, tt.wantDuplicateID, tt.wantConflictStatus, "", sqlmock.AnyArg()).
+				WithArgs(sqlmock.AnyArg(), "session-1", repositoryClientCaptureID, "submit", repositoryFingerprintA, "https://example.test", "button", "Submit", []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), 95.0, tt.wantDuplicateID, tt.wantConflictStatus, "", sqlmock.AnyArg()).
 				WillReturnRows(sqlmock.NewRows([]string{"cursor_id"}).AddRow(1))
 			mock.ExpectExec(`update element_capture_sessions set candidate_count=\$1`).
 				WithArgs(1, "session-1").
@@ -173,7 +222,7 @@ func TestElementCaptureRepositoryAddCandidateDuplicateDetectionMatrix(t *testing
 			mock.ExpectCommit()
 
 			added, err := repo.AddCandidate(context.Background(), model.ElementCaptureCandidate{
-				SessionID: "session-1", Name: "submit", Fingerprint: repositoryFingerprintA,
+				SessionID: "session-1", ClientCaptureID: repositoryClientCaptureID, Name: "submit", Fingerprint: repositoryFingerprintA,
 				CaptureURL: "https://example.test", TagName: "button", AccessibleName: "Submit",
 				Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95,
 			}, "executor-1", "token-hash")

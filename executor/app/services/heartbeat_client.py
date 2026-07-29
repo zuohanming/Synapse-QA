@@ -14,6 +14,12 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
 class HeartbeatClient:
     """负责执行器向平台注册和定时心跳。"""
 
@@ -107,15 +113,19 @@ class HeartbeatClient:
             },
             method="POST",
         )
+        opener = urllib.request.build_opener(_NoRedirectHandler())
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with opener.open(request, timeout=5) as response:
                 return response.status
         except urllib.error.HTTPError as error:
-            logger.warning("执行器心跳鉴权失败：path=%s status=%s", path, error.code)
-            if error.code == 401 and notify_auth_failure:
-                self._stop_event.set()
-                self.notify_auth_failure()
-            return error.code
+            try:
+                logger.warning("执行器心跳鉴权失败：path=%s status=%s", path, error.code)
+                if error.code == 401 and notify_auth_failure:
+                    self._stop_event.set()
+                    self.notify_auth_failure()
+                return error.code
+            finally:
+                error.close()
         except (urllib.error.URLError, TimeoutError):
             logger.warning("执行器无法连接平台：path=%s", path)
             # 平台短暂不可达时不影响本地任务执行，下一轮心跳会继续补报。

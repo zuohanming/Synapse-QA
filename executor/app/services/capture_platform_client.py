@@ -19,6 +19,7 @@ from app.services.capture_session_manager import (
 
 
 logger = logging.getLogger(__name__)
+_MAX_RESPONSE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,9 @@ class CaptureCommandPoller:
         self._poll_interval = poll_interval
         self._on_auth_failure = on_auth_failure
         self._stop_event = threading.Event()
+        self._stopped_event = threading.Event()
+        self._stopped_event.set()
+        self._thread_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._sleep = asyncio.sleep
 
@@ -169,25 +173,32 @@ class CaptureCommandPoller:
     def start(self) -> None:
         if not settings.platform_base_url:
             return
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._thread_main, name="capture-command-poller", daemon=True)
-        self._thread.start()
+        with self._thread_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._stopped_event.clear()
+            self._thread = threading.Thread(target=self._thread_main, name="capture-command-poller", daemon=True)
+            self._thread.start()
 
     def request_stop(self) -> None:
         self._stop_event.set()
 
     def stop(self) -> None:
         self.request_stop()
-        if self._thread:
-            self._thread.join(timeout=max(5, self._poll_interval + 2))
+        with self._thread_lock:
+            thread = self._thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=max(5, self._poll_interval + 2))
+            self._stopped_event.wait(timeout=1)
 
     def _thread_main(self) -> None:
         try:
             asyncio.run(self.run_forever())
         except Exception:
             logger.exception("采集命令轮询器异常退出")
+        finally:
+            self._stopped_event.set()
 
     async def run_forever(self) -> None:
         try:
@@ -281,7 +292,10 @@ class CaptureCommandPoller:
         if response.status not in {401, 409}:
             return
         try:
-            await self._manager.stop(session_id, "unauthorized" if response.status == 401 else "conflict")
+            if response.status == 401:
+                await self._terminate_active("unauthorized")
+            else:
+                await self._manager.stop(session_id, "conflict")
         except CaptureSessionConflict:
             pass
         if response.status == 401:
@@ -317,13 +331,25 @@ def _send_urllib_request(
     if body is not None:
         request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+    opener = urllib.request.build_opener(_NoRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            raw = response.read()
+        with opener.open(request, timeout=5) as response:
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                return PlatformResponse(0, None)
             return PlatformResponse(response.status, _decode_json(raw))
     except urllib.error.HTTPError as error:
-        # 错误正文可能包含平台内部信息，状态机只需要状态码。
-        return PlatformResponse(error.code, None)
+        try:
+            # 错误正文可能包含平台内部信息，状态机只需要状态码。
+            return PlatformResponse(error.code, None)
+        finally:
+            error.close()
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
 
 
 def _decode_json(raw: bytes) -> Any:

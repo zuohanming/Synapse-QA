@@ -154,11 +154,12 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 	}
 
 	var cursorID int64
-	if err := db.QueryRowContext(ctx, `select cursor_id from element_capture_candidates where id='legacy-candidate'`).Scan(&cursorID); err != nil {
+	var clientCaptureID string
+	if err := db.QueryRowContext(ctx, `select cursor_id,client_capture_id from element_capture_candidates where id='legacy-candidate'`).Scan(&cursorID, &clientCaptureID); err != nil {
 		t.Fatalf("读取升级后的候选游标：%v", err)
 	}
-	if cursorID <= 0 {
-		t.Fatalf("旧候选未回填正数游标：%d", cursorID)
+	if cursorID <= 0 || clientCaptureID != "legacy-candidate" {
+		t.Fatalf("旧候选幂等字段回填错误：cursor=%d clientCaptureId=%q", cursorID, clientCaptureID)
 	}
 
 	wantCommandStatuses := map[string]string{
@@ -263,6 +264,7 @@ func TestElementCaptureMigrationUpgradesAndIsIdempotentOnPostgreSQL(t *testing.T
 	for _, indexName := range []string{
 		"uq_page_elements_active_name",
 		"uq_element_capture_candidates_cursor_id",
+		"uq_element_capture_candidates_session_client_capture",
 		"uq_element_capture_sessions_active_executor",
 		"idx_element_capture_commands_claim",
 	} {

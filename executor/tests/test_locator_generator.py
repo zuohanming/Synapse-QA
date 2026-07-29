@@ -173,7 +173,7 @@ def test_sanitizes_capture_url_before_exposing_platform_payload():
     )
 
     payload = candidate.platform_payload()
-    assert payload["captureUrl"] == "https://example.test:8443/orders?tab=details"
+    assert payload["captureUrl"] == "https://example.test:8443/orders"
     assert "password" not in str(payload)
     assert "top-secret" not in str(payload)
 
@@ -349,7 +349,7 @@ def test_platform_payload_matches_go_candidate_gate_and_rejects_unsanitized_dire
             tag="button",
             attributes={"id": "save"},
             accessible_name="保存",
-            capture_url="https://example.test/orders?tab=details",
+            capture_url="https://example.test/orders",
             locator_matches={"id:save": 1},
         )
     )

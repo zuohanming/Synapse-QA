@@ -4,20 +4,13 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
+from app.services.capture_security import contains_secret_text, is_sensitive_key, sanitize_public_url
 
 
 _SCORES = {"testid": 95, "id": 90, "role": 85, "label": 82, "css": 70, "text": 60, "xpath": 40}
 _PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
-_SENSITIVE_KEYS = {
-    "password", "passwd", "token", "access_token", "refresh_token", "api_key", "apikey", "session", "cookie",
-    "authorization", "secret", "client_secret",
-}
-_SECRET_MARKER = re.compile(r"(?<![a-z0-9])(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|client[_ -]?secret|token|secret|cookie|authorization|bearer)(?![a-z0-9])", re.IGNORECASE)
-_JWT = re.compile(r"^eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{6,}$")
-_COMMON_SECRET = re.compile(r"^(?:(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[_-][A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,})$", re.IGNORECASE)
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 _CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
 _CSS_MODULE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z0-9_-]*[0-9A-Z][A-Za-z0-9_-]{3,}$")
@@ -64,7 +57,7 @@ def build_candidate(snapshot: ElementSnapshot) -> CaptureCandidate:
     accessible_name = _safe_text(snapshot.accessible_name)
     label = _safe_text(snapshot.label)
     visible_text = _safe_text(snapshot.visible_text)
-    capture_url = _sanitize_capture_url(snapshot.capture_url)
+    capture_url = sanitize_public_url(snapshot.capture_url) if snapshot.capture_url else ""
     seeds, rejected_reasons = _locator_seeds(snapshot, attributes, accessible_name, label, visible_text)
     locators = _build_locators(seeds, snapshot)
     if not locators:
@@ -183,28 +176,6 @@ def _fingerprint(tag: str, attributes: dict[str, str], name: str) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _sanitize_capture_url(value: str) -> str:
-    if not value:
-        return ""
-    if _CONTROL.search(value) or "%00" in value.lower():
-        raise ValueError("采集 URL 包含不安全字符")
-    try:
-        parsed = urlsplit(value)
-        host = parsed.hostname
-        port = parsed.port
-    except ValueError as error:
-        raise ValueError("采集 URL 无效") from error
-    if parsed.scheme not in {"http", "https"} or not host:
-        raise ValueError("采集 URL 必须是 HTTP(S) 地址")
-    if port is not None and not 0 < port < 65536:
-        raise ValueError("采集 URL 端口无效")
-    netloc = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    if port is not None:
-        netloc = f"{netloc}:{port}"
-    query = [(key, item) for key, item in parse_qsl(parsed.query, keep_blank_values=True) if not _is_sensitive_key(key)]
-    return urlunsplit((parsed.scheme, netloc, parsed.path or "/", urlencode(query, doseq=True), ""))
-
-
 def _is_safe_css(value: str) -> bool:
     if len(value) > 240 or _CONTROL.search(value) or _contains_secret(value) or _CSS_SENSITIVE_ATTRIBUTE.search(value):
         return False
@@ -219,17 +190,11 @@ def _is_safe_xpath(value: str) -> bool:
 
 
 def _is_sensitive_key(value: str) -> bool:
-    key = _normalize_text(value).lower()
-    canonical = key.replace("-", "_").replace(".", "_")
-    if canonical in _SENSITIVE_KEYS:
-        return True
-    parts = [part for part in re.split(r"[-_.:/\\\s]+", key) if part]
-    return any(part in _SENSITIVE_KEYS for part in parts)
+    return is_sensitive_key(_normalize_text(value))
 
 
 def _contains_secret(value: str) -> bool:
-    normalized = _normalize_text(value)
-    return bool(_SECRET_MARKER.search(normalized) or _JWT.fullmatch(normalized) or _COMMON_SECRET.fullmatch(normalized) or _looks_high_entropy_token(normalized))
+    return contains_secret_text(_normalize_text(value))
 
 
 def _is_safe_token(value: str) -> bool:

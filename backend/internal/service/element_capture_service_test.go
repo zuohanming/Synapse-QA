@@ -673,7 +673,7 @@ func TestBatchSaveRejectsUnresolvedDuplicateAndMissingUpdateTarget(t *testing.T)
 func TestAddCandidateRejectsInvalidFingerprint(t *testing.T) {
 	service := newCaptureServiceWithCandidates()
 	_, err := service.AddCandidate(context.Background(), "exec-1", "token", model.CaptureCandidateCreateRequest{
-		SessionID: "session-1", Name: "submit", Fingerprint: "ABC", CaptureURL: "https://example.test",
+		SessionID: "session-1", ClientCaptureID: "550e8400-e29b-41d4-a716-446655440000", Name: "submit", Fingerprint: "ABC", CaptureURL: "https://example.test",
 		Locators: []byte(`[{"type":"testid","value":"submit","score":95,"unique":true}]`), QualityScore: 95,
 	})
 	if err == nil || !strings.Contains(err.Error(), "fingerprint") {

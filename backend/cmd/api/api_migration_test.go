@@ -61,6 +61,8 @@ func TestElementCaptureMigrationStatementsStoreCandidateReviewData(t *testing.T)
 	for _, want := range []string{
 		"name text not null default ''",
 		"capture_url text not null default ''",
+		"client_capture_id text",
+		"uq_element_capture_candidates_session_client_capture",
 		"duplicate_element_id bigint references page_elements(id)",
 		"conflict_status text not null default ''",
 		"conflict_resolution text not null default ''",

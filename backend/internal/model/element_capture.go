@@ -37,6 +37,7 @@ type ElementCaptureCandidate struct {
 	ID                     string          `json:"id"`
 	CursorID               int64           `json:"cursorId"`
 	SessionID              string          `json:"sessionId"`
+	ClientCaptureID        string          `json:"clientCaptureId"`
 	Name                   string          `json:"name"`
 	Fingerprint            string          `json:"fingerprint"`
 	CaptureURL             string          `json:"captureUrl"`
@@ -116,16 +117,17 @@ type CandidateBatchSaveRequest struct {
 }
 
 type CaptureCandidateCreateRequest struct {
-	ExecutorID     string          `json:"executorId"`
-	Token          string          `json:"token"`
-	SessionID      string          `json:"sessionId"`
-	Name           string          `json:"name"`
-	Fingerprint    string          `json:"fingerprint"`
-	CaptureURL     string          `json:"captureUrl"`
-	TagName        string          `json:"tagName"`
-	AccessibleName string          `json:"accessibleName"`
-	Locators       json.RawMessage `json:"locators"`
-	QualityScore   float64         `json:"qualityScore"`
+	ExecutorID      string          `json:"executorId"`
+	Token           string          `json:"token"`
+	SessionID       string          `json:"sessionId"`
+	ClientCaptureID string          `json:"clientCaptureId"`
+	Name            string          `json:"name"`
+	Fingerprint     string          `json:"fingerprint"`
+	CaptureURL      string          `json:"captureUrl"`
+	TagName         string          `json:"tagName"`
+	AccessibleName  string          `json:"accessibleName"`
+	Locators        json.RawMessage `json:"locators"`
+	QualityScore    float64         `json:"qualityScore"`
 }
 
 type CaptureCandidateUpdateRequest struct {

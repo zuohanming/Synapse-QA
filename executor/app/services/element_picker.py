@@ -1,16 +1,26 @@
+import asyncio
+import contextlib
 import json
 import logging
-import math
 import os
 import re
-import shutil
+import secrets
 import tempfile
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from app.models.capture import CaptureCandidate, CaptureLocator, CaptureMode, ElementSnapshot
+from app.services.capture_security import (
+    contains_sensitive_data,
+    normalize_key,
+    same_origin,
+    sanitize_public_url,
+    url_origin,
+)
 from app.services.locator_generator import build_candidate
 
 
@@ -25,115 +35,30 @@ _ALLOWED_ATTRIBUTES = {
     "data-testid", "data-test", "data-qa", "data-cy",
 }
 _FORBIDDEN_KEYS = {
-    "value", "cookie", "cookies", "localstorage", "sessionstorage", "outerhtml", "innerhtml",
-    "authorization", "selector", "cssselector", "xpath", "password", "passwd", "token",
+    "value", "cookie", "cookies", "local_storage", "session_storage", "outer_html", "inner_html",
+    "authorization", "selector", "css_selector", "xpath", "password", "passwd", "token",
     "access_token", "refresh_token", "api_key", "apikey", "session", "secret", "client_secret",
 }
-_SECRET_MARKER = re.compile(
-    r"(?<![a-z0-9])(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|client[_ -]?secret|"
-    r"token|secret|cookie|authorization|bearer)(?![a-z0-9])",
-    re.IGNORECASE,
-)
-_JWT = re.compile(r"^eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{6,}$")
-_COMMON_SECRET = re.compile(
-    r"^(?:(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[_-][A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,})$",
-    re.IGNORECASE,
-)
 _TAG = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
 PICKER_SCRIPT = r"""
-(() => {
-  try {
-    if (globalThis.top !== globalThis && globalThis.top.location.origin !== globalThis.location.origin) return;
-  } catch (_) {
-    return;
-  }
-  if (globalThis.__synapseCapturePicker) {
-    globalThis.__synapseCapturePicker.install();
-    return;
-  }
-  const installedDocuments = new WeakSet();
-  const pendingDocuments = new WeakSet();
-  const observedFrames = new WeakSet();
+options => {
+  const nonce = options.nonce;
+  const state = {mode: options.mode, alt: false, target: null, disposed: false};
   const resources = [];
-  const state = { mode: "pick", alt: false, target: null };
+  let host = null;
 
-  function effectiveMode() {
-    return state.alt ? (state.mode === "pick" ? "operate" : "pick") : state.mode;
-  }
-
-  function safeText(value, limit) {
-    return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
-  }
-
-  function toolbarFor(doc) {
-    let host = doc.querySelector("[data-synapse-capture-host]");
-    if (host) return host;
-    host = doc.createElement("div");
-    host.setAttribute("data-synapse-capture-host", "");
-    host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
-    const shadow = host.attachShadow({mode: "open"});
-    shadow.innerHTML = `
-      <style>
-        :host{all:initial}
-        [data-toolbar]{position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;gap:6px;
-          align-items:center;background:#171717;color:#fff;padding:7px;border-radius:9px;
-          font:13px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px #0005;pointer-events:auto}
-        button{border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
-        [data-message]{max-width:300px;color:#ffd48a}
-        [data-highlight]{position:fixed;border:2px solid #5b8cff;background:#5b8cff22;
-          box-sizing:border-box;pointer-events:none}
-      </style>
-      <div data-toolbar>
-        <button data-mode="pick">拾取</button>
-        <button data-mode="operate">操作</button>
-        <span data-message></span>
-      </div>
-      <div data-highlight hidden></div>`;
-    shadow.querySelectorAll("[data-mode]").forEach(button => {
-      button.addEventListener("click", event => {
-        event.preventDefault();
-        event.stopPropagation();
-        state.mode = button.getAttribute("data-mode");
-      });
-    });
-    (doc.documentElement || doc.body).appendChild(host);
-    return host;
-  }
-
-  function message(doc, text) {
-    const host = toolbarFor(doc);
-    host.shadowRoot.querySelector("[data-message]").textContent = text;
-  }
-
-  function clear(doc) {
-    const host = doc.querySelector("[data-synapse-capture-host]");
-    if (host) host.shadowRoot.querySelector("[data-highlight]").hidden = true;
-    state.target = null;
-  }
-
-  function clearAll() {
-    for (const resource of resources) clear(resource.doc);
-  }
-
-  function showHighlight(doc, element) {
-    const host = toolbarFor(doc);
+  const safeText = (value, limit) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
+  const visibleText = element => {
+    if (!element || !element.isConnected) return "";
+    const style = getComputedStyle(element);
     const box = element.getBoundingClientRect();
-    const highlight = host.shadowRoot.querySelector("[data-highlight]");
-    highlight.hidden = false;
-    highlight.style.left = `${box.left}px`;
-    highlight.style.top = `${box.top}px`;
-    highlight.style.width = `${box.width}px`;
-    highlight.style.height = `${box.height}px`;
-  }
-
-  function eventElement(event) {
-    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
-    return path.find(item => item?.nodeType === 1 && !item.closest?.("[data-synapse-capture-host]")) || null;
-  }
-
-  function safeAttributes(element) {
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" ||
+        Number(style.opacity) === 0 || !box.width || !box.height) return "";
+    return safeText(element.innerText, 512);
+  };
+  const safeAttributes = element => {
     const names = ["id", "class", "role", "name", "type", "placeholder", "aria-label",
       "aria-labelledby", "data-testid", "data-test", "data-qa", "data-cy"];
     const result = {};
@@ -142,14 +67,12 @@ PICKER_SCRIPT = r"""
       if (value) result[name] = value;
     }
     return result;
-  }
-
-  function labelText(element) {
+  };
+  const labelText = element => {
     if (!element.labels) return "";
-    return safeText(Array.from(element.labels).map(item => item.textContent).join(" "), 512);
-  }
-
-  function structuredPath(element) {
+    return safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512);
+  };
+  const structuredPath = element => {
     const path = [];
     let current = element;
     while (current && path.length < 32) {
@@ -163,61 +86,93 @@ PICKER_SCRIPT = r"""
       current = parent?.nodeType === 11 && parent.host ? parent.host : current.parentElement;
     }
     return path;
-  }
-
-  function payload(element) {
+  };
+  const extract = element => {
     const attributes = safeAttributes(element);
-    const accessibleName = safeText(attributes["aria-label"] || labelText(element) || element.textContent, 512);
+    const text = visibleText(element);
+    const label = labelText(element);
+    const path = structuredPath(element);
     return {
       tag: element.tagName.toLowerCase(),
       attributes,
-      accessibleName,
-      label: labelText(element),
-      visibleText: safeText(element.textContent, 512),
+      accessibleName: safeText(attributes["aria-label"] || label || text, 512),
+      label,
+      visibleText: text,
       role: safeText(attributes.role, 64),
-      depth: structuredPath(element).length,
-      path: structuredPath(element),
+      depth: path.length,
+      path,
       locatorMatches: {}
     };
-  }
+  };
+  const emit = bundle => Promise.resolve(globalThis.__synapseCapturePick({...bundle, nonce})).catch(() => {});
+  const effectiveMode = () => state.alt ? (state.mode === "pick" ? "operate" : "pick") : state.mode;
 
-  function scanFrames(doc) {
-    for (const frame of Array.from(doc.querySelectorAll("iframe"))) {
-      if (!observedFrames.has(frame)) {
-        observedFrames.add(frame);
-        frame.addEventListener("load", () => scanFrames(doc));
-      }
-      try {
-        const childDocument = frame.contentDocument;
-        if (!childDocument) {
-          message(doc, "不支持跨域 iframe");
-        } else {
-          installDocument(childDocument);
-        }
-      } catch (_) {
-        message(doc, "不支持跨域 iframe");
-      }
-    }
-  }
+  const clear = () => {
+    const highlight = host?.shadowRoot?.querySelector("[data-highlight]");
+    if (highlight) highlight.hidden = true;
+    state.target = null;
+  };
+  const setMode = mode => {
+    if (mode !== "pick" && mode !== "operate") return;
+    state.mode = mode;
+    host?.shadowRoot?.querySelectorAll("[data-mode]").forEach(
+      button => button.setAttribute("aria-pressed", String(button.getAttribute("data-mode") === mode))
+    );
+  };
+  const eventElement = event => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    const shadow = host?.shadowRoot;
+    if (path.some(item => item === host || item === shadow || item?.getRootNode?.() === shadow)) return null;
+    return path.find(item => item?.nodeType === 1) || null;
+  };
+  const showHighlight = element => {
+    const box = element.getBoundingClientRect();
+    const highlight = host.shadowRoot.querySelector("[data-highlight]");
+    highlight.hidden = false;
+    highlight.style.left = `${box.left}px`;
+    highlight.style.top = `${box.top}px`;
+    highlight.style.width = `${box.width}px`;
+    highlight.style.height = `${box.height}px`;
+  };
+  const install = () => {
+    if (state.disposed || host?.isConnected) return;
+    host = document.createElement("div");
+    host.setAttribute("data-synapse-capture-host", "");
+    host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+    const shadow = host.attachShadow({mode: "open"});
+    shadow.innerHTML = `
+      <style>
+        :host{all:initial}
+        [data-toolbar]{position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;gap:6px;
+          align-items:center;background:#171717;color:#fff;padding:7px;border-radius:9px;
+          font:13px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px #0005;pointer-events:auto}
+        button{border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
+        button[aria-pressed="true"]{outline:2px solid #8eb0ff}
+        [data-highlight]{position:fixed;border:2px solid #5b8cff;background:#5b8cff22;
+          box-sizing:border-box;pointer-events:none}
+      </style>
+      <div data-toolbar>
+        <button data-mode="pick">拾取</button>
+        <button data-mode="operate">操作</button>
+      </div>
+      <div data-highlight hidden></div>`;
+    shadow.querySelectorAll("[data-mode]").forEach(button => {
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const mode = button.getAttribute("data-mode");
+        setMode(mode);
+        emit({action: "mode", value: mode});
+      });
+    });
+    (document.documentElement || document.body).appendChild(host);
+    setMode(state.mode);
 
-  function installDocument(doc) {
-    if (!doc || installedDocuments.has(doc)) return;
-    if (doc.readyState === "loading" || (!doc.documentElement && !doc.body)) {
-      if (!pendingDocuments.has(doc)) {
-        pendingDocuments.add(doc);
-        doc.addEventListener("DOMContentLoaded", () => {
-          pendingDocuments.delete(doc);
-          installDocument(doc);
-        }, {once: true});
-      }
-      return;
-    }
-    toolbarFor(doc);
     const mouseover = event => {
       const element = eventElement(event);
       if (element && effectiveMode() === "pick") {
         state.target = element;
-        showHighlight(doc, element);
+        showHighlight(element);
       }
     };
     const click = event => {
@@ -225,94 +180,107 @@ PICKER_SCRIPT = r"""
       if (!element || effectiveMode() !== "pick") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      Promise.resolve(globalThis.__synapseCapturePick({element, payload: payload(element)})).catch(() => {});
+      emit({action: "pick", element, payload: extract(element)});
     };
     const keydown = event => {
-      if (event.key === "Alt") state.alt = true;
-      if (event.key === "Escape") clearAll();
+      if (event.key === "Alt" && !state.alt) {
+        state.alt = true;
+        emit({action: "alt", value: true});
+      }
+      if (event.key === "Escape") {
+        clear();
+        emit({action: "clear"});
+      }
     };
     const keyup = event => {
-      if (event.key === "Alt") state.alt = false;
+      if (event.key === "Alt" && state.alt) {
+        state.alt = false;
+        emit({action: "alt", value: false});
+      }
     };
-    doc.addEventListener("mouseover", mouseover, true);
-    doc.addEventListener("click", click, true);
-    doc.addEventListener("keydown", keydown, true);
-    doc.addEventListener("keyup", keyup, true);
-    const observer = new MutationObserver(() => scanFrames(doc));
-    observer.observe(doc.documentElement, {childList: true, subtree: true});
-    resources.push({doc, mouseover, click, keydown, keyup, observer});
-    installedDocuments.add(doc);
-    scanFrames(doc);
-  }
-
-  function dispose() {
-    for (const resource of resources.splice(0)) {
-      resource.doc.removeEventListener("mouseover", resource.mouseover, true);
-      resource.doc.removeEventListener("click", resource.click, true);
-      resource.doc.removeEventListener("keydown", resource.keydown, true);
-      resource.doc.removeEventListener("keyup", resource.keyup, true);
-      resource.observer.disconnect();
-      resource.doc.querySelector("[data-synapse-capture-host]")?.remove();
-    }
-    delete globalThis.__synapseCapturePicker;
-  }
-
-  globalThis.__synapseCapturePicker = {
-    install: () => installDocument(document),
-    setMode: mode => { if (mode === "pick" || mode === "operate") state.mode = mode; },
-    clear: clearAll,
-    dispose
+    document.addEventListener("mouseover", mouseover, true);
+    document.addEventListener("click", click, true);
+    document.addEventListener("keydown", keydown, true);
+    document.addEventListener("keyup", keyup, true);
+    resources.push({mouseover, click, keydown, keyup});
   };
-  installDocument(document);
-})();
-"""
-
-_CONTROL_SCRIPT = r"""
-command => {
-  const picker = globalThis.__synapseCapturePicker;
-  if (!picker) return;
-  if (command.action === "install") picker.install();
-  if (command.action === "mode") picker.setMode(command.mode);
-  if (command.action === "clear") picker.clear();
-  if (command.action === "dispose") picker.dispose();
+  const dispose = () => {
+    if (state.disposed) return;
+    state.disposed = true;
+    for (const resource of resources.splice(0)) {
+      document.removeEventListener("mouseover", resource.mouseover, true);
+      document.removeEventListener("click", resource.click, true);
+      document.removeEventListener("keydown", resource.keydown, true);
+      document.removeEventListener("keyup", resource.keyup, true);
+    }
+    host?.remove();
+    host = null;
+  };
+  install();
+  return command => {
+    if (command.action === "mode") setMode(command.mode);
+    if (command.action === "alt") state.alt = Boolean(command.value);
+    if (command.action === "clear") clear();
+    if (command.action === "dispose") dispose();
+  };
 }
 """
 
-_MASK_SCRIPT = r"""
-command => {
-  const marker = "data-synapse-sensitive-mask";
-  document.querySelectorAll(`[${marker}]`).forEach(item => item.remove());
-  if (command.action !== "mask") return;
-  const host = document.createElement("div");
-  host.setAttribute(marker, "");
-  host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;";
-  const shadow = host.attachShadow({mode:"open"});
+_DOM_EXTRACT_SCRIPT = r"""
+element => {
+  const safeText = (value, limit) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
+  const visibleText = item => {
+    if (!item || !item.isConnected) return "";
+    const style = getComputedStyle(item);
+    const box = item.getBoundingClientRect();
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" ||
+        Number(style.opacity) === 0 || !box.width || !box.height) return "";
+    return safeText(item.innerText, 512);
+  };
+  const attributes = {};
+  for (const name of ["id", "class", "role", "name", "type", "placeholder", "aria-label",
+      "aria-labelledby", "data-testid", "data-test", "data-qa", "data-cy"]) {
+    const value = safeText(element.getAttribute(name), 256);
+    if (value) attributes[name] = value;
+  }
+  const label = element.labels
+    ? safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512)
+    : "";
+  const path = [];
+  let current = element;
+  while (current && path.length < 32) {
+    if (current.nodeType === 1) {
+      const siblings = current.parentElement
+        ? Array.from(current.parentElement.children).filter(item => item.tagName === current.tagName)
+        : [current];
+      path.unshift({tag: current.tagName.toLowerCase(), nth: Math.max(1, siblings.indexOf(current) + 1)});
+    }
+    const parent = current.parentNode;
+    current = parent?.nodeType === 11 && parent.host ? parent.host : current.parentElement;
+  }
+  const text = visibleText(element);
+  return {
+    tag: element.tagName.toLowerCase(),
+    attributes,
+    accessibleName: safeText(attributes["aria-label"] || label || text, 512),
+    label,
+    visibleText: text,
+    role: safeText(attributes.role, 64),
+    depth: path.length,
+    path,
+    locatorMatches: {}
+  };
+}
+"""
+
+_SENSITIVE_INPUT_BOOLEAN = r"""
+input => {
+  const type = (input.getAttribute("type") || "").toLowerCase();
+  const metadata = ["id", "name", "autocomplete", "aria-label", "placeholder"]
+    .map(name => input.getAttribute(name) || "").join(" ");
   const identity = /身份证|identity|id[\s_-]?card|national[\s_-]?id/i;
   const identityValue = /^(?:\d{15}|\d{17}[\dXx])$/;
-  const roots = [document];
-  const inputs = [];
-  while (roots.length) {
-    const root = roots.pop();
-    for (const element of root.querySelectorAll("*")) {
-      if (element.shadowRoot) roots.push(element.shadowRoot);
-      if (element.tagName === "INPUT") inputs.push(element);
-    }
-  }
-  for (const input of inputs) {
-    const type = (input.getAttribute("type") || "").toLowerCase();
-    const metadata = ["id","name","autocomplete","aria-label","placeholder"]
-      .map(name => input.getAttribute(name) || "").join(" ");
-    // value 仅在页面内用于布尔模式判断，绝不离开浏览器上下文。
-    if (type !== "password" && type !== "tel" && !identity.test(metadata) &&
-        !identityValue.test(input.value || "")) continue;
-    const box = input.getBoundingClientRect();
-    if (!box.width || !box.height) continue;
-    const mask = document.createElement("span");
-    mask.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;` +
-      `height:${box.height}px;background:#202124;`;
-    shadow.appendChild(mask);
-  }
-  (document.documentElement || document.body).appendChild(host);
+  return type === "password" || type === "tel" || identity.test(metadata) || identityValue.test(input.value || "");
 }
 """
 
@@ -331,44 +299,185 @@ class LocalCapture:
 class ElementPicker:
     """浏览器拾取脚本和 Python 安全边界。"""
 
-    def __init__(self, temp_root: str | Path | None = None) -> None:
+    def __init__(self, temp_root: str | Path | None = None, *, rate_limit_per_second: int = 5) -> None:
         self.script = PICKER_SCRIPT
         self._temp_root = Path(temp_root) if temp_root is not None else None
         self._session_temp_dir: Path | None = None
         self._local_files: set[Path] = set()
+        self._retry_files: set[Path] = set()
+        self._nonce = ""
+        self._page: Any = None
+        self._capture_origin = ""
+        self._callback: Callable[..., Awaitable[None]] | None = None
+        self._controllers: dict[int, tuple[Any, str, Any]] = {}
+        self._mode = CaptureMode.pick
+        self._rate_limit = max(1, rate_limit_per_second)
+        self._pick_times: deque[float] = deque()
+        self._pick_lock = asyncio.Semaphore(1)
+        self._screenshot_lock = asyncio.Lock()
+        self._event_tasks: set[asyncio.Task[Any]] = set()
+        self._binding_tasks: set[asyncio.Task[Any]] = set()
 
-    async def install(self, context: Any, page: Any, callback: Callable[..., Awaitable[None]]) -> None:
+    async def install(
+        self,
+        context: Any,
+        page: Any,
+        callback: Callable[..., Awaitable[None]],
+        capture_url: str | None = None,
+    ) -> None:
+        self._nonce = secrets.token_urlsafe(32)
+        self._page = page
+        self._callback = callback
+        self._capture_origin = url_origin(capture_url or page.url)
+
         async def receive_bundle(source: dict[str, Any], bundle_handle: Any) -> None:
-            element_property = payload_property = None
-            try:
-                element_property = await bundle_handle.get_property("element")
-                payload_property = await bundle_handle.get_property("payload")
-                element_handle = element_property.as_element()
-                payload = await payload_property.json_value()
-                if element_handle is None or not isinstance(payload, dict):
-                    raise PickerSecurityError("候选来源无效")
-                await callback(source, element_handle, payload)
-            finally:
-                for handle in (payload_property, element_property, bundle_handle):
-                    if handle is not None:
-                        await handle.dispose()
+            await self._receive_bundle(source, bundle_handle)
 
         await context.expose_binding(_BINDING_NAME, receive_bundle, handle=True)
-        await context.add_init_script(self.script)
+        if hasattr(page, "on"):
+            page.on("framenavigated", self._on_frame_navigated)
+            page.on("frameattached", self._on_frame_navigated)
         await self.install_on_page(page)
 
+    def _on_frame_navigated(self, frame: Any) -> None:
+        task = asyncio.create_task(self._install_frame(frame))
+        self._event_tasks.add(task)
+        task.add_done_callback(self._event_tasks.discard)
+
     async def install_on_page(self, page: Any) -> None:
-        await page.evaluate(self.script)
-        await page.evaluate(_CONTROL_SCRIPT, {"action": "install"})
+        frames = list(getattr(page, "frames", []) or [])
+        if not frames:
+            frames = [page]
+        for frame in frames:
+            await self._install_frame(frame)
+
+    async def _install_frame(self, frame: Any) -> None:
+        if not self._trusted_frame(frame):
+            return
+        frame_url = str(getattr(frame, "url", ""))
+        key = id(frame)
+        existing = self._controllers.get(key)
+        if existing and existing[0] is frame and existing[1] == frame_url:
+            return
+        if existing:
+            await _safe_handle_dispose(existing[2])
+        controller = await frame.evaluate_handle(
+            self.script,
+            {"nonce": self._nonce, "mode": self._mode.value},
+        )
+        self._controllers[key] = (frame, frame_url, controller)
 
     async def set_mode(self, page: Any, mode: CaptureMode) -> None:
-        await page.evaluate(_CONTROL_SCRIPT, {"action": "mode", "mode": mode.value})
+        del page
+        self._mode = mode
+        await self._broadcast({"action": "mode", "mode": mode.value})
 
     async def clear_highlight(self, page: Any) -> None:
-        await page.evaluate(_CONTROL_SCRIPT, {"action": "clear"})
+        del page
+        await self._broadcast({"action": "clear"})
 
     async def dispose(self, page: Any) -> None:
-        await page.evaluate(_CONTROL_SCRIPT, {"action": "dispose"})
+        del page
+        await self._drain_binding_tasks()
+        await self._broadcast({"action": "dispose"})
+        for _, _, handle in tuple(self._controllers.values()):
+            await _safe_handle_dispose(handle)
+        self._controllers.clear()
+
+    async def _broadcast(self, command: dict[str, Any]) -> None:
+        for key, (frame, _, controller) in tuple(self._controllers.items()):
+            if not self._trusted_frame(frame):
+                await _safe_handle_dispose(controller)
+                self._controllers.pop(key, None)
+                continue
+            with contextlib.suppress(Exception):
+                await controller.evaluate("(control, value) => control(value)", command)
+
+    async def _receive_bundle(self, source: dict[str, Any], bundle_handle: Any) -> None:
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._binding_tasks.add(current_task)
+        handles: list[Any] = [bundle_handle]
+        try:
+            nonce = await _handle_json_property(bundle_handle, "nonce", handles)
+            action = await _handle_json_property(bundle_handle, "action", handles)
+            if not isinstance(nonce, str) or not secrets.compare_digest(nonce, self._nonce):
+                raise PickerSecurityError("候选 nonce 无效")
+            frame = await self._validate_source(source)
+            if action in {"mode", "alt", "clear"}:
+                await self._handle_control_action(action, bundle_handle, handles)
+                return
+            if action != "pick" or not self._accept_rate():
+                return
+            async with self._pick_lock:
+                element_property = await bundle_handle.get_property("element")
+                handles.append(element_property)
+                element_handle = element_property.as_element()
+                payload = await _handle_json_property(bundle_handle, "payload", handles)
+                if element_handle is None or not isinstance(payload, dict):
+                    raise PickerSecurityError("候选来源无效")
+                owner_frame = await element_handle.owner_frame()
+                if owner_frame is not frame:
+                    raise PickerSecurityError("候选元素不属于当前 frame")
+                trusted_payload = await element_handle.evaluate(_DOM_EXTRACT_SCRIPT)
+                if _sanitize_binding_payload(payload) != _sanitize_binding_payload(trusted_payload):
+                    raise PickerSecurityError("候选 DOM 复核不一致")
+                if self._callback:
+                    await self._callback(source, element_handle, trusted_payload)
+        except PickerSecurityError:
+            logger.warning("页面元素 binding 因安全边界被丢弃")
+        finally:
+            for handle in reversed(handles):
+                await _safe_handle_dispose(handle)
+            if current_task is not None:
+                self._binding_tasks.discard(current_task)
+
+    async def _handle_control_action(self, action: str, bundle_handle: Any, handles: list[Any]) -> None:
+        if action == "mode":
+            value = await _handle_json_property(bundle_handle, "value", handles)
+            if value in {"pick", "operate"}:
+                self._mode = CaptureMode(value)
+                await self._broadcast({"action": "mode", "mode": value})
+        elif action == "alt":
+            value = await _handle_json_property(bundle_handle, "value", handles)
+            await self._broadcast({"action": "alt", "value": bool(value)})
+        else:
+            await self._broadcast({"action": "clear"})
+
+    async def _validate_source(self, source: Any) -> Any:
+        if not isinstance(source, dict) or source.get("page") is not self._page:
+            raise PickerSecurityError("候选 page 来源无效")
+        frame = source.get("frame")
+        if frame is None or not self._trusted_frame(frame):
+            raise PickerSecurityError("候选 frame 来源无效")
+        frame_page = getattr(frame, "page", None)
+        if callable(frame_page):
+            frame_page = frame_page()
+        if frame_page is not None and frame_page is not self._page:
+            raise PickerSecurityError("候选 frame 不属于当前页面")
+        return frame
+
+    def _trusted_frame(self, frame: Any) -> bool:
+        frame_url = str(getattr(frame, "url", ""))
+        if not frame_url or not same_origin(frame_url, self._capture_origin):
+            return False
+        current = frame
+        while current is not None:
+            if not same_origin(str(getattr(current, "url", "")), self._capture_origin):
+                return False
+            current = getattr(current, "parent_frame", None)
+            if callable(current):
+                current = current()
+        return True
+
+    def _accept_rate(self) -> bool:
+        now = time.monotonic()
+        while self._pick_times and self._pick_times[0] <= now - 1:
+            self._pick_times.popleft()
+        if len(self._pick_times) >= self._rate_limit:
+            return False
+        self._pick_times.append(now)
+        return True
 
     async def build_capture(
         self,
@@ -379,7 +488,7 @@ class ElementPicker:
     ) -> LocalCapture:
         try:
             payload = _sanitize_binding_payload(raw_payload)
-            if scan_for_sensitive_data(payload):
+            if contains_sensitive_data(payload):
                 raise PickerSecurityError("候选包含敏感数据，已丢弃")
             snapshot = ElementSnapshot(
                 tag=payload["tag"],
@@ -388,20 +497,20 @@ class ElementPicker:
                 label=payload["label"],
                 visible_text=payload["visibleText"],
                 depth=payload["depth"],
-                capture_url=capture_url,
+                capture_url=sanitize_public_url(capture_url),
             )
             initial = build_candidate(snapshot)
             frame = source.get("frame") if isinstance(source, dict) else None
+            page = source.get("page") if isinstance(source, dict) else None
             if frame is None:
                 raise PickerSecurityError("候选来源无效")
             matches: dict[str, int] = {}
             for locator in initial.locators:
-                count = await _count_locator(frame, locator)
-                matches[f"{locator.type}:{locator.value}"] = count
+                matches[f"{locator.type}:{locator.value}"] = await _count_locator(frame, locator)
             candidate = build_candidate(snapshot.model_copy(update={"locator_matches": matches}))
-            if scan_for_sensitive_data(candidate.platform_payload()):
+            if contains_sensitive_data(candidate.platform_payload()):
                 raise PickerSecurityError("候选包含敏感数据，已丢弃")
-            screenshot_path = await self._screenshot(frame, element_handle)
+            screenshot_path = await self._screenshot(page or self._page, element_handle)
             return LocalCapture(str(uuid4()), candidate, screenshot_path)
         except PickerSecurityError:
             logger.warning("页面元素候选因安全边界被丢弃")
@@ -412,38 +521,83 @@ class ElementPicker:
         self._remove_empty_temp_dir()
 
     async def close(self) -> None:
-        for path in tuple(self._local_files):
+        await self._drain_binding_tasks()
+        for task in tuple(self._event_tasks):
+            task.cancel()
+        if self._event_tasks:
+            await asyncio.gather(*self._event_tasks, return_exceptions=True)
+        for path in tuple(self._local_files | self._retry_files):
             self._remove_file(path)
-        if self._session_temp_dir:
-            shutil.rmtree(self._session_temp_dir, ignore_errors=True)
-            self._session_temp_dir = None
+        self._remove_empty_temp_dir()
+        self._nonce = ""
+        self._callback = None
+        self._page = None
 
-    async def _screenshot(self, frame: Any, element_handle: Any) -> Path:
-        path = self._new_screenshot_path()
-        try:
-            await frame.evaluate(_MASK_SCRIPT, {"action": "mask"})
-            await element_handle.screenshot(path=str(path))
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+    async def _drain_binding_tasks(self) -> None:
+        current = asyncio.current_task()
+        pending = [task for task in self._binding_tasks if task is not current and not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _screenshot(self, page: Any, element_handle: Any) -> Path:
+        if page is None:
+            raise PickerSecurityError("候选页面来源无效")
+        async with self._screenshot_lock:
+            path = self._new_screenshot_path()
             self._local_files.add(path)
-            return path
-        except Exception:
-            self._remove_file(path)
-            self._remove_empty_temp_dir()
-            raise
-        finally:
-            await frame.evaluate(_MASK_SCRIPT, {"action": "unmask"})
+            try:
+                await element_handle.scroll_into_view_if_needed()
+                box = await element_handle.bounding_box()
+                if not isinstance(box, dict) or box.get("width", 0) <= 0 or box.get("height", 0) <= 0:
+                    raise PickerSecurityError("候选元素不可见")
+                masks = await self._sensitive_mask_locators(page)
+                await page.screenshot(
+                    path=str(path),
+                    clip={key: float(box[key]) for key in ("x", "y", "width", "height")},
+                    mask=masks,
+                    mask_color="#202124",
+                    animations="disabled",
+                )
+                if os.name != "nt":
+                    with contextlib.suppress(OSError):
+                        os.chmod(path, 0o600)
+                return path
+            except Exception:
+                self._remove_file(path)
+                self._remove_empty_temp_dir()
+                raise
+
+    async def _sensitive_mask_locators(self, page: Any) -> list[Any]:
+        masks: list[Any] = []
+        sensitive_child_frame = False
+        for frame in list(getattr(page, "frames", []) or []):
+            if not self._trusted_frame(frame):
+                continue
+            typed = frame.locator('input[type="password"], input[type="tel"]')
+            frame_has_sensitive = bool(await typed.count())
+            if frame_has_sensitive:
+                masks.append(typed)
+            inputs = frame.locator("input")
+            for index in range(min(await inputs.count(), 1000)):
+                item = inputs.nth(index)
+                if await item.evaluate(_SENSITIVE_INPUT_BOOLEAN):
+                    masks.append(item)
+                    frame_has_sensitive = True
+            if frame_has_sensitive and getattr(frame, "parent_frame", None) is not None:
+                sensitive_child_frame = True
+        if sensitive_child_frame:
+            # Chromium 对直接来自 Frame 的 mask locator 在部分版本中不会投影到主页面截图；
+            # 保守遮住 iframe 视口，避免同源 frame 内的敏感像素漏出。
+            masks.append(page.locator("iframe"))
+        return masks
 
     def _new_screenshot_path(self) -> Path:
         if self._session_temp_dir is None:
             parent = str(self._temp_root) if self._temp_root is not None else None
             self._session_temp_dir = Path(tempfile.mkdtemp(prefix="synapse-capture-", dir=parent))
-            try:
-                os.chmod(self._session_temp_dir, 0o700)
-            except OSError:
-                pass
+            if os.name != "nt":
+                with contextlib.suppress(OSError):
+                    os.chmod(self._session_temp_dir, 0o700)
         return self._session_temp_dir / f"{uuid4().hex}.png"
 
     def _remove_file(self, path: Path | None) -> None:
@@ -451,11 +605,14 @@ class ElementPicker:
             return
         try:
             path.unlink(missing_ok=True)
-        finally:
-            self._local_files.discard(path)
+        except OSError:
+            self._retry_files.add(path)
+            return
+        self._retry_files.discard(path)
+        self._local_files.discard(path)
 
     def _remove_empty_temp_dir(self) -> None:
-        if self._session_temp_dir and self._session_temp_dir.exists():
+        if self._session_temp_dir and self._session_temp_dir.exists() and not self._retry_files:
             try:
                 self._session_temp_dir.rmdir()
                 self._session_temp_dir = None
@@ -463,42 +620,24 @@ class ElementPicker:
                 pass
 
 
-def scan_for_sensitive_data(value: Any, key: str = "") -> bool:
-    normalized_key = _normalized_key(key)
-    if normalized_key in _FORBIDDEN_KEYS:
-        return True
-    if isinstance(value, dict):
-        locator_payload = (
-            "type" in value
-            and "value" in value
-            and set(value).issubset({"type", "value", "score", "unique", "matchCount"})
-        )
-        return any(
-            scan_for_sensitive_data(item, "locator_value" if locator_payload and item_key == "value" else str(item_key))
-            for item_key, item in value.items()
-        )
-    if isinstance(value, (list, tuple)):
-        return any(scan_for_sensitive_data(item, key) for item in value)
-    if not isinstance(value, str):
-        return False
-    text = " ".join(value.split())
-    if not text or (normalized_key == "type" and text.lower() in {"password", "tel"}):
-        return False
-    if normalized_key == "fingerprint" and re.fullmatch(r"[a-f0-9]{64}", text):
-        return False
-    return bool(
-        _SECRET_MARKER.search(text)
-        or _JWT.fullmatch(text)
-        or _COMMON_SECRET.fullmatch(text)
-        or _looks_high_entropy_token(text)
-    )
+scan_for_sensitive_data = contains_sensitive_data
+
+
+async def _handle_json_property(bundle_handle: Any, name: str, handles: list[Any]) -> Any:
+    handle = await bundle_handle.get_property(name)
+    handles.append(handle)
+    return await handle.json_value()
+
+
+async def _safe_handle_dispose(handle: Any) -> None:
+    if handle is None:
+        return
+    with contextlib.suppress(Exception):
+        await handle.dispose()
 
 
 def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise PickerSecurityError("候选字段结构无效")
-    unknown = {_normalized_key(key) for key in raw if key not in _ALLOWED_FIELDS}
-    if unknown:
+    if not isinstance(raw, dict) or set(raw) - _ALLOWED_FIELDS:
         raise PickerSecurityError("候选包含非允许字段")
     tag = str(raw.get("tag", "")).strip().lower()
     if not _TAG.fullmatch(tag):
@@ -509,8 +648,7 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
     attributes: dict[str, str] = {}
     for raw_key, raw_value in raw_attributes.items():
         key = str(raw_key).strip().lower()
-        normalized = _normalized_key(key)
-        if normalized in _FORBIDDEN_KEYS:
+        if normalize_key(key) in _FORBIDDEN_KEYS:
             raise PickerSecurityError("候选包含非允许字段")
         if key not in _ALLOWED_ATTRIBUTES:
             continue
@@ -525,7 +663,8 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
     depth = raw.get("depth", 0)
     if isinstance(depth, bool) or not isinstance(depth, int) or not 0 <= depth <= 256:
         raise PickerSecurityError("候选深度无效")
-    _validate_path(raw.get("path", []))
+    path = raw.get("path", [])
+    _validate_path(path)
     if not isinstance(raw.get("locatorMatches", {}), dict):
         raise PickerSecurityError("候选匹配数结构无效")
     return {
@@ -536,8 +675,7 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
         "visibleText": _safe_scalar(raw.get("visibleText", ""), 512),
         "role": role,
         "depth": depth,
-        "path": raw.get("path", []),
-        # 网页提供的匹配数仅属于入站 allowlist；可信 Python 会重新计算，不使用该值。
+        "path": path,
         "locatorMatches": {},
     }
 
@@ -590,17 +728,3 @@ async def _count_locator(frame: Any, locator: CaptureLocator) -> int:
 
 def _css_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _normalized_key(value: str) -> str:
-    return re.sub(r"[-_.:/\\\s]+", "_", str(value).strip().lower())
-
-
-def _looks_high_entropy_token(value: str) -> bool:
-    if len(value) < 24 or not re.fullmatch(r"[A-Za-z0-9_+/=-]+", value):
-        return False
-    entropy = -sum(
-        (value.count(char) / len(value)) * math.log2(value.count(char) / len(value))
-        for char in set(value)
-    )
-    return entropy >= 3.5

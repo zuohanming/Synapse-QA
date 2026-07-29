@@ -203,12 +203,13 @@ func (r *captureCandidateTestRepo) batchData(candidates []model.ElementCaptureCa
 func TestAddCandidatePassesTokenHashToProductionRepositoryBoundary(t *testing.T) {
 	service, repo := newCaptureCandidateTestService()
 	_, err := service.AddCandidate(context.Background(), "executor-1", "one-time-token", model.CaptureCandidateCreateRequest{
-		SessionID:    "session-1",
-		Name:         "submit",
-		Fingerprint:  testFingerprintA,
-		CaptureURL:   "https://example.test/login",
-		Locators:     reliableTestLocators,
-		QualityScore: 95,
+		SessionID:       "session-1",
+		ClientCaptureID: "550e8400-e29b-41d4-a716-446655440000",
+		Name:            "submit",
+		Fingerprint:     testFingerprintA,
+		CaptureURL:      "https://example.test/login",
+		Locators:        reliableTestLocators,
+		QualityScore:    95,
 	})
 	if err != nil {
 		t.Fatalf("AddCandidate 返回错误：%v", err)
@@ -242,12 +243,13 @@ func TestAddCandidateRejectsInvalidCreateRequestMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			service, repo := newCaptureCandidateTestService()
 			req := model.CaptureCandidateCreateRequest{
-				SessionID:    "session-1",
-				Name:         "submit",
-				Fingerprint:  testFingerprintA,
-				CaptureURL:   "https://example.test",
-				Locators:     reliableTestLocators,
-				QualityScore: 95,
+				SessionID:       "session-1",
+				ClientCaptureID: "550e8400-e29b-41d4-a716-446655440000",
+				Name:            "submit",
+				Fingerprint:     testFingerprintA,
+				CaptureURL:      "https://example.test",
+				Locators:        reliableTestLocators,
+				QualityScore:    95,
 			}
 			tt.mutate(&req)
 			_, err := service.AddCandidate(context.Background(), "executor-1", "token", req)
