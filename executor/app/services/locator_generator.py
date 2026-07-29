@@ -1,182 +1,287 @@
 import hashlib
 import json
+import math
 import re
+import unicodedata
+from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
 
 
-_DYNAMIC_TOKEN = re.compile(
-    r"(?:"
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-    r"|\b\d{10,13}\b"
-    r"|(?<!\d)\d{6,}(?!\d)"
-    r"|\b[a-f0-9]{12,}\b"
-    r"|^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$"
-    r")",
-    re.IGNORECASE,
-)
-_SENSITIVE_WORD = re.compile(r"password|token|secret|cookie|authorization|bearer", re.IGNORECASE)
-_SENSITIVE_ATTRIBUTE = re.compile(r"password|token|secret|cookie|authorization|value", re.IGNORECASE)
 _SCORES = {"testid": 95, "id": 90, "role": 85, "label": 82, "css": 70, "text": 60, "xpath": 40}
+_PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
+_SENSITIVE_KEYS = {
+    "password", "passwd", "token", "access_token", "refresh_token", "api_key", "apikey", "session", "cookie",
+    "authorization", "secret", "client_secret",
+}
+_SECRET_MARKER = re.compile(r"(?<![a-z0-9])(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|client[_ -]?secret|token|secret|cookie|authorization|bearer)(?![a-z0-9])", re.IGNORECASE)
+_JWT = re.compile(r"^eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{6,}$")
+_COMMON_SECRET = re.compile(r"^(?:(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[_-][A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{12,})$", re.IGNORECASE)
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+_CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
+_CSS_MODULE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z0-9_-]*[0-9A-Z][A-Za-z0-9_-]{3,}$")
+_REACT_ID = re.compile(r"^:r[0-9a-z]+:$", re.IGNORECASE)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_XPATH_SENSITIVE_ATTRIBUTE = re.compile(r"@\s*(?:value|password|passwd|token|access_token|refresh_token|api[-_]?key|apikey|session|cookie|authorization|secret|client_secret)\b", re.IGNORECASE)
+_CSS_SENSITIVE_ATTRIBUTE = re.compile(r"\[\s*(?:value|password|passwd|token|access_token|refresh_token|api[-_]?key|apikey|session|cookie|authorization|secret|client_secret)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _LocatorSeed:
+    strategy: str
+    locator_type: str
+    value: str
 
 
 def is_dynamic_token(value: str) -> bool:
-    """判断属性值是否明显包含随机或时变片段。"""
-    return bool(_DYNAMIC_TOKEN.search(value.strip()))
+    """按单个 token 判断随机、框架生成或时变标识，避免误杀业务日期。"""
+    token = value.strip()
+    if not token:
+        return False
+    if _UUID.fullmatch(token) or _REACT_ID.fullmatch(token) or _CSS_HASH.fullmatch(token) or _CSS_MODULE.fullmatch(token):
+        return True
+    digits = re.findall(r"\d+", token)
+    if any(len(part) in {10, 13} for part in digits):
+        return True
+    for part in digits:
+        if len(part) >= 6 and not (len(part) == 8 and part.startswith(("19", "20"))):
+            return True
+    if re.fullmatch(r"[a-f0-9]{12,}", token, re.IGNORECASE):
+        return True
+    return _looks_high_entropy_token(token)
 
 
 def score_locator(strategy: str, unique: bool, depth: int) -> int:
-    """按约定基线、唯一性和 DOM 深度计算 0..100 定位器质量分。"""
-    score = _SCORES.get(strategy, 0)
-    if not unique:
-        score -= 50
-    score -= max(depth - 5, 0) * 2
+    """基线评分减去非唯一性和过深 DOM 的惩罚，结果受限于 0..100。"""
+    score = _SCORES.get(strategy, 0) - (0 if unique else 50) - max(depth - 5, 0) * 2
     return max(0, min(100, score))
 
 
 def build_candidate(snapshot: ElementSnapshot) -> CaptureCandidate:
-    """从脱敏后的 DOM 快照生成至多三组稳定定位器和候选元数据。"""
-    attributes = {str(key).lower(): str(value).strip() for key, value in snapshot.attributes.items() if str(value).strip()}
-    has_sensitive_content = _snapshot_contains_sensitive_content(attributes, snapshot)
-    rejected_reasons: list[str] = []
-    candidates: list[tuple[str, str, str]] = []
-
-    testid = attributes.get("data-testid", "")
-    if _is_safe_token(testid):
-        candidates.append(("testid", "testid", testid))
-    elif testid:
-        rejected_reasons.append("已过滤动态或敏感 data-testid")
-
-    for key in sorted(attributes):
-        if not key.startswith("data-") or key == "data-testid":
-            continue
-        value = attributes[key]
-        if _is_sensitive_attribute(key) or not _is_safe_token(value):
-            rejected_reasons.append(f"已过滤不安全属性 {key}")
-            continue
-        candidates.append(("css", "css", f'[{key}="{value}"]'))
-
-    element_id = attributes.get("id", "")
-    if _is_safe_token(element_id):
-        candidates.append(("id", "id", element_id))
-    elif element_id:
-        rejected_reasons.append("已过滤动态或敏感 id")
-
-    accessible_name = "" if has_sensitive_content else _safe_text(snapshot.accessible_name)
-    label = "" if has_sensitive_content else _safe_text(snapshot.label)
-    visible_text = "" if has_sensitive_content else _safe_text(snapshot.visible_text)
-    role = attributes.get("role", "")
-    if role and accessible_name and _is_safe_token(role):
-        candidates.append(("role", "role", f'{role}[name="{accessible_name}"]'))
-    if label:
-        candidates.append(("label", "label", label))
-
-    css_selector = snapshot.css_selector.strip()
-    if css_selector and _is_safe_expression(css_selector):
-        candidates.append(("css", "css", css_selector))
-    else:
-        class_selector = _stable_class_selector(snapshot.tag, attributes.get("class", ""))
-        if class_selector:
-            candidates.append(("css", "css", class_selector))
-        elif css_selector:
-            rejected_reasons.append("已过滤动态或敏感 CSS")
-
-    if visible_text:
-        candidates.append(("text", "text", visible_text))
-    xpath = snapshot.xpath.strip()
-    if xpath and _is_safe_expression(xpath):
-        candidates.append(("xpath", "xpath", xpath))
-    elif xpath:
-        rejected_reasons.append("已过滤动态或敏感 XPath")
-
-    locators = _build_locators(candidates, snapshot)
-    fingerprint = _fingerprint(snapshot, attributes, accessible_name)
+    """从原始快照提取已脱敏的页面元素候选；无可靠定位器时拒绝生成。"""
+    attributes = _normalized_attributes(snapshot.attributes)
+    accessible_name = _safe_text(snapshot.accessible_name)
+    label = _safe_text(snapshot.label)
+    visible_text = _safe_text(snapshot.visible_text)
+    capture_url = _sanitize_capture_url(snapshot.capture_url)
+    seeds, rejected_reasons = _locator_seeds(snapshot, attributes, accessible_name, label, visible_text)
+    locators = _build_locators(seeds, snapshot)
+    if not locators:
+        raise ValueError("候选项缺少可靠定位器")
     name = accessible_name or label or visible_text or "未命名元素"
+    fingerprint = _fingerprint(snapshot.tag, attributes, accessible_name or label or visible_text)
     return CaptureCandidate(
         name=name,
         fingerprint=fingerprint,
-        capture_url=snapshot.capture_url,
-        tag_name=snapshot.tag.lower().strip(),
+        capture_url=capture_url,
+        tag_name=_normalize_text(snapshot.tag).lower(),
         accessible_name=accessible_name,
         locators=locators,
-        quality_score=max((locator.score for locator in locators), default=0),
+        quality_score=max(locator.score for locator in locators),
         rejected_reasons=sorted(set(rejected_reasons)),
     )
 
 
-def _build_locators(candidates: list[tuple[str, str, str]], snapshot: ElementSnapshot) -> list[CaptureLocator]:
-    locators: list[CaptureLocator] = []
-    seen: set[tuple[str, str]] = set()
-    for strategy, locator_type, value in candidates:
-        key = (locator_type, value)
-        if key in seen:
-            continue
-        seen.add(key)
-        count = _match_count(snapshot, strategy, value)
-        locators.append(
-            CaptureLocator(
-                type=locator_type,
-                value=value,
-                score=score_locator(strategy, unique=count == 1, depth=snapshot.depth),
-                unique=count == 1,
-                match_count=count,
-            )
+def _locator_seeds(
+    snapshot: ElementSnapshot, attributes: dict[str, str], accessible_name: str, label: str, visible_text: str,
+) -> tuple[list[_LocatorSeed], list[str]]:
+    seeds: list[_LocatorSeed] = []
+    rejected: list[str] = []
+    testid = attributes.get("data-testid", "")
+    if _is_safe_token(testid):
+        seeds.append(_LocatorSeed("testid", "testid", testid))
+    elif testid:
+        rejected.append("已过滤不安全定位器")
+    element_id = attributes.get("id", "")
+    if _is_safe_token(element_id):
+        seeds.append(_LocatorSeed("id", "id", element_id))
+    elif element_id:
+        rejected.append("已过滤不安全定位器")
+    role = attributes.get("role", "")
+    if accessible_name and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", role or ""):
+        seeds.append(_LocatorSeed("role", "role", f"{role}[name={json.dumps(accessible_name, ensure_ascii=False)}]"))
+    if label:
+        seeds.append(_LocatorSeed("label", "label", label))
+    for key in sorted(attributes):
+        value = attributes[key]
+        if key.startswith("data-") and key != "data-testid" and _is_safe_token(value):
+            seeds.append(_LocatorSeed("css", "css", f"[{_css_escape_identifier(key)}={_css_string(value)}]"))
+    css_selector = snapshot.css_selector.strip()
+    if css_selector:
+        if _is_safe_css(css_selector):
+            seeds.append(_LocatorSeed("css", "css", css_selector))
+        else:
+            rejected.append("已过滤不安全定位器")
+    class_selector = _stable_class_selector(snapshot.tag, attributes.get("class", ""))
+    if class_selector:
+        seeds.append(_LocatorSeed("css", "css", class_selector))
+    if visible_text:
+        seeds.append(_LocatorSeed("text", "text", visible_text))
+    xpath = snapshot.xpath.strip()
+    if xpath:
+        if _is_safe_xpath(xpath):
+            seeds.append(_LocatorSeed("xpath", "xpath", xpath))
+        else:
+            rejected.append("已过滤不安全定位器")
+    return seeds, rejected
+
+
+def _build_locators(seeds: list[_LocatorSeed], snapshot: ElementSnapshot) -> list[CaptureLocator]:
+    deduplicated: dict[tuple[str, str], _LocatorSeed] = {}
+    for seed in seeds:
+        deduplicated.setdefault((seed.locator_type, seed.value), seed)
+    locators: list[tuple[int, CaptureLocator]] = []
+    for seed in deduplicated.values():
+        count = _match_count(snapshot, seed.strategy, seed.value)
+        unique = count == 1
+        locator = CaptureLocator(
+            type=seed.locator_type,
+            value=seed.value,
+            score=score_locator(seed.strategy, unique, snapshot.depth),
+            unique=unique,
+            match_count=count,
         )
-        if len(locators) == 3:
-            break
-    return locators
+        locators.append((_PRIORITY[seed.strategy], locator))
+    locators.sort(key=lambda item: (item[0], -item[1].score, item[1].type, item[1].value))
+    return [locator for _, locator in locators[:3]]
 
 
-def _match_count(snapshot: ElementSnapshot, strategy: str, value: str) -> int:
-    value_key = f"{strategy}:{value}"
-    raw = snapshot.locator_matches.get(value_key, snapshot.locator_matches.get(value, 1))
+def _match_count(snapshot: ElementSnapshot, strategy: str, value: str) -> int | None:
+    raw = snapshot.locator_matches.get(f"{strategy}:{value}", snapshot.locator_matches.get(value))
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return None
+    return raw
+
+
+def _normalized_attributes(raw_attributes: dict[str, object]) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for raw_key, raw_value in raw_attributes.items():
+        key = _normalize_text(str(raw_key)).lower()
+        value = _normalize_text(str(raw_value))
+        if not key or not value or _is_sensitive_key(key) or _contains_secret(value):
+            continue
+        attributes[key] = value
+    return attributes
+
+
+def _fingerprint(tag: str, attributes: dict[str, str], name: str) -> str:
+    stable_attributes: dict[str, str] = {}
+    for key, value in attributes.items():
+        if key == "class":
+            classes = sorted({_normalize_text(part) for part in value.split() if _is_safe_token(part)})
+            if classes:
+                stable_attributes[key] = " ".join(classes)
+        elif _is_safe_token(value):
+            stable_attributes[key] = value
+    canonical = {
+        "tag": _normalize_text(tag).lower(),
+        "attributes": dict(sorted(stable_attributes.items())),
+        "name": _normalize_text(name),
+    }
+    serialized = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _sanitize_capture_url(value: str) -> str:
+    if not value:
+        return ""
+    if _CONTROL.search(value) or "%00" in value.lower():
+        raise ValueError("采集 URL 包含不安全字符")
     try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return 1
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("采集 URL 无效") from error
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise ValueError("采集 URL 必须是 HTTP(S) 地址")
+    if port is not None and not 0 < port < 65536:
+        raise ValueError("采集 URL 端口无效")
+    netloc = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    query = [(key, item) for key, item in parse_qsl(parsed.query, keep_blank_values=True) if not _is_sensitive_key(key)]
+    return urlunsplit((parsed.scheme, netloc, parsed.path or "/", urlencode(query, doseq=True), ""))
 
 
-def _fingerprint(snapshot: ElementSnapshot, attributes: dict[str, str], accessible_name: str) -> str:
-    stable_attributes = {
-        key: value
-        for key, value in attributes.items()
-        if not _is_sensitive_attribute(key) and _is_safe_token(value)
-    }
-    payload = {
-        "tag": snapshot.tag.lower().strip(),
-        "attributes": stable_attributes,
-        "accessibleName": accessible_name,
-    }
-    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+def _is_safe_css(value: str) -> bool:
+    if len(value) > 240 or _CONTROL.search(value) or _contains_secret(value) or _CSS_SENSITIVE_ATTRIBUTE.search(value):
+        return False
+    return not any(is_dynamic_token(token) for token in re.findall(r"[A-Za-z_][A-Za-z0-9_-]*|:[A-Za-z0-9]+:", value))
 
 
-def _snapshot_contains_sensitive_content(attributes: dict[str, str], snapshot: ElementSnapshot) -> bool:
-    if any(_is_sensitive_attribute(key) or _SENSITIVE_WORD.search(value) for key, value in attributes.items()):
+def _is_safe_xpath(value: str) -> bool:
+    if len(value) > 240 or _CONTROL.search(value) or _contains_secret(value) or _XPATH_SENSITIVE_ATTRIBUTE.search(value):
+        return False
+    literals = re.findall(r"(['\"])(.*?)\1", value)
+    return not any(_contains_secret(literal) or is_dynamic_token(literal) for _, literal in literals)
+
+
+def _is_sensitive_key(value: str) -> bool:
+    key = _normalize_text(value).lower()
+    canonical = key.replace("-", "_").replace(".", "_")
+    if canonical in _SENSITIVE_KEYS:
         return True
-    return any(_SENSITIVE_WORD.search(value) for value in (snapshot.accessible_name, snapshot.label, snapshot.visible_text))
+    parts = [part for part in re.split(r"[-_.:/\\\s]+", key) if part]
+    return any(part in _SENSITIVE_KEYS for part in parts)
+
+
+def _contains_secret(value: str) -> bool:
+    normalized = _normalize_text(value)
+    return bool(_SECRET_MARKER.search(normalized) or _JWT.fullmatch(normalized) or _COMMON_SECRET.fullmatch(normalized) or _looks_high_entropy_token(normalized))
 
 
 def _is_safe_token(value: str) -> bool:
-    return bool(value) and not _SENSITIVE_WORD.search(value) and not is_dynamic_token(value)
-
-
-def _is_safe_expression(value: str) -> bool:
-    if not _is_safe_token(value) or len(value) > 240:
-        return False
-    return not any(is_dynamic_token(token) for token in re.findall(r"[A-Za-z0-9_-]+", value))
-
-
-def _is_sensitive_attribute(key: str) -> bool:
-    return bool(_SENSITIVE_ATTRIBUTE.search(key))
+    return bool(value) and not _CONTROL.search(value) and not _contains_secret(value) and not is_dynamic_token(value)
 
 
 def _safe_text(value: str) -> str:
-    return value.strip() if value.strip() and not _SENSITIVE_WORD.search(value) else ""
+    normalized = _normalize_text(value)
+    return normalized if normalized and not _contains_secret(normalized) and not _CONTROL.search(normalized) else ""
 
 
 def _stable_class_selector(tag: str, classes: str) -> str:
-    stable_classes = [token for token in classes.split() if _is_safe_token(token)]
+    stable_classes = sorted({_normalize_text(token) for token in classes.split() if _is_safe_token(token)})
     if not stable_classes:
         return ""
-    return f"{tag.lower().strip()}" + "".join(f".{token}" for token in sorted(set(stable_classes)))
+    return _css_escape_identifier(_normalize_text(tag).lower()) + "".join(f".{_css_escape_identifier(token)}" for token in stable_classes)
+
+
+def _css_string(value: str) -> str:
+    escaped = []
+    for char in value:
+        code = ord(char)
+        if char in {'"', "\\"}:
+            escaped.append(f"\\{char}")
+        elif code < 32 or code == 127:
+            escaped.append(f"\\{code:x} ")
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+def _css_escape_identifier(value: str) -> str:
+    escaped = []
+    for index, char in enumerate(value):
+        code = ord(char)
+        if code == 0:
+            escaped.append("\ufffd")
+        elif code < 32 or code == 127 or (index == 0 and char.isdigit()) or (index == 1 and value[0] == "-" and char.isdigit()):
+            escaped.append(f"\\{code:x} ")
+        elif char.isalnum() or char in {"-", "_"} or code >= 128:
+            escaped.append(char)
+        else:
+            escaped.append(f"\\{char}")
+    return "".join(escaped)
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFC", value).split())
+
+
+def _looks_high_entropy_token(value: str) -> bool:
+    if len(value) < 24 or not re.fullmatch(r"[A-Za-z0-9_+/=-]+", value):
+        return False
+    entropy = -sum((value.count(char) / len(value)) * math.log2(value.count(char) / len(value)) for char in set(value))
+    return entropy >= 3.5
