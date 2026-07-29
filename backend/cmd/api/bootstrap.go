@@ -663,12 +663,15 @@ func elementCaptureMigrationStatements() []string {
 			if exists(select 1 from page_elements where deleted_at is null group by page_id, lower(name) having count(*) > 1) then
 				raise exception 'migration blocked: duplicate active page element names';
 			end if;
-			if exists(select 1 from page_elements where deleted_at is null and fingerprint <> '' group by page_id, fingerprint having count(*) > 1) then
-				raise exception 'migration blocked: duplicate active page element fingerprints';
-			end if;
 		end $$`,
 		`create unique index if not exists uq_page_elements_active_name on page_elements(page_id, lower(name)) where deleted_at is null`,
-		`create unique index if not exists uq_page_elements_active_fingerprint on page_elements(page_id, fingerprint) where deleted_at is null and fingerprint <> ''`,
+		`drop index if exists uq_page_elements_active_fingerprint`,
+		`do $$
+		begin
+			if exists(select 1 from pg_constraint where conrelid='element_capture_candidates'::regclass and conname='element_capture_candidates_cursor_id_key' and contype='u') then
+				alter table element_capture_candidates drop constraint element_capture_candidates_cursor_id_key;
+			end if;
+		end $$`,
 		`create unique index if not exists uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
 		`drop index if exists uq_element_capture_sessions_active_executor`,
 		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,

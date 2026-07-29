@@ -117,5 +117,5 @@ type CaptureBatchData struct {
 	Session              ElementCaptureSession
 	Candidates           []ElementCaptureCandidate
 	ExistingNames        map[string][]int64
-	ExistingFingerprints map[string]int64
+	ExistingFingerprints map[string][]int64
 }

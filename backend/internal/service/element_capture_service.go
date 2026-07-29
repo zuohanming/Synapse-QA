@@ -376,12 +376,9 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 			}
 			updateTargets[candidate.DuplicateElementID] = true
 		}
-		if currentID, duplicate := data.ExistingFingerprints[candidate.Fingerprint]; duplicate {
-			if item.Resolution == "create" {
-				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "resolution", Message: "当前指纹已存在元素，不能新建"})
-			}
-			if item.Resolution == "update" && candidate.DuplicateElementID != currentID {
-				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "更新目标不是当前重复元素"})
+		if targets := data.ExistingFingerprints[candidate.Fingerprint]; len(targets) > 0 {
+			if item.Resolution == "update" && len(targets) > 1 && !containsElementID(targets, candidate.DuplicateElementID) {
+				issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前指纹对应多个元素，必须选择更新目标"})
 			}
 		} else if item.Resolution == "update" {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "duplicateElementId", Message: "当前不存在可更新的重复元素"})
@@ -402,6 +399,15 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		names[name] = true
 	}
 	return issues
+}
+
+func containsElementID(ids []int64, wanted int64) bool {
+	for _, id := range ids {
+		if id == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCandidateForSave(candidate model.ElementCaptureCandidate, item model.CandidateSaveItem) []model.CandidateIssue {
@@ -435,9 +441,6 @@ func validateCandidateForSave(candidate model.ElementCaptureCandidate, item mode
 	}
 	if candidate.ConflictStatus == "duplicate" && item.Resolution == "" {
 		issue("resolution", "重复候选项必须明确处理方式")
-	}
-	if item.Resolution == "update" && candidate.DuplicateElementID == 0 {
-		issue("duplicateElementId", "更新必须指定重复元素")
 	}
 	return issues
 }

@@ -10,9 +10,8 @@ func TestElementCaptureMigrationDefinesActiveElementUniqueness(t *testing.T) {
 	joined := strings.Join(statements, "\n")
 	for _, want := range []string{
 		"duplicate active page element names",
-		"duplicate active page element fingerprints",
 		"uq_page_elements_active_name",
-		"uq_page_elements_active_fingerprint",
+		"drop index if exists uq_page_elements_active_fingerprint",
 		"uq_element_capture_candidates_cursor_id",
 	} {
 		if !strings.Contains(joined, want) {

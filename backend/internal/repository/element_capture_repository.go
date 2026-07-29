@@ -285,7 +285,7 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, session
 	}
 	defer nameRows.Close()
 	data.ExistingNames = map[string][]int64{}
-	data.ExistingFingerprints = map[string]int64{}
+	data.ExistingFingerprints = map[string][]int64{}
 	for nameRows.Next() {
 		var id int64
 		var name, fingerprint string
@@ -294,7 +294,7 @@ func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, session
 		}
 		data.ExistingNames[name] = append(data.ExistingNames[name], id)
 		if fingerprint != "" {
-			data.ExistingFingerprints[fingerprint] = id
+			data.ExistingFingerprints[fingerprint] = append(data.ExistingFingerprints[fingerprint], id)
 		}
 	}
 	return data, nameRows.Err()
@@ -328,7 +328,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 	if err != nil {
 		return model.BatchSaveResult{}, err
 	}
-	locked := model.CaptureBatchData{Session: model.ElementCaptureSession{ID: req.SessionID, PageID: pageID, Status: sessionStatus}, ExistingNames: map[string][]int64{}, ExistingFingerprints: map[string]int64{}}
+	locked := model.CaptureBatchData{Session: model.ElementCaptureSession{ID: req.SessionID, PageID: pageID, Status: sessionStatus}, ExistingNames: map[string][]int64{}, ExistingFingerprints: map[string][]int64{}}
 	for currentRows.Next() {
 		var candidate model.ElementCaptureCandidate
 		if err = currentRows.Scan(&candidate.ID, &candidate.CursorID, &candidate.SessionID, &candidate.Name, &candidate.Fingerprint, &candidate.CaptureURL, &candidate.TagName, &candidate.AccessibleName, &candidate.Locators, &candidate.QualityScore, &candidate.DuplicateElementID, &candidate.DuplicateElementPageID, &candidate.ConflictStatus, &candidate.ConflictResolution, &candidate.Status, &candidate.ExpiresAt); err != nil {
@@ -356,11 +356,23 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		}
 		locked.ExistingNames[name] = append(locked.ExistingNames[name], id)
 		if fingerprint != "" {
-			locked.ExistingFingerprints[fingerprint] = id
+			locked.ExistingFingerprints[fingerprint] = append(locked.ExistingFingerprints[fingerprint], id)
 		}
 	}
 	if err = nameRows.Close(); err != nil {
 		return model.BatchSaveResult{}, err
+	}
+	for _, item := range req.Items {
+		if item.Resolution != "update" {
+			continue
+		}
+		for candidateIndex := range locked.Candidates {
+			candidate := &locked.Candidates[candidateIndex]
+			if candidate.CursorID == item.CandidateID && len(locked.ExistingFingerprints[candidate.Fingerprint]) == 1 {
+				candidate.DuplicateElementID = locked.ExistingFingerprints[candidate.Fingerprint][0]
+				candidate.DuplicateElementPageID = pageID
+			}
+		}
 	}
 	if err = validate(locked); err != nil {
 		return model.BatchSaveResult{}, err
@@ -393,7 +405,7 @@ func (r *ElementCaptureRepository) SaveCandidates(ctx context.Context, actor str
 		elementID, version, err := saveCapturedElement(ctx, tx, pageID, actor, candidate, resolution)
 		if err != nil {
 			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_page_elements_active_name" {
 				return result, fmt.Errorf("候选项 %d：页面元素名称或指纹冲突", candidate.CursorID)
 			}
 			return result, err
