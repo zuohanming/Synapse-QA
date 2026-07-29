@@ -39,22 +39,33 @@ type UIAssetFilter struct {
 }
 
 type PageElement struct {
-	ID        int64     `json:"id"`
-	PageID    int64     `json:"pageId"`
-	Name      string    `json:"name"`
-	Type1     string    `json:"type1"`
-	Locator1  string    `json:"locator1"`
-	Index1    string    `json:"index1"`
-	Type2     string    `json:"type2"`
-	Locator2  string    `json:"locator2"`
-	Index2    string    `json:"index2"`
-	Type3     string    `json:"type3"`
-	Locator3  string    `json:"locator3"`
-	Index3    string    `json:"index3"`
-	AIPrompt  string    `json:"aiPrompt"`
-	WaitTime  string    `json:"waitTime"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID                 int64      `json:"id"`
+	PageID             int64      `json:"pageId"`
+	Name               string     `json:"name"`
+	Type1              string     `json:"type1"`
+	Locator1           string     `json:"locator1"`
+	Index1             string     `json:"index1"`
+	Type2              string     `json:"type2"`
+	Locator2           string     `json:"locator2"`
+	Index2             string     `json:"index2"`
+	Type3              string     `json:"type3"`
+	Locator3           string     `json:"locator3"`
+	Index3             string     `json:"index3"`
+	AIPrompt           string     `json:"aiPrompt"`
+	WaitTime           string     `json:"waitTime"`
+	Fingerprint        string     `json:"fingerprint"`
+	CaptureSource      string     `json:"captureSource"`
+	CaptureURL         string     `json:"captureUrl"`
+	TagName            string     `json:"tagName"`
+	AccessibleName     string     `json:"accessibleName"`
+	QualityScore       float64    `json:"qualityScore"`
+	CapturedBy         string     `json:"capturedBy"`
+	CapturedAt         *time.Time `json:"capturedAt"`
+	LastVerifiedAt     *time.Time `json:"lastVerifiedAt"`
+	VerificationStatus string     `json:"verificationStatus"`
+	CurrentVersion     int        `json:"currentVersion"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 type PageElementRequest struct {
