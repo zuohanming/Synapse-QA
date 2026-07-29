@@ -32,6 +32,9 @@ export async function request(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.error || "请求失败");
     error.status = response.status;
+    if (response.status === 409 && Array.isArray(payload.data?.issues)) {
+      error.data = { issues: payload.data.issues };
+    }
     throw error;
   }
 
