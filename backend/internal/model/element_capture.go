@@ -33,26 +33,32 @@ type ElementCaptureSessionDetail struct {
 	ElementCaptureSession
 }
 
+type ElementCaptureTarget struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 type ElementCaptureCandidate struct {
-	ID                     string          `json:"id"`
-	CursorID               int64           `json:"cursorId"`
-	SessionID              string          `json:"sessionId"`
-	ClientCaptureID        string          `json:"clientCaptureId"`
-	Name                   string          `json:"name"`
-	Fingerprint            string          `json:"fingerprint"`
-	CaptureURL             string          `json:"captureUrl"`
-	TagName                string          `json:"tagName"`
-	AccessibleName         string          `json:"accessibleName"`
-	Locators               json.RawMessage `json:"locators"`
-	QualityScore           float64         `json:"qualityScore"`
-	DuplicateElementID     int64           `json:"duplicateElementId"`
-	DuplicateElementPageID int64           `json:"-"`
-	ConflictStatus         string          `json:"conflictStatus"`
-	ConflictResolution     string          `json:"conflictResolution"`
-	Status                 string          `json:"status"`
-	ExpiresAt              time.Time       `json:"expiresAt"`
-	CandidateCount         int             `json:"candidateCount,omitempty"`
-	Warning                string          `json:"warning,omitempty"`
+	ID                     string                 `json:"id"`
+	CursorID               int64                  `json:"cursorId"`
+	SessionID              string                 `json:"sessionId"`
+	ClientCaptureID        string                 `json:"clientCaptureId"`
+	Name                   string                 `json:"name"`
+	Fingerprint            string                 `json:"fingerprint"`
+	CaptureURL             string                 `json:"captureUrl"`
+	TagName                string                 `json:"tagName"`
+	AccessibleName         string                 `json:"accessibleName"`
+	Locators               json.RawMessage        `json:"locators"`
+	QualityScore           float64                `json:"qualityScore"`
+	DuplicateElementID     int64                  `json:"duplicateElementId"`
+	ConflictTargets        []ElementCaptureTarget `json:"conflictTargets"`
+	DuplicateElementPageID int64                  `json:"-"`
+	ConflictStatus         string                 `json:"conflictStatus"`
+	ConflictResolution     string                 `json:"conflictResolution"`
+	Status                 string                 `json:"status"`
+	ExpiresAt              time.Time              `json:"expiresAt"`
+	CandidateCount         int                    `json:"candidateCount,omitempty"`
+	Warning                string                 `json:"warning,omitempty"`
 }
 
 type PageElementVersion struct {

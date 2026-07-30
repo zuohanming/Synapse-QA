@@ -29,6 +29,10 @@ func TestElementCaptureModelsExposeRecoveryBrowserAndCandidateReviewData(t *test
 			Name:               "提交",
 			CaptureURL:         "https://example.test/login",
 			DuplicateElementID: 8,
+			ConflictTargets: []ElementCaptureTarget{
+				{ID: 8, Name: "提交按钮"},
+				{ID: 9, Name: "提交副本"},
+			},
 			ConflictStatus:     "pending",
 			ConflictResolution: "replace",
 		},
@@ -42,6 +46,7 @@ func TestElementCaptureModelsExposeRecoveryBrowserAndCandidateReviewData(t *test
 		`"name":"提交"`,
 		`"captureUrl":"https://example.test/login"`,
 		`"duplicateElementId":8`,
+		`"conflictTargets":[{"id":8,"name":"提交按钮"},{"id":9,"name":"提交副本"}]`,
 		`"conflictStatus":"pending"`,
 		`"conflictResolution":"replace"`,
 	} {

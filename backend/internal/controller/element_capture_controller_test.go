@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -118,6 +119,30 @@ func TestElementCaptureCandidatesRequireReadPermissionAndDisableCaching(t *testi
 	response := performCaptureJSON(allowed, http.MethodGet, "/api/ui/page-elements/capture-sessions/session-1/candidates", "")
 	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("status=%d cache=%q", response.Code, response.Header().Get("Cache-Control"))
+	}
+}
+
+func TestElementCaptureCandidatesExposeConflictTargetIDsAndNames(t *testing.T) {
+	stub := &captureControllerServiceStub{candidates: []model.ElementCaptureCandidate{{
+		CursorID: 1,
+		ConflictTargets: []model.ElementCaptureTarget{
+			{ID: 42, Name: "提交按钮"},
+			{ID: 43, Name: "提交副本"},
+		},
+	}}}
+	router := captureTestRouter(model.Claims{Permissions: []string{"ui.element.read"}}, stub)
+	response := performCaptureJSON(router, http.MethodGet, "/api/ui/page-elements/capture-sessions/session-1/candidates", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data []model.ElementCaptureCandidate `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应 JSON 无效：%v", err)
+	}
+	if len(payload.Data) != 1 || len(payload.Data[0].ConflictTargets) != 2 || payload.Data[0].ConflictTargets[1].Name != "提交副本" {
+		t.Fatalf("控制器响应丢失冲突目标：%s", response.Body.String())
 	}
 }
 

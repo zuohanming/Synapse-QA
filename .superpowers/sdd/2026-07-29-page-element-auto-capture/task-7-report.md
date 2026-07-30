@@ -21,18 +21,18 @@
 ### API 差异记录
 
 - 当前 `httpClient` 只保留错误 message/status，无法读取 Controller 的 409 `{ data: { issues } }`；Task 7 将最小扩展为 `error.data = payload.data`，继续复用统一鉴权与 401 行为。
-- 当前候选响应只暴露单个 `duplicateElementId`，后端批量预检却支持同指纹多目标。Drawer 会兼容未来的 `conflictTargetIds` / `duplicateElementIds`，并完整实现多目标选择与 `targetElementId` 保存协议；在现有 DTO 下只能呈现单个目标。此处不越界修改 Task 4 后端。
+- 第二轮评审后已补齐真实 `conflictTargets: [{ id, name }]` 契约；Repository 的新增候选、幂等回传和列表查询均返回当前全部同指纹活动目标。Drawer 只消费该真实字段，不再兼容未落地的替代字段。
 - 当前后端 `PATCH mode` 路由要求 `ui.element.manage`，与设计中采集权限的描述不同；前端按真实 API 调用并展示失败，不绕过权限。
 
 ## UI 状态机
 
 ### Launcher
 
-`idle → submitting → started`；失败回到 `idle` 并保留执行器与 channel。只有 `status=online` 且 `supportedTypes` 含 `ui` 或 `browser` 的执行器可选。URL 在进入 UI 与提交时都收敛为 HTTP(S) `origin + pathname`，不保存/显示 query、fragment 或 credentials。
+`idle → submitting → started`；失败回到 `idle` 并保留执行器与 channel。只有 `status=online` 且 `supportedTypes` 含 `ui` 的执行器可选。URL 在进入 UI 与提交时都收敛为 HTTP(S) `origin + pathname`，不保存/显示 query、fragment 或 credentials。
 
 ### Drawer
 
-会话状态沿用后端 `starting → active ↔ interrupted → completed | expired | failed`。`starting/active/interrupted` 使用递归短轮询；正常间隔 2 秒，网络失败按 2/4/8/16/30 秒退避，保留已有候选；终态、停止、切换 session、关闭和卸载会 Abort 并停止调度。每轮携带 generation/session 检查，旧响应不可写入新会话。
+会话状态沿用后端 `starting → active ↔ interrupted → completed | expired | failed`。活动状态使用 2 秒递归短轮询；网络/5xx 按 2/4/8/16/30 秒退避，401/403/404/业务错误停止自动重试并给出明确提示。终态仍按 100 项分页拉取至短页或服务端总数耗尽；切换 session、关闭和卸载会 Abort。每轮携带 generation/session 与 mode 操作版本检查，旧响应不可写入新会话或覆盖用户刚完成的模式切换。
 
 候选以 `cursorId` 去重并升序合并。审核状态分离为：
 
@@ -42,7 +42,7 @@
 - 字段 issues：本地门禁、PATCH 失败或后端 409；
 - dirty 集：名称/冲突/目标修改及未保存选择，用于关闭确认。
 
-保存成功后移除后端返回的 saved/ignored 候选并调用 `onSaved`；409 聚焦第一条问题候选。停止会话只改变会话状态，不清除草稿或选择。
+保存成功前会严格核对 saved/ignored ID 与本次提交集合、决策类型完全一致；缺失、未知、重复或分类错误均保留候选与选择并显示错误。409 聚焦第一条问题候选。停止会话只改变会话状态，不清除草稿或选择。
 
 ## 紧凑设计 token 自检
 
@@ -73,7 +73,21 @@
 
 ## 残余风险
 
-- Task 4 当前候选响应只提供单个 `duplicateElementId`，没有把锁后 `ExistingFingerprints` 多目标集合暴露给前端。Drawer 已兼容 `conflictTargetIds` / `duplicateElementIds` 并实现完整多目标交互，但真实环境在后端 DTO 扩展前无法让用户看到多个可选目标；后端仍会以 409 `targetElementId` issue 阻止不明确更新。
+- 已解决首轮多目标契约风险：候选响应现在提供真实 `conflictTargets`，前端只依赖该字段并显示目标名称与 ID。
 - Task 4 当前模式切换路由要求 `ui.element.manage`，与设计中 `ui.element.capture` 可操作模式的权限描述不一致。前端遵循真实 API，权限不足会回滚 UI 并显示错误。
 - 本任务按边界未集成 `UIAutomationPage`；实际页面入口、组件联动和浏览器端 E2E 属于 Task 8。
 - Vite build 保留仓库既有的单 chunk 超过 500 kB 提示；本任务没有引入新依赖或改动打包策略。
+
+## 第二轮集中修复验证
+
+### RED
+
+- 后端聚焦命令 `go test ./internal/model ./internal/repository ./internal/service ./internal/controller` 因缺少 `ElementCaptureTarget/ConflictTargets` 在四个包编译失败。
+- 前端聚焦命令初次为 `3 failed / 14 failed / 16 passed`，失败项覆盖 UI-only 执行器、严格整数与批量参数、ignore 门禁、400/500 终态分页、首退避 2 秒、错误分类、mode 竞态和保存结果完整性。
+
+### GREEN
+
+- 后端聚焦四包通过；全量 `go test ./... -count=1` 与 `go vet ./...` 通过。
+- 前端聚焦 `3 passed / 31 tests passed`；全量 `13 passed / 74 tests passed`。
+- Vite production build 完成 1613 modules transformed 并退出码为 0；仅保留仓库既有的单 chunk 超过 500 kB 提示。
+- `git diff --check` 通过。

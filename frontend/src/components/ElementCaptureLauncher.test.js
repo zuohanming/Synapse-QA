@@ -33,12 +33,12 @@ describe("ElementCaptureLauncher", () => {
     vi.restoreAllMocks();
   });
 
-  it("只呈现在线 UI/浏览器执行器并隐藏 URL 敏感部分", () => {
+  it("只呈现在线且声明 UI 能力的执行器并隐藏 URL 敏感部分", () => {
     render(<ElementCaptureLauncher pageRow={pageRow} executors={executors} />);
 
     expect(screen.getByRole("dialog", { name: "启动页面元素采集" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /北京 UI 执行器/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /浏览器执行器/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /浏览器执行器/ })).not.toBeInTheDocument();
     expect(screen.queryByText("离线执行器")).not.toBeInTheDocument();
     expect(screen.queryByText("接口执行器")).not.toBeInTheDocument();
     expect(screen.getByText("https://example.test/login")).toBeInTheDocument();
@@ -94,12 +94,11 @@ describe("ElementCaptureLauncher", () => {
     elementCaptureService.create.mockRejectedValue(new Error("执行器正在采集页面元素"));
     render(<ElementCaptureLauncher pageRow={pageRow} executors={executors} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /浏览器执行器/ }));
     fireEvent.click(screen.getByRole("button", { name: "Microsoft Edge" }));
     fireEvent.click(screen.getByRole("button", { name: "启动有头采集" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("执行器正在采集页面元素");
-    expect(screen.getByRole("button", { name: /浏览器执行器/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /北京 UI 执行器/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Microsoft Edge" })).toHaveAttribute("aria-pressed", "true");
   });
 

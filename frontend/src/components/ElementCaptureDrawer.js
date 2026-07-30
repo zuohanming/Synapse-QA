@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { elementCaptureService } from "../services/elementCaptureService.js";
 
 const terminalStatuses = new Set(["completed", "expired", "failed"]);
+const savableStatuses = new Set(["active", "completed"]);
+const candidatePageLimit = 100;
 const focusableSelector = [
   "button:not([disabled])",
   "a[href]",
@@ -38,22 +40,24 @@ function parseLocators(raw) {
   }
 }
 
-function uniqueTargetIDs(candidate) {
-  const source = candidate?.conflictTargetIds
-    || candidate?.duplicateElementIds
-    || candidate?.conflictTargets?.map((item) => item.id)
-    || [];
-  const values = [...source];
-  if (candidate?.duplicateElementId) values.push(candidate.duplicateElementId);
-  return [...new Set(values.map(Number).filter((value) => value > 0))].sort((left, right) => left - right);
+function safeConflictTargets(candidate) {
+  const source = Array.isArray(candidate?.conflictTargets) ? candidate.conflictTargets : [];
+  const targets = new Map();
+  source.forEach((item) => {
+    const id = Number(item?.id || 0);
+    if (Number.isSafeInteger(id) && id > 0) {
+      targets.set(id, { id, name: String(item?.name || "") });
+    }
+  });
+  return [...targets.values()].sort((left, right) => left.id - right.id);
 }
 
 function safeCandidate(candidate) {
   const cursorId = Number(candidate?.cursorId || candidate?.candidateId || 0);
-  const conflictTargetIds = uniqueTargetIDs(candidate);
+  const conflictTargets = safeConflictTargets(candidate);
   const conflictResolution = candidate?.conflictResolution || "";
   const defaultTarget = Number(candidate?.targetElementId || 0)
-    || (conflictResolution === "update" && conflictTargetIds.length === 1 ? conflictTargetIds[0] : 0);
+    || (conflictResolution === "update" && conflictTargets.length === 1 ? conflictTargets[0].id : 0);
   return {
     cursorId,
     name: String(candidate?.name || ""),
@@ -62,8 +66,7 @@ function safeCandidate(candidate) {
     accessibleName: String(candidate?.accessibleName || ""),
     locators: parseLocators(candidate?.locators),
     qualityScore: Number(candidate?.qualityScore || 0),
-    duplicateElementId: Number(candidate?.duplicateElementId || 0),
-    conflictTargetIds,
+    conflictTargets,
     conflictStatus: String(candidate?.conflictStatus || ""),
     conflictResolution,
     serverConflictResolution: String(candidate?.serverConflictResolution ?? conflictResolution),
@@ -89,7 +92,22 @@ export function mergeCaptureCandidates(current, incoming) {
 }
 
 export function getPollDelay(failureCount) {
-  return Math.min(30000, 2000 * (2 ** Math.max(0, Number(failureCount) || 0)));
+  return Math.min(30000, 2000 * (2 ** Math.max(0, (Number(failureCount) || 0) - 1)));
+}
+
+export function shouldContinueCandidatePaging(pageLength, loadedCount, totalCount, limit = candidatePageLimit) {
+  if (pageLength < limit) return false;
+  return !(totalCount > 0 && loadedCount >= totalCount);
+}
+
+export function classifyPollError(error) {
+  const status = Number(error?.status || 0);
+  const retryable = status === 0 || status >= 500;
+  if (retryable) return { retryable, message: "" };
+  if (status === 401) return { retryable, message: "登录状态已失效，请重新登录后再打开候选审核。" };
+  if (status === 403) return { retryable, message: "当前账号没有查看采集候选的权限。" };
+  if (status === 404) return { retryable, message: "采集会话不存在或已被清理，请重新启动采集。" };
+  return { retryable, message: error?.message || "读取采集会话失败，请检查请求后重试。" };
 }
 
 function isUnnamed(candidate) {
@@ -105,7 +123,7 @@ function hasReliableLocator(candidate) {
 
 function hasInvalidUpdateTarget(candidate) {
   if (candidate?.conflictResolution !== "update") return false;
-  const targets = uniqueTargetIDs(candidate);
+  const targets = safeConflictTargets(candidate).map((item) => item.id);
   const selected = Number(candidate?.targetElementId || 0);
   if (targets.length > 1 && !selected) return true;
   if (selected && !targets.includes(selected)) return true;
@@ -113,6 +131,7 @@ function hasInvalidUpdateTarget(candidate) {
 }
 
 function qualityKey(candidate) {
+  if (candidate?.conflictResolution === "ignore") return "ready";
   if (isUnnamed(candidate)) return "unnamed";
   if (!hasReliableLocator(candidate)) return "unreliable";
   if (
@@ -122,13 +141,15 @@ function qualityKey(candidate) {
   return "ready";
 }
 
-export function getSaveBlockers(candidates, selectedIDs) {
+export function getSaveBlockers(candidates, selectedIDs, sessionStatus = "active") {
+  if (!savableStatuses.has(sessionStatus)) return ["当前会话状态不允许保存"];
   const selected = (candidates || []).filter((item) => selectedIDs?.has(item.cursorId));
   if (!selected.length) return ["请选择需要保存的候选"];
   const blockers = [];
   if (selected.length > 200) blockers.push("一次最多保存 200 个候选");
-  const unnamed = selected.filter(isUnnamed).length;
-  const unreliable = selected.filter((item) => !hasReliableLocator(item)).length;
+  const qualityChecked = selected.filter((item) => item.conflictResolution !== "ignore");
+  const unnamed = qualityChecked.filter(isUnnamed).length;
+  const unreliable = qualityChecked.filter((item) => !hasReliableLocator(item)).length;
   const unresolved = selected.filter((item) => (
     item.conflictStatus === "duplicate" && !item.conflictResolution
   )).length;
@@ -138,6 +159,36 @@ export function getSaveBlockers(candidates, selectedIDs) {
   if (unresolved) blockers.push(`${unresolved} 个候选尚未处理冲突`);
   if (invalidTargets) blockers.push(`${invalidTargets} 个更新候选需要选择目标元素`);
   return blockers;
+}
+
+export function validateSaveResult(result, selected) {
+  const saved = result?.savedCandidateIds;
+  const ignored = result?.ignoredCandidateIds;
+  if (!Array.isArray(saved) || !Array.isArray(ignored)) {
+    throw new Error("保存响应不完整：缺少候选处理结果。");
+  }
+  const submitted = new Map((selected || []).map((item) => [item.cursorId, buildSaveItem(item).resolution]));
+  const processed = new Set();
+  const accept = (rawID, expectedResolution) => {
+    const id = Number(rawID);
+    if (!Number.isSafeInteger(id) || id <= 0 || !submitted.has(id)) {
+      throw new Error(`保存响应包含未知候选 ID：${rawID}`);
+    }
+    if (processed.has(id)) {
+      throw new Error(`保存响应重复返回候选 ID：${id}`);
+    }
+    const resolution = submitted.get(id);
+    if ((expectedResolution === "ignore") !== (resolution === "ignore")) {
+      throw new Error(`保存响应中的候选 ${id} 处理结果与提交方式不一致。`);
+    }
+    processed.add(id);
+  };
+  saved.forEach((id) => accept(id, "save"));
+  ignored.forEach((id) => accept(id, "ignore"));
+  if (processed.size !== submitted.size) {
+    throw new Error("保存响应不完整：部分候选缺少处理结果，请刷新后确认。");
+  }
+  return processed;
 }
 
 function publicSession(session) {
@@ -180,6 +231,7 @@ export function ElementCaptureDrawer({
   const [loading, setLoading] = useState(true);
   const [disconnected, setDisconnected] = useState(session?.status === "interrupted");
   const [pollNotice, setPollNotice] = useState("");
+  const [pollError, setPollError] = useState("");
   const [actionError, setActionError] = useState("");
   const [candidateIssues, setCandidateIssues] = useState({});
   const [saving, setSaving] = useState(false);
@@ -188,6 +240,8 @@ export function ElementCaptureDrawer({
   const previousFocusRef = useRef(typeof document === "undefined" ? null : document.activeElement);
   const generationRef = useRef(0);
   const cursorRef = useRef(0);
+  const loadedCursorIDsRef = useRef(new Set());
+  const modeVersionRef = useRef(0);
   const timerRef = useRef(null);
   const pollAbortRef = useRef(null);
   const actionControllersRef = useRef(new Set());
@@ -215,6 +269,8 @@ export function ElementCaptureDrawer({
     generationRef.current = generation;
     abortAllRequests();
     cursorRef.current = 0;
+    loadedCursorIDsRef.current.clear();
+    modeVersionRef.current += 1;
     dirtyRef.current.clear();
     setSessionState(publicSession(session));
     setCandidates([]);
@@ -224,6 +280,7 @@ export function ElementCaptureDrawer({
     setLoading(true);
     setDisconnected(session?.status === "interrupted");
     setPollNotice("");
+    setPollError("");
     let stopped = false;
     let failures = 0;
 
@@ -238,23 +295,35 @@ export function ElementCaptureDrawer({
       pollAbortRef.current?.abort();
       pollAbortRef.current = controller;
       const afterID = cursorRef.current;
+      const requestedModeVersion = modeVersionRef.current;
       const [detailResult, candidateResult] = await Promise.allSettled([
         elementCaptureService.get(sessionID, { signal: controller.signal }),
         elementCaptureService.candidates(sessionID, {
           afterId: afterID,
-          limit: 100,
+          limit: candidatePageLimit,
           signal: controller.signal
         })
       ]);
       if (stopped || controller.signal.aborted || generationRef.current !== generation) return;
 
-      const rejected = [detailResult, candidateResult].find((result) => result.status === "rejected");
-      if (rejected) {
-        if (rejected.reason?.name !== "AbortError") {
+      const rejected = [detailResult, candidateResult]
+        .filter((result) => result.status === "rejected")
+        .map((result) => result.reason);
+      if (rejected.length) {
+        const error = rejected.find((reason) => !classifyPollError(reason).retryable) || rejected[0];
+        const failure = classifyPollError(error);
+        if (error?.name !== "AbortError") {
+          setLoading(false);
+          if (!failure.retryable) {
+            setDisconnected(false);
+            setPollNotice("");
+            setPollError(failure.message);
+            return;
+          }
           failures += 1;
           setDisconnected(true);
+          setPollError("");
           setPollNotice(`暂时无法连接采集服务，${getPollDelay(failures) / 1000} 秒后重试；已有候选不会清空。`);
-          setLoading(false);
           schedule(getPollDelay(failures));
         }
         return;
@@ -263,9 +332,24 @@ export function ElementCaptureDrawer({
       failures = 0;
       const detail = publicSession({ ...session, ...detailResult.value });
       const incoming = Array.isArray(candidateResult.value) ? candidateResult.value : [];
-      setSessionState(detail);
+      const incomingCursorIDs = incoming
+        .map((item) => Number(item?.cursorId || item?.candidateId || 0))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+      incomingCursorIDs.forEach((id) => loadedCursorIDsRef.current.add(id));
+      cursorRef.current = Math.max(cursorRef.current, ...incomingCursorIDs, 0);
+      const reportedCount = Math.max(
+        detail.candidateCount,
+        ...incoming.map((item) => Number(item?.candidateCount || 0)),
+        0
+      );
+      setSessionState((current) => ({
+        ...detail,
+        candidateCount: reportedCount,
+        mode: requestedModeVersion === modeVersionRef.current ? detail.mode : current.mode
+      }));
       setDisconnected(detail.status === "interrupted");
       setPollNotice("");
+      setPollError("");
       setLoading(false);
       setCandidates((current) => {
         const existing = new Map(current.map((item) => [item.cursorId, item]));
@@ -281,22 +365,19 @@ export function ElementCaptureDrawer({
             targetElementId: previous.targetElementId
           };
         });
-        cursorRef.current = Math.max(
-          cursorRef.current,
-          ...merged.map((item) => item.cursorId),
-          0
-        );
-        const reportedCount = Math.max(
-          detail.candidateCount,
-          ...incoming.map((item) => Number(item?.candidateCount || 0)),
-          0
-        );
-        if (reportedCount !== detail.candidateCount) {
-          setSessionState((currentSession) => ({ ...currentSession, candidateCount: reportedCount }));
-        }
         return merged;
       });
-      if (!terminalStatuses.has(detail.status)) schedule(getPollDelay(0));
+      const hasMore = cursorRef.current > afterID && shouldContinueCandidatePaging(
+        incoming.length,
+        loadedCursorIDsRef.current.size,
+        reportedCount,
+        candidatePageLimit
+      );
+      if (hasMore) {
+        schedule(0);
+      } else if (!terminalStatuses.has(detail.status)) {
+        schedule(getPollDelay(0));
+      }
     };
 
     poll();
@@ -322,8 +403,8 @@ export function ElementCaptureDrawer({
     [candidates, filter]
   );
   const saveBlockers = useMemo(
-    () => getSaveBlockers(candidates, selectedIDs),
-    [candidates, selectedIDs]
+    () => getSaveBlockers(candidates, selectedIDs, sessionState.status),
+    [candidates, selectedIDs, sessionState.status]
   );
   const canSave = saveBlockers.length === 0 && !saving;
   const selectedVisible = filteredCandidates.length > 0
@@ -427,7 +508,7 @@ export function ElementCaptureDrawer({
       ...item,
       conflictResolution: resolution,
       targetElementId: resolution === "update"
-        ? (item.targetElementId || (item.conflictTargetIds.length === 1 ? item.conflictTargetIds[0] : 0))
+        ? (item.targetElementId || (item.conflictTargets.length === 1 ? item.conflictTargets[0].id : 0))
         : 0
     }));
     try {
@@ -484,14 +565,18 @@ export function ElementCaptureDrawer({
   async function changeMode(mode) {
     if (sessionState.mode === mode) return;
     const previous = sessionState.mode;
+    const operationVersion = modeVersionRef.current + 1;
+    modeVersionRef.current = operationVersion;
     setActionError("");
     setSessionState((current) => ({ ...current, mode }));
     try {
       await runAction((signal) => elementCaptureService.mode(sessionState.id, mode, { signal }));
     } catch (error) {
       if (error?.name === "AbortError") return;
-      setSessionState((current) => ({ ...current, mode: previous }));
-      setActionError(error?.message || "采集模式切换失败");
+      if (modeVersionRef.current === operationVersion) {
+        setSessionState((current) => ({ ...current, mode: previous }));
+        setActionError(error?.message || "采集模式切换失败");
+      }
     }
   }
 
@@ -499,8 +584,6 @@ export function ElementCaptureDrawer({
     setActionError("");
     try {
       await runAction((signal) => elementCaptureService.stop(sessionState.id, { signal }));
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      pollAbortRef.current?.abort();
       setSessionState((current) => ({ ...current, status: "completed" }));
       setDisconnected(false);
     } catch (error) {
@@ -522,11 +605,7 @@ export function ElementCaptureDrawer({
         selected.map(buildSaveItem),
         { signal }
       ));
-      const processed = new Set([
-        ...(result?.savedCandidateIds || []),
-        ...(result?.ignoredCandidateIds || [])
-      ].map(Number));
-      if (!processed.size) selected.forEach((item) => processed.add(item.cursorId));
+      const processed = validateSaveResult(result, selected);
       setCandidates((current) => current.filter((item) => !processed.has(item.cursorId)));
       setSelectedIDs((current) => new Set([...current].filter((id) => !processed.has(id))));
       processed.forEach((id) => dirtyRef.current.delete(id));
@@ -654,6 +733,7 @@ export function ElementCaptureDrawer({
           </div>
         ) : null}
         {actionError ? <div className="element-capture-error" role="alert">{actionError}</div> : null}
+        {pollError ? <div className="element-capture-error" role="alert">{pollError}</div> : null}
 
         <div className="element-capture-list-toolbar">
           <label>
@@ -775,7 +855,7 @@ export function ElementCaptureDrawer({
                           另存为新元素
                         </button>
                       </div>
-                      {candidate.conflictResolution === "update" && candidate.conflictTargetIds.length > 1 ? (
+                      {candidate.conflictResolution === "update" && candidate.conflictTargets.length > 1 ? (
                         <label className="element-capture-target-select">
                           <span>更新目标</span>
                           <select
@@ -784,8 +864,10 @@ export function ElementCaptureDrawer({
                             value={candidate.targetElementId || ""}
                           >
                             <option value="">请选择目标元素</option>
-                            {candidate.conflictTargetIds.map((targetID) => (
-                              <option key={targetID} value={targetID}>元素 #{targetID}</option>
+                            {candidate.conflictTargets.map((target) => (
+                              <option key={target.id} value={target.id}>
+                                {target.name ? `${target.name} (#${target.id})` : `元素 #${target.id}`}
+                              </option>
                             ))}
                           </select>
                         </label>
@@ -793,7 +875,7 @@ export function ElementCaptureDrawer({
                     </div>
                   ) : null}
 
-                  {isUnnamed(candidate) ? (
+                  {candidate.conflictResolution === "ignore" ? null : isUnnamed(candidate) ? (
                     <p className="element-capture-guidance">先补充可辨识且页面内唯一的名称。</p>
                   ) : !hasReliableLocator(candidate) ? (
                     <p className="element-capture-guidance">请重新拾取，至少需要同一条“唯一且评分 ≥ 70”的定位器。</p>

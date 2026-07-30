@@ -33,7 +33,7 @@ function validTargetURL(value) {
 
 function supportsBrowserCapture(executor) {
   const types = Array.isArray(executor?.supportedTypes) ? executor.supportedTypes : [];
-  return executor?.status === "online" && types.some((type) => type === "ui" || type === "browser");
+  return executor?.status === "online" && types.includes("ui");
 }
 
 function publicSession(session, pageRow, executor) {
@@ -228,14 +228,14 @@ export function ElementCaptureLauncher({
                   >
                     <span className="element-capture-online-dot" aria-hidden="true" />
                     <strong>{executor.name || executor.executorId}</strong>
-                    <small>{executor.executorId} · UI / Browser</small>
+                    <small>{executor.executorId} · UI</small>
                   </button>
                 ))}
               </div>
             ) : (
               <div className="element-capture-empty-action">
                 <strong>没有可用于有头采集的在线执行器。</strong>
-                <span>启动支持 UI/浏览器能力的执行器后再试。</span>
+                <span>启动支持 UI 能力的执行器后再试。</span>
                 <a href="/config">前往执行器配置</a>
               </div>
             )}

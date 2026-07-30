@@ -55,13 +55,13 @@ describe("elementCaptureService", () => {
     });
   });
 
-  it("按游标查询候选、限制批量大小并透传 AbortSignal", async () => {
+  it("按游标查询候选并透传 AbortSignal", async () => {
     global.fetch = vi.fn(() => response([]));
     const controller = new AbortController();
 
     await elementCaptureService.candidates("session/1", {
       afterId: 12,
-      limit: 500,
+      limit: 200,
       signal: controller.signal
     });
 
@@ -69,6 +69,26 @@ describe("elementCaptureService", () => {
       "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session%2F1/candidates?afterId=12&limit=200",
       expect.objectContaining({ signal: controller.signal })
     );
+  });
+
+  it("严格拒绝非整数游标、越界 limit 和非法资源 ID", async () => {
+    global.fetch = vi.fn(() => response([]));
+
+    expect(() => elementCaptureService.candidates("session-1", { afterId: 1.5 })).toThrow("afterId");
+    expect(() => elementCaptureService.candidates("session-1", { afterId: "1" })).toThrow("afterId");
+    expect(() => elementCaptureService.candidates("session-1", { limit: 201 })).toThrow("limit");
+    expect(() => elementCaptureService.update("session-1", "12x", { name: "提交" })).toThrow("candidateId");
+    expect(() => elementCaptureService.rollback(42, 0)).toThrow("version");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("保存前在本地限制 1 到 200 个候选", () => {
+    expect(() => elementCaptureService.save("session-1", [])).toThrow("1 到 200");
+    const tooMany = Array.from({ length: 201 }, (_, index) => ({
+      candidateId: index + 1,
+      resolution: "create"
+    }));
+    expect(() => elementCaptureService.save("session-1", tooMany)).toThrow("1 到 200");
   });
 
   it("候选查询默认 afterId=0、limit=100", async () => {

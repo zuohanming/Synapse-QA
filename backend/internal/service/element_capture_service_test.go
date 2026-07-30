@@ -40,6 +40,25 @@ func TestBatchSaveAllowsIgnoringUnreliableCandidate(t *testing.T) {
 	}
 }
 
+func TestListCandidatesPreservesEveryConflictTarget(t *testing.T) {
+	repo := &candidateCaptureRepo{candidates: []model.ElementCaptureCandidate{{
+		CursorID: 1,
+		ConflictTargets: []model.ElementCaptureTarget{
+			{ID: 42, Name: "submit"},
+			{ID: 43, Name: "submit copy"},
+		},
+	}}}
+	service := NewElementCaptureService(repo, fakeExecutorReader{online: true}, []byte("secret"))
+
+	items, err := service.ListCandidates(context.Background(), 7, "session-1", 0, 100)
+	if err != nil {
+		t.Fatalf("ListCandidates 返回错误：%v", err)
+	}
+	if len(items) != 1 || len(items[0].ConflictTargets) != 2 || items[0].ConflictTargets[1].Name != "submit copy" {
+		t.Fatalf("服务层丢失冲突目标：%+v", items)
+	}
+}
+
 type fakeCaptureRepo struct {
 	activeExecutor string
 	pageExists     bool

@@ -660,6 +660,44 @@ func newCandidateID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
+type captureTargetQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func loadCaptureConflictTargets(ctx context.Context, queryer captureTargetQueryer, pageID int64, fingerprint string) ([]model.ElementCaptureTarget, error) {
+	rows, err := queryer.QueryContext(ctx, `
+		select id,name from page_elements
+		where page_id = $1 and fingerprint = $2 and deleted_at is null
+		order by id
+	`, pageID, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	targets := make([]model.ElementCaptureTarget, 0)
+	for rows.Next() {
+		var target model.ElementCaptureTarget
+		if err := rows.Scan(&target.ID, &target.Name); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
+func applyCaptureConflictTargets(candidate *model.ElementCaptureCandidate, targets []model.ElementCaptureTarget) {
+	candidate.ConflictTargets = targets
+	candidate.DuplicateElementID = 0
+	if len(targets) == 1 {
+		candidate.DuplicateElementID = targets[0].ID
+	}
+	if len(targets) > 0 {
+		candidate.ConflictStatus = "duplicate"
+	} else if candidate.ConflictStatus == "duplicate" {
+		candidate.ConflictStatus = ""
+	}
+}
+
 func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate model.ElementCaptureCandidate, executorID, tokenHash string) (model.ElementCaptureCandidate, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -693,6 +731,11 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 		&existing.ConflictResolution, &existing.Status, &existing.ExpiresAt,
 	)
 	if err == nil {
+		targets, targetErr := loadCaptureConflictTargets(ctx, tx, pageID, existing.Fingerprint)
+		if targetErr != nil {
+			return candidate, targetErr
+		}
+		applyCaptureConflictTargets(&existing, targets)
 		existing.CandidateCount = count
 		if count >= 400 {
 			existing.Warning = "候选项数量已达到 400，请及时审核"
@@ -705,17 +748,11 @@ func (r *ElementCaptureRepository) AddCandidate(ctx context.Context, candidate m
 	if count >= 500 {
 		return candidate, model.NewDomainError(model.ErrConflict, "单个采集会话最多 500 个候选项")
 	}
-	var duplicateID sql.NullInt64
-	err = tx.QueryRowContext(ctx, `
-		select id from page_elements where page_id = $1 and fingerprint = $2 and deleted_at is null order by id limit 1
-	`, pageID, candidate.Fingerprint).Scan(&duplicateID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	targets, err := loadCaptureConflictTargets(ctx, tx, pageID, candidate.Fingerprint)
+	if err != nil {
 		return candidate, err
 	}
-	if duplicateID.Valid {
-		candidate.DuplicateElementID = duplicateID.Int64
-		candidate.ConflictStatus = "duplicate"
-	}
+	applyCaptureConflictTargets(&candidate, targets)
 	candidate.ID, err = newCandidateID()
 	if err != nil {
 		return candidate, errors.New("生成候选项 ID 失败")
@@ -752,7 +789,12 @@ func (r *ElementCaptureRepository) ListCandidates(ctx context.Context, userID in
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		select c.id,c.cursor_id,c.session_id,c.name,c.fingerprint,c.capture_url,c.tag_name,c.accessible_name,c.locators,c.quality_score,
-		       coalesce(c.duplicate_element_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at
+		       coalesce(c.duplicate_element_id,0),c.conflict_status,c.conflict_resolution,c.status,c.expires_at,
+		       coalesce((
+		         select jsonb_agg(jsonb_build_object('id',p.id,'name',p.name) order by p.id)
+		         from page_elements p
+		         where p.page_id=s.page_id and p.fingerprint=c.fingerprint and p.deleted_at is null
+		       ),'[]'::jsonb)
 		from element_capture_candidates c join element_capture_sessions s on s.id=c.session_id
 		where c.session_id=$1 and c.cursor_id>$3 and (
 			s.created_by=(select username from users where id=$2 and deleted_at is null)
@@ -766,9 +808,14 @@ func (r *ElementCaptureRepository) ListCandidates(ctx context.Context, userID in
 	items := make([]model.ElementCaptureCandidate, 0)
 	for rows.Next() {
 		var item model.ElementCaptureCandidate
-		if err := rows.Scan(&item.ID, &item.CursorID, &item.SessionID, &item.Name, &item.Fingerprint, &item.CaptureURL, &item.TagName, &item.AccessibleName, &item.Locators, &item.QualityScore, &item.DuplicateElementID, &item.ConflictStatus, &item.ConflictResolution, &item.Status, &item.ExpiresAt); err != nil {
+		var targetsJSON []byte
+		if err := rows.Scan(&item.ID, &item.CursorID, &item.SessionID, &item.Name, &item.Fingerprint, &item.CaptureURL, &item.TagName, &item.AccessibleName, &item.Locators, &item.QualityScore, &item.DuplicateElementID, &item.ConflictStatus, &item.ConflictResolution, &item.Status, &item.ExpiresAt, &targetsJSON); err != nil {
 			return nil, err
 		}
+		if err := json.Unmarshal(targetsJSON, &item.ConflictTargets); err != nil {
+			return nil, err
+		}
+		applyCaptureConflictTargets(&item, item.ConflictTargets)
 		items = append(items, item)
 	}
 	return items, rows.Err()
