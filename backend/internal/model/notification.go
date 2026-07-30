@@ -29,10 +29,11 @@ type NotificationCreate struct {
 }
 
 type NotificationPreference struct {
-	ExecutionSuccess bool `json:"executionSuccess"`
-	ExecutionFailure bool `json:"executionFailure"`
-	ExecutorAlert    bool `json:"executorAlert"`
-	SystemNotice     bool `json:"systemNotice"`
+	UseSystemDefaults bool `json:"useSystemDefaults"`
+	ExecutionSuccess  bool `json:"executionSuccess"`
+	ExecutionFailure  bool `json:"executionFailure"`
+	ExecutorAlert     bool `json:"executorAlert"`
+	SystemNotice      bool `json:"systemNotice"`
 }
 
 type SystemNotificationRequest struct {

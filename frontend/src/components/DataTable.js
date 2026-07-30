@@ -1,11 +1,32 @@
-export function DataTable({ columns, rows, rowKey = "id", emptyText = "暂无数据" }) {
+const defaultColumnWidths = {
+  select: 48,
+  id: 82,
+  status: 112,
+  priority: 92,
+  version: 112,
+  updatedAt: 168,
+  createdAt: 168,
+  actions: 168
+};
+
+export function DataTable({ columns, rows, rowKey = "id", emptyText = "暂无数据", fitContainer = false }) {
+  const tableWidth = fitContainer ? null : columns.reduce((total, column) => {
+    const width = column.width || defaultColumnWidths[column.key] || 160;
+    return total + (typeof width === "string" && width.endsWith("%") ? defaultColumnWidths[column.key] || 160 : Number(width));
+  }, 0);
   return (
-    <div className="table-wrap">
-      <table className="data-table">
+    <div className={fitContainer ? "table-wrap table-wrap-fit" : "table-wrap"}>
+      <table className="data-table" data-fit-container={fitContainer ? "true" : undefined} style={fitContainer ? undefined : { minWidth: `${tableWidth}px` }}>
+        <colgroup>
+          {columns.map((column) => {
+            const width = column.width || defaultColumnWidths[column.key] || 160;
+            return <col key={column.key} style={{ width: typeof width === "string" && width.endsWith("%") ? width : `${width}px` }} />;
+          })}
+        </colgroup>
         <thead>
           <tr>
             {columns.map((column) => (
-              <th key={column.key}>{column.title}</th>
+              <th className={column.headerClassName || column.className} key={column.key} scope="col">{column.title}</th>
             ))}
           </tr>
         </thead>
@@ -14,13 +35,17 @@ export function DataTable({ columns, rows, rowKey = "id", emptyText = "暂无数
             rows.map((row) => (
               <tr key={row[rowKey]}>
                 {columns.map((column) => (
-                  <td key={column.key}>{column.render ? column.render(row) : row[column.key]}</td>
+                  <td className={column.className} key={column.key}>
+                    <div className={["actions", "operations", "select"].includes(column.key) ? "table-cell-content table-cell-actions" : "table-cell-content"} data-overflow-tooltip={["actions", "operations", "select"].includes(column.key) ? undefined : "auto"} tabIndex={["actions", "operations", "select"].includes(column.key) ? undefined : 0}>
+                      {column.render ? column.render(row) : row[column.key]}
+                    </div>
+                  </td>
                 ))}
               </tr>
             ))
           ) : (
             <tr>
-              <td colSpan={columns.length}>{emptyText}</td>
+              <td className="table-empty-cell" colSpan={columns.length}>{emptyText}</td>
             </tr>
           )}
         </tbody>

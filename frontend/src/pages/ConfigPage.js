@@ -21,11 +21,137 @@ export function ConfigPage({ activePath }) {
   if (section === "项目产品") {
     return <ProductConfigPage />;
   }
+  if (section === "测试对象") {
+    return <TestObjectConfigPage />;
+  }
 
-  const resource = section === "测试对象" ? configService.testObjects : configService.projects;
+  const resource = configService.projects;
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
   return <ResourceListPage title={section} description="测试配置资产管理" panelTitle={`${section}列表`} rows={pageItems(data)} columns={columnsFor(section)} loading={loading} error={error} />;
+}
+
+function TestObjectConfigPage() {
+  const [filters, setFilters] = useState({ id: "", envName: "", productId: "" });
+  const [query, setQuery] = useState(filters);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [modal, setModal] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const { data: projectsData } = useAsyncData(() => configService.projects.list({ page: 1, pageSize: 200 }), []);
+  const { data: productsData } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 500 }), []);
+  const projects = pageItems(projectsData);
+  const products = pageItems(productsData);
+  const { data, loading, error, reload } = useAsyncData(
+    () => configService.testObjects.list({ ...query, page, pageSize }),
+    [query.id, query.envName, query.productId, page, pageSize]
+  );
+  const rows = pageItems(data);
+  const total = Number(data?.total || 0);
+
+  async function remove(row) {
+    if (!window.confirm(`确认删除测试环境“${row.envName}”吗？`)) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      await configService.testObjects.remove(row.id);
+      await reload();
+      setNotice("测试对象已删除。");
+    } catch (requestError) {
+      setNotice(requestError.message || "删除测试对象失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const columns = [
+    { key: "id", title: "ID" },
+    { key: "productName", title: "产品" },
+    { key: "envName", title: "环境名称" },
+    { key: "target", title: "目标地址" },
+    { key: "autoType", title: "自动化类型" },
+    { key: "permission", title: "权限", render: (row) => `${row.queryEnabled ? "查询" : ""}${row.queryEnabled && row.writeEnabled ? " / " : ""}${row.writeEnabled ? "写入" : ""}` || "无" },
+    { key: "owner", title: "负责人" },
+    { key: "actions", title: "操作", render: (row) => <div className="action-row"><button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">编辑</button><button className="danger-link" disabled={busy} onClick={() => remove(row)} type="button">删除</button></div> }
+  ];
+
+  return <div className="section-stack">
+    <PageHeader title="测试对象" description="维护各产品在不同环境中的访问地址，供接口调试和测试用例执行选择" />
+    <section className="resource-panel">
+      <div className="panel-header"><strong>测试对象列表</strong></div>
+      <form className="filter-grid" onSubmit={(event) => { event.preventDefault(); setPage(1); setQuery(filters); }}>
+        <label className="form-field"><span>ID</span><input className="text-input" placeholder="测试对象 ID" value={filters.id} onChange={(event) => setFilters({ ...filters, id: event.target.value })} /></label>
+        <label className="form-field"><span>环境名称</span><input className="text-input" placeholder="例如：测试环境" value={filters.envName} onChange={(event) => setFilters({ ...filters, envName: event.target.value })} /></label>
+        <label className="form-field"><span>产品</span><select className="text-input" value={filters.productId} onChange={(event) => setFilters({ ...filters, productId: event.target.value })}><option value="">全部产品</option>{products.map((item) => <option key={item.id} value={item.id}>{item.projectName ? `${item.projectName} / ` : ""}{item.name}</option>)}</select></label>
+        <div className="toolbar-row"><button className="primary-button compact-button" type="submit">搜索</button><button className="icon-text-button compact-button" onClick={() => { const empty = { id: "", envName: "", productId: "" }; setFilters(empty); setQuery(empty); setPage(1); }} type="button">重置</button></div>
+      </form>
+      <div className="list-actions"><div><span className="muted-text">共 {total} 个环境</span></div><button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button"><Plus size={14} />新增测试对象</button></div>
+      {notice ? <div className="inline-notice">{notice}</div> : null}
+      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={rows} emptyText="暂无测试对象" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={Math.max(1, Math.ceil(total / pageSize))} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
+    </section>
+    {modal ? <TestObjectModal busy={busy} modal={modal} products={products} projects={projects} onClose={() => setModal(null)} onSubmit={async (payload) => {
+      setBusy(true);
+      setNotice("");
+      try {
+        if (modal.mode === "edit") await configService.testObjects.update(modal.row.id, payload);
+        else await configService.testObjects.create(payload);
+        setModal(null);
+        await reload();
+        setNotice(modal.mode === "edit" ? "测试对象已更新。" : "测试对象已创建。");
+      } finally {
+        setBusy(false);
+      }
+    }} /> : null}
+  </div>;
+}
+
+function TestObjectModal({ busy, modal, products, projects, onClose, onSubmit }) {
+  const source = modal.row;
+  const sourceProduct = products.find((item) => String(item.id) === String(source?.productId));
+  const [form, setForm] = useState({
+    projectId: sourceProduct?.projectId || "",
+    productId: source?.productId || "",
+    envName: source?.envName || "",
+    target: source?.target || "",
+    deployEnv: source?.deployEnv || "测试环境",
+    autoType: source?.autoType || "接口自动化",
+    owner: source?.owner || "",
+    queryEnabled: source?.queryEnabled ?? true,
+    writeEnabled: source?.writeEnabled ?? true
+  });
+  const [formError, setFormError] = useState("");
+  const availableProducts = products.filter((item) => !form.projectId || String(item.projectId) === String(form.projectId));
+
+  async function submit(event) {
+    event.preventDefault();
+    setFormError("");
+    try {
+      await onSubmit({
+        productId: Number(form.productId), envName: form.envName.trim(), target: form.target.trim(),
+        deployEnv: form.deployEnv, autoType: form.autoType, owner: form.owner.trim(),
+        queryEnabled: form.queryEnabled, writeEnabled: form.writeEnabled
+      });
+    } catch (requestError) {
+      setFormError(requestError.message || "保存测试对象失败");
+    }
+  }
+
+  return <div className="modal-backdrop"><form className="modal-card modal-card-small" onSubmit={submit}>
+    <div className="modal-header"><strong>{modal.mode === "edit" ? "编辑测试对象" : "新增测试对象"}</strong><button className="modal-close" onClick={onClose} type="button"><X size={17} /></button></div>
+    <div className="modal-form">
+      <label className="form-field"><span>* 所属项目</span><select required className="text-input" value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value, productId: "" })}><option value="">请选择项目</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="form-field"><span>* 所属产品</span><select required className="text-input" value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value })}><option value="">请选择产品</option>{availableProducts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="form-field"><span>* 环境名称</span><input required className="text-input" placeholder="例如：测试环境" value={form.envName} onChange={(event) => setForm({ ...form, envName: event.target.value })} /></label>
+      <label className="form-field"><span>* 目标地址</span><input required className="text-input" placeholder="https://api-test.example.com" value={form.target} onChange={(event) => setForm({ ...form, target: event.target.value })} /></label>
+      <label className="form-field"><span>部署环境</span><select className="text-input" value={form.deployEnv} onChange={(event) => setForm({ ...form, deployEnv: event.target.value })}>{["开发环境", "测试环境", "预发布环境", "生产环境"].map((item) => <option key={item}>{item}</option>)}</select></label>
+      <label className="form-field"><span>自动化类型</span><select className="text-input" value={form.autoType} onChange={(event) => setForm({ ...form, autoType: event.target.value })}><option>接口自动化</option><option>界面自动化</option><option>通用</option></select></label>
+      <label className="form-field"><span>* 负责人</span><input required className="text-input" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} /></label>
+      <div className="form-field"><span>执行权限</span><label><input checked={form.queryEnabled} onChange={(event) => setForm({ ...form, queryEnabled: event.target.checked })} type="checkbox" /> 允许查询请求</label><label><input checked={form.writeEnabled} onChange={(event) => setForm({ ...form, writeEnabled: event.target.checked })} type="checkbox" /> 允许写入请求</label></div>
+    </div>
+    {formError ? <div className="form-error modal-error">{formError}</div> : null}
+    <div className="modal-actions"><button className="icon-text-button compact-button" onClick={onClose} type="button">取消</button><button className="primary-button compact-button" disabled={busy} type="submit">{busy ? "保存中" : "保存"}</button></div>
+  </form></div>;
 }
 
 function columnsFor(section) {

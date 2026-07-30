@@ -10,6 +10,9 @@ python -m PyInstaller `
   --clean `
   --windowed `
   --name synapse-executor `
+  --icon "assets\executor-icon.ico" `
+  --add-data "assets\executor-icon.ico;assets" `
+  --add-data "assets\executor-icon.png;assets" `
   --paths . `
   --hidden-import app.api.routes `
   --hidden-import app.services.heartbeat_client `

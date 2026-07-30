@@ -277,6 +277,24 @@ func (a *app) migrate(ctx context.Context) error {
 			system_notice boolean not null default true,
 			updated_at timestamptz not null default now()
 		)`,
+		`create table if not exists system_setting_groups (
+			group_key text primary key,
+			value jsonb not null default '{}'::jsonb,
+			revision bigint not null default 1,
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists system_setting_history (
+			id bigserial primary key,
+			group_key text not null,
+			revision bigint not null,
+			value jsonb not null,
+			change_summary text not null default '',
+			created_by text not null default '',
+			created_at timestamptz not null default now(),
+			unique(group_key,revision)
+		)`,
 		`create index if not exists idx_execution_tasks_run_id on execution_tasks(run_id)`,
 		`create index if not exists idx_execution_tasks_task_id on execution_tasks(task_id)`,
 		`create index if not exists idx_execution_logs_task_id on execution_logs(task_id)`,
@@ -286,10 +304,17 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table executors add column if not exists executor_token text not null default ''`,
 		`alter table roles add column if not exists updated_at timestamptz not null default now()`,
 		`alter table roles add column if not exists deleted_at timestamptz`,
+		`alter table roles add column if not exists built_in boolean not null default false`,
+		`alter table roles add column if not exists status text not null default 'active'`,
+		`alter table users add column if not exists auth_version bigint not null default 1`,
+		`alter table users add column if not exists must_change_password boolean not null default false`,
 		`alter table users add column if not exists mcp_api_key text not null default ''`,
 		`alter table users add column if not exists last_login_ip text not null default ''`,
 		`alter table users add column if not exists last_login_at timestamptz`,
+		`alter table users add column if not exists failed_login_count integer not null default 0`,
+		`alter table users add column if not exists locked_until timestamptz`,
 		`alter table users add column if not exists deleted_at timestamptz`,
+		`alter table notification_preferences add column if not exists use_system_defaults boolean not null default true`,
 		`alter table ui_assets add column if not exists deleted_at timestamptz`,
 		`alter table page_elements add column if not exists deleted_at timestamptz`,
 		`alter table projects add column if not exists status text not null default 'active'`,
@@ -323,6 +348,242 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table test_cases add column if not exists created_by text not null default ''`,
 		`alter table test_cases add column if not exists updated_at timestamptz not null default now()`,
 		`alter table test_cases add column if not exists deleted_at timestamptz`,
+		`create unique index if not exists uq_product_modules_id_product on product_modules(id, product_id)`,
+		`create table if not exists permissions (
+			id bigserial primary key,
+			code text not null unique,
+			name text not null,
+			description text not null default '',
+			created_at timestamptz not null default now()
+		)`,
+		`create table if not exists role_permissions (
+			role_id bigint not null references roles(id),
+			permission_id bigint not null references permissions(id),
+			created_at timestamptz not null default now(),
+			primary key(role_id, permission_id)
+		)`,
+		`create table if not exists project_members (
+			user_id bigint not null references users(id),
+			project_id bigint not null references projects(id),
+			role_id bigint not null references roles(id),
+			created_at timestamptz not null default now(),
+			primary key(user_id, project_id)
+		)`,
+		`create table if not exists api_interfaces (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			module_id bigint,
+			name text not null,
+			method text not null,
+			path text not null,
+			normalized_path text not null,
+			protocol text not null default 'HTTP',
+			endpoint_type text not null default 'WEB',
+			lifecycle_status text not null default 'draft',
+			timeout_seconds int not null default 30 check(timeout_seconds between 1 and 300),
+			follow_redirects boolean not null default true,
+			configuration jsonb not null default '{}'::jsonb,
+			current_version int not null default 1,
+			revision bigint not null default 1,
+			last_debug_status text not null default '',
+			last_debug_duration_ms bigint,
+			last_debug_at timestamptz,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			foreign key(module_id, product_id) references product_modules(id, product_id)
+		)`,
+		`create unique index if not exists uq_api_interfaces_active_path on api_interfaces(product_id, method, normalized_path) where deleted_at is null`,
+		`create table if not exists api_interface_versions (
+			id bigserial primary key,
+			interface_id bigint not null references api_interfaces(id),
+			version int not null,
+			snapshot jsonb not null,
+			change_summary text not null default '',
+			created_by text not null,
+			created_at timestamptz not null default now(),
+			unique(interface_id, version)
+		)`,
+		`create table if not exists api_project_headers (
+			id bigserial primary key,
+			project_id bigint not null references projects(id),
+			header_name text not null,
+			header_name_normalized text not null,
+			header_value text not null default '',
+			description text not null default '',
+			enabled boolean not null default true,
+			sensitive boolean not null default false,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create unique index if not exists uq_api_project_headers_active_name on api_project_headers(project_id, header_name_normalized) where deleted_at is null`,
+		`create table if not exists api_global_variables (
+			id bigserial primary key,
+			scope_type text not null check(scope_type in ('system','project','product')),
+			project_id bigint references projects(id),
+			product_id bigint references products(id),
+			env_name text not null default '',
+			var_name text not null,
+			var_name_normalized text not null,
+			value_type text not null default 'string' check(value_type in ('string','number','boolean','json','secret')),
+			var_value text not null default '',
+			description text not null default '',
+			enabled boolean not null default true,
+			sensitive boolean not null default false,
+			revision bigint not null default 1,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create unique index if not exists uq_api_global_variables_active_name
+			on api_global_variables(scope_type, coalesce(project_id,0), coalesce(product_id,0), env_name, var_name_normalized)
+			where deleted_at is null`,
+		`create index if not exists idx_api_global_variables_scope on api_global_variables(scope_type, project_id, product_id, env_name) where deleted_at is null`,
+		`create table if not exists api_test_cases (
+			id bigserial primary key,
+			project_id bigint not null references projects(id),
+			product_id bigint not null references products(id),
+			module_id bigint references product_modules(id),
+			name text not null,
+			priority text not null default 'P2',
+			status text not null default 'draft',
+			owner text not null default '',
+			tags text[] not null default '{}',
+			draft jsonb not null default '{"steps":[],"datasets":[],"variables":[]}'::jsonb,
+			revision bigint not null default 1,
+			current_version int not null default 0,
+			last_run_status text not null default '',
+			last_run_at timestamptz,
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			foreign key(module_id, product_id) references product_modules(id, product_id)
+		)`,
+		`create unique index if not exists uq_api_test_cases_active_name on api_test_cases(project_id, product_id, lower(name)) where deleted_at is null`,
+		`create index if not exists idx_api_test_cases_filter on api_test_cases(project_id, product_id, status, updated_at desc) where deleted_at is null`,
+		`create table if not exists api_test_case_versions (
+			id bigserial primary key,
+			case_id bigint not null references api_test_cases(id),
+			version int not null,
+			snapshot jsonb not null,
+			change_summary text not null default '',
+			created_by text not null,
+			created_at timestamptz not null default now(),
+			unique(case_id, version)
+		)`,
+		`create table if not exists api_test_run_batches (
+			id bigserial primary key,
+			batch_id text not null unique,
+			project_id bigint not null references projects(id),
+			env_name text not null,
+			status text not null default 'queued',
+			total_instances int not null default 0,
+			queued_instances int not null default 0,
+			running_instances int not null default 0,
+			passed_instances int not null default 0,
+			failed_instances int not null default 0,
+			canceled_instances int not null default 0,
+			options jsonb not null default '{}'::jsonb,
+			triggered_by text not null,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists api_test_run_instances (
+			id bigserial primary key,
+			batch_id text not null references api_test_run_batches(batch_id) on delete cascade,
+			task_id text not null unique,
+			case_id bigint not null references api_test_cases(id),
+			case_version int not null,
+			dataset_index int not null default 0,
+			executor_id text,
+			status text not null default 'queued',
+			snapshot jsonb not null,
+			result jsonb not null default '{}'::jsonb,
+			error_message text not null default '',
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_api_test_run_instances_batch on api_test_run_instances(batch_id, status, id)`,
+		`create table if not exists api_legacy_migrations (
+			source_type text not null,
+			source_id bigint not null,
+			target_id bigint,
+			status text not null,
+			message text not null default '',
+			created_at timestamptz not null default now(),
+			primary key(source_type, source_id)
+		)`,
+		`create table if not exists api_temp_files (
+			id text primary key,
+			project_id bigint not null references projects(id),
+			owner_user_id bigint not null references users(id),
+			original_name text not null,
+			stored_path text not null,
+			mime_type text not null default 'application/octet-stream',
+			size_bytes bigint not null check(size_bytes >= 0),
+			sha256 text not null,
+			expires_at timestamptz not null,
+			created_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create index if not exists idx_api_temp_files_expiry on api_temp_files(expires_at) where deleted_at is null`,
+		`create table if not exists api_debug_runs (
+			id bigserial primary key,
+			task_id text not null unique,
+			interface_id bigint not null references api_interfaces(id),
+			project_id bigint not null references projects(id),
+			executor_id text not null references executors(executor_id),
+			status text not null default 'queued',
+			request_snapshot jsonb not null,
+			result jsonb not null default '{}'::jsonb,
+			error_message text not null default '',
+			triggered_by text not null,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create index if not exists idx_api_debug_runs_interface on api_debug_runs(interface_id, id desc)`,
+		`create table if not exists api_debug_events (
+			id bigserial primary key,
+			task_id text not null references api_debug_runs(task_id) on delete cascade,
+			sequence int not null,
+			event_type text not null,
+			stage text not null,
+			status text not null,
+			message text not null,
+			progress int not null default 0,
+			data jsonb not null default '{}'::jsonb,
+			created_at timestamptz not null default now(),
+			unique(task_id, sequence)
+		)`,
+		`create table if not exists api_debug_assertions (
+			id bigserial primary key,
+			debug_run_id bigint not null references api_debug_runs(id) on delete cascade,
+			assertion_index int not null,
+			assertion_type text not null,
+			expression text not null default '',
+			operator text not null,
+			expected_value text not null default '',
+			actual_value text not null default '',
+			passed boolean not null,
+			error_message text not null default '',
+			created_at timestamptz not null default now(),
+			unique(debug_run_id, assertion_index)
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {
@@ -336,9 +597,9 @@ func (a *app) migrate(ctx context.Context) error {
 func (a *app) seed(ctx context.Context) error {
 	var roleID int64
 	if err := a.db.QueryRowContext(ctx, `
-		insert into roles(name, code, description)
-		values('管理员', 'admin', '系统内置管理员')
-		on conflict(code) do update set name = excluded.name, description = excluded.description, deleted_at = null, updated_at = now()
+		insert into roles(name, code, description, built_in)
+		values('管理员', 'admin', '系统内置管理员', true)
+		on conflict(code) do update set name = excluded.name, description = excluded.description, built_in=true, status='active', deleted_at = null, updated_at = now()
 		returning id
 	`).Scan(&roleID); err != nil {
 		return err
@@ -357,7 +618,7 @@ func (a *app) seed(ctx context.Context) error {
 		{"只读访客", "viewer", "查看报告和统计数据"},
 	}
 	for _, row := range roles {
-		if _, err := a.db.ExecContext(ctx, `insert into roles(name, code, description) values($1, $2, $3) on conflict(code) do update set name = excluded.name, description = excluded.description, deleted_at = null, updated_at = now()`, row[0], row[1], row[2]); err != nil {
+		if _, err := a.db.ExecContext(ctx, `insert into roles(name, code, description,built_in) values($1, $2, $3,true) on conflict(code) do update set name = excluded.name, description = excluded.description, built_in=true, status='active', deleted_at = null, updated_at = now()`, row[0], row[1], row[2]); err != nil {
 			return err
 		}
 	}
@@ -528,6 +789,19 @@ func (a *app) seed(ctx context.Context) error {
 		on conflict(key) do nothing
 	`, env("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token")); err != nil {
 		return err
+	}
+	settingGroups := [][]string{
+		{"execution", `{"defaultConcurrency":5,"maxConcurrency":100,"batchSize":1000,"executorOfflineSeconds":45}`},
+		{"security", `{"sessionHours":24,"passwordMinLength":8,"loginFailureLimit":5,"lockMinutes":15}`},
+		{"notification", `{"executionSuccess":true,"executionFailure":true,"executorOffline":true,"systemAlert":true,"securityAlert":true}`},
+	}
+	for _, setting := range settingGroups {
+		if _, err := a.db.ExecContext(ctx, `
+			insert into system_setting_groups(group_key,value,updated_by)
+			values($1,$2::jsonb,'system') on conflict(group_key) do nothing
+		`, setting[0], setting[1]); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -40,7 +40,7 @@ class Settings:
     max_workers = int(os.getenv("EXECUTOR_MAX_WORKERS", "2"))
     default_timeout_seconds = int(os.getenv("EXECUTOR_DEFAULT_TIMEOUT_SECONDS", "300"))
     artifacts_dir = os.getenv("EXECUTOR_ARTIFACTS_DIR", "artifacts")
-    supported_types = ["noop", "script", "api", "ui", "unit"]
+    supported_types = ["noop", "script", "api", "api_case", "ui", "unit"]
 
 
 settings = Settings()

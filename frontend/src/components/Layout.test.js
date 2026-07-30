@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../hooks/useAuth.js", () => ({
-  useAuth: () => ({ user: { displayName: "管理员" }, logout: vi.fn() })
+  useAuth: () => ({ user: { displayName: "管理员", roleCode: "admin", permissions: [] }, logout: vi.fn() })
 }));
 
 import { Layout } from "./Layout.js";

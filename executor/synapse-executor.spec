@@ -5,8 +5,8 @@ a = Analysis(
     ['gui.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
-    hiddenimports=['app.api.routes', 'app.services.heartbeat_client', 'app.runners.playwright_runner', 'app.runners.pytest_runner', 'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets.auto'],
+    datas=[('assets\\executor-icon.ico', 'assets'), ('assets\\executor-icon.png', 'assets')],
+    hiddenimports=['app.api.routes', 'app.services.heartbeat_client', 'app.runners.playwright_runner', 'app.runners.pytest_runner', 'app.runners.api_case_runner', 'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets.auto'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['assets\\executor-icon.ico'],
 )
 coll = COLLECT(
     exe,

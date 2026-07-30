@@ -70,8 +70,36 @@ func AuthMiddleware(systemService *service.SystemService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		claims, err = systemService.ResolveAccess(c.Request.Context(), claims)
+		if err != nil {
+			fail(c, http.StatusUnauthorized, "登录状态已失效")
+			c.Abort()
+			return
+		}
 		c.Set("claims", claims)
 		c.Next()
+	}
+}
+
+func RequirePermission(code string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims, ok := claimsFromContext(c)
+		if !ok {
+			c.Abort()
+			return
+		}
+		if claims.RoleCode == "admin" {
+			c.Next()
+			return
+		}
+		for _, permission := range claims.Permissions {
+			if permission == code {
+				c.Next()
+				return
+			}
+		}
+		fail(c, http.StatusForbidden, "无权执行此操作")
+		c.Abort()
 	}
 }
 

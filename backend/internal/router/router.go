@@ -9,15 +9,16 @@ import (
 )
 
 type Dependencies struct {
-	AuthController         *controller.AuthController
-	SystemController       *controller.SystemController
-	CatalogController      *controller.CatalogController
-	AutomationController   *controller.AutomationController
-	ExecutorController     *controller.ExecutorController
-	TestCaseController     *controller.TestCaseController
-	ExecutionController    *controller.ExecutionController
-	NotificationController *controller.NotificationController
-	AuthMiddleware         gin.HandlerFunc
+	AuthController          *controller.AuthController
+	SystemController        *controller.SystemController
+	CatalogController       *controller.CatalogController
+	AutomationController    *controller.AutomationController
+	ExecutorController      *controller.ExecutorController
+	TestCaseController      *controller.TestCaseController
+	ExecutionController     *controller.ExecutionController
+	NotificationController  *controller.NotificationController
+	APIAutomationController *controller.APIAutomationController
+	AuthMiddleware          gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -30,11 +31,15 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
 	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
 	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
+	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
+	api.POST("/api-automation/debug/:taskId/events/callback", deps.APIAutomationController.DebugEventCallback)
+	api.POST("/api-automation/test-runs/tasks/:taskId/callback", deps.APIAutomationController.TestRunCallback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
+	authed.POST("/auth/change-password", deps.AuthController.ChangePassword)
 	authed.GET("/executors", deps.ExecutorController.List)
 	authed.POST("/executors", deps.ExecutorController.Create)
 	authed.POST("/executors/:executorId/token", deps.ExecutorController.GenerateToken)
@@ -45,6 +50,56 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerTestCaseRoutes(authed, deps)
 	registerExecutionRoutes(authed, deps)
 	registerNotificationRoutes(authed, deps)
+	registerAPIAutomationRoutes(authed, deps)
+}
+
+func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/api-automation")
+	group.GET("/interfaces", deps.APIAutomationController.ListInterfaces)
+	group.POST("/interfaces", deps.APIAutomationController.CreateInterface)
+	group.GET("/interfaces/:id", deps.APIAutomationController.GetInterface)
+	group.PATCH("/interfaces/:id", deps.APIAutomationController.UpdateInterface)
+	group.PATCH("/interfaces/:id/configuration", deps.APIAutomationController.UpdateInterfaceConfiguration)
+	group.DELETE("/interfaces/:id", deps.APIAutomationController.DeleteInterface)
+	group.POST("/interfaces/:id/restore", deps.APIAutomationController.RestoreInterface)
+	group.POST("/interfaces/batch-delete", deps.APIAutomationController.BatchDeleteInterfaces)
+	group.POST("/interfaces/batch-status", deps.APIAutomationController.BatchUpdateInterfaceStatus)
+	group.POST("/interfaces/batch-move", deps.APIAutomationController.BatchMoveInterfaces)
+	group.POST("/interfaces/:id/preview", deps.APIAutomationController.PreviewRequest)
+	group.POST("/interfaces/:id/debug", deps.APIAutomationController.StartDebug)
+	group.GET("/interfaces/:id/debug-runs", deps.APIAutomationController.ListInterfaceDebugRuns)
+	group.GET("/interfaces/:id/versions", deps.APIAutomationController.ListInterfaceVersions)
+	group.GET("/interfaces/:id/versions/:version", deps.APIAutomationController.GetInterfaceVersion)
+	group.GET("/interfaces/:id/versions/:version/diff", deps.APIAutomationController.DiffInterfaceVersions)
+	group.POST("/interfaces/:id/versions/:version/restore", deps.APIAutomationController.RestoreInterfaceVersion)
+	group.POST("/interfaces/:id/curl", deps.APIAutomationController.ExportCurl)
+	group.POST("/curl/parse", deps.APIAutomationController.ParseCurl)
+	group.POST("/temp-files", deps.APIAutomationController.UploadTempFile)
+	group.DELETE("/temp-files/:id", deps.APIAutomationController.DeleteTempFile)
+	group.GET("/debug/:taskId", deps.APIAutomationController.GetDebug)
+	group.GET("/debug/:taskId/events", deps.APIAutomationController.ListDebugEvents)
+	group.GET("/debug/:taskId/events/stream", deps.APIAutomationController.StreamDebugEvents)
+	group.POST("/debug/:taskId/cancel", deps.APIAutomationController.CancelDebug)
+	group.GET("/debug-runs/:id", deps.APIAutomationController.GetDebugRunDetail)
+	group.GET("/project-headers", deps.APIAutomationController.ListProjectHeaders)
+	group.POST("/project-headers", deps.APIAutomationController.CreateProjectHeader)
+	group.PATCH("/project-headers/:id", deps.APIAutomationController.UpdateProjectHeader)
+	group.DELETE("/project-headers/:id", deps.APIAutomationController.DeleteProjectHeader)
+	group.GET("/global-variables", deps.APIAutomationController.ListGlobalVariables)
+	group.POST("/global-variables", deps.APIAutomationController.CreateGlobalVariable)
+	group.PATCH("/global-variables/:id", deps.APIAutomationController.UpdateGlobalVariable)
+	group.DELETE("/global-variables/:id", deps.APIAutomationController.DeleteGlobalVariable)
+	group.GET("/test-cases", deps.APIAutomationController.ListTestCases)
+	group.POST("/test-cases", deps.APIAutomationController.CreateTestCase)
+	group.GET("/test-cases/:id", deps.APIAutomationController.GetTestCase)
+	group.PATCH("/test-cases/:id", deps.APIAutomationController.UpdateTestCase)
+	group.DELETE("/test-cases/:id", deps.APIAutomationController.DeleteTestCase)
+	group.POST("/test-cases/:id/validate", deps.APIAutomationController.ValidateTestCase)
+	group.POST("/test-cases/:id/publish", deps.APIAutomationController.PublishTestCase)
+	group.GET("/test-cases/:id/versions", deps.APIAutomationController.ListTestCaseVersions)
+	group.GET("/test-cases/:id/versions/:version", deps.APIAutomationController.GetTestCaseVersion)
+	group.POST("/test-runs", deps.APIAutomationController.StartTestRun)
+	group.GET("/test-runs/:batchId", deps.APIAutomationController.GetTestRun)
 }
 
 func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -71,17 +126,26 @@ func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
 }
 
 func registerSystemRoutes(authed *gin.RouterGroup, deps Dependencies) {
-	authed.GET("/system/overview", deps.SystemController.Overview)
-	authed.GET("/system/users", deps.SystemController.ListUsers)
-	authed.PATCH("/system/users/:id", deps.SystemController.UpdateUser)
-	authed.DELETE("/system/users/:id", deps.SystemController.DeleteUser)
-	authed.GET("/system/roles", deps.SystemController.ListRoles)
-	authed.POST("/system/roles", deps.SystemController.CreateRole)
-	authed.PATCH("/system/roles/:id", deps.SystemController.UpdateRole)
-	authed.DELETE("/system/roles/:id", deps.SystemController.DeleteRole)
-	authed.GET("/system/menus", deps.CatalogController.ListMenus)
-	authed.GET("/system/dictionaries", deps.CatalogController.ListDictionaries)
-	authed.GET("/system/logs", deps.CatalogController.ListLogs)
+	authed.GET("/system/overview", controller.RequirePermission("system.overview.read"), deps.SystemController.Overview)
+	authed.GET("/system/users", controller.RequirePermission("system.user.read"), deps.SystemController.ListUsers)
+	authed.POST("/system/users", controller.RequirePermission("system.user.manage"), deps.SystemController.CreateUser)
+	authed.PATCH("/system/users/:id", controller.RequirePermission("system.user.manage"), deps.SystemController.UpdateUser)
+	authed.POST("/system/users/:id/unlock", controller.RequirePermission("system.user.manage"), deps.SystemController.UnlockUser)
+	authed.POST("/system/users/:id/reset-password", controller.RequirePermission("system.user.manage"), deps.SystemController.ResetUserPassword)
+	authed.DELETE("/system/users/:id", controller.RequirePermission("system.user.manage"), deps.SystemController.DeleteUser)
+	authed.GET("/system/roles", controller.RequirePermission("system.role.read"), deps.SystemController.ListRoles)
+	authed.GET("/system/permissions", controller.RequirePermission("system.role.read"), deps.SystemController.ListPermissions)
+	authed.POST("/system/roles", controller.RequirePermission("system.role.manage"), deps.SystemController.CreateRole)
+	authed.PATCH("/system/roles/:id", controller.RequirePermission("system.role.manage"), deps.SystemController.UpdateRole)
+	authed.DELETE("/system/roles/:id", controller.RequirePermission("system.role.manage"), deps.SystemController.DeleteRole)
+	authed.GET("/system/menus", controller.RequirePermission("system.role.read"), deps.CatalogController.ListMenus)
+	authed.GET("/system/dictionaries", controller.RequirePermission("system.settings.read"), deps.CatalogController.ListDictionaries)
+	authed.GET("/system/logs", controller.RequirePermission("system.audit.read"), deps.SystemController.ListOperationLogs)
+	authed.GET("/system/logs/export", controller.RequirePermission("system.audit.export"), deps.SystemController.ExportOperationLogs)
+	authed.GET("/system/settings", controller.RequirePermission("system.settings.read"), deps.SystemController.ListSettings)
+	authed.PATCH("/system/settings/:groupKey", controller.RequirePermission("system.settings.manage"), deps.SystemController.UpdateSettings)
+	authed.GET("/system/settings/:groupKey/history", controller.RequirePermission("system.settings.read"), deps.SystemController.ListSettingHistory)
+	authed.POST("/system/settings/:groupKey/rollback", controller.RequirePermission("system.settings.manage"), deps.SystemController.RollbackSettings)
 }
 
 func registerConfigRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -110,7 +174,6 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	registerUIAssetRoutes(authed, "/ui/steps", "page_step", deps)
 	registerUIAssetRoutes(authed, "/ui/cases", "test_case", deps)
 	registerUIAssetRoutes(authed, "/ui/variables", "global_variable", deps)
-	registerUIAssetRoutes(authed, "/interfaces", "api_interface", deps)
 	authed.GET("/ui/page-elements", deps.AutomationController.ListPageElements)
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)

@@ -27,3 +27,31 @@ type OperationLog struct {
 	IP        string    `json:"ip"`
 	CreatedAt time.Time `json:"createdAt"`
 }
+
+type SystemOverview struct {
+	Users           int64                `json:"users"`
+	ActiveUsers     int64                `json:"activeUsers"`
+	Roles           int64                `json:"roles"`
+	OnlineExecutors int64                `json:"onlineExecutors"`
+	TotalExecutors  int64                `json:"totalExecutors"`
+	RunsToday       int64                `json:"runsToday"`
+	FailuresToday   int64                `json:"failuresToday"`
+	RecentLogs      []OperationLog       `json:"recentLogs"`
+	RunTrend        []SystemRunTrendItem `json:"runTrend"`
+}
+
+type SystemRunTrendItem struct {
+	Date   string `json:"date"`
+	Total  int64  `json:"total"`
+	Failed int64  `json:"failed"`
+}
+
+type OperationLogFilter struct {
+	Actor    string
+	Action   string
+	Keyword  string
+	DateFrom string
+	DateTo   string
+	Page     int
+	PageSize int
+}
