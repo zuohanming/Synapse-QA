@@ -22,6 +22,8 @@ func (a *app) seedAPIPermissions(ctx context.Context) error {
 		{"menu.home.read", "访问首页"},
 		{"menu.ui_automation.read", "访问界面自动化"},
 		{"menu.api_automation.read", "访问接口自动化"},
+		{"menu.data_factory.read", "访问数据工厂"},
+		{"menu.ai.read", "访问AI智能"},
 		{"menu.test_config.read", "访问测试配置"},
 		{"menu.execution.read", "访问执行中心"},
 		{"menu.system.read", "访问系统管理"},

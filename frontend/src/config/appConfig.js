@@ -16,6 +16,14 @@ export const menuData = [
     children: ["接口管理", "测试用例", "全局变量", "请求头管理"]
   },
   {
+    title: "数据工厂",
+    children: ["Mock 生成器"]
+  },
+  {
+    title: "AI 智能",
+    children: ["AI 助手", "智能断言", "用例生成", "失败分析", "AI 设置"]
+  },
+  {
     title: "测试配置",
     children: ["项目配置", "项目产品", "测试对象", "执行器配置"]
   },

@@ -1,13 +1,10 @@
 ﻿import { useMemo, useRef, useState } from "react";
-import { useEffect } from "react";
 import { TestCasesPage } from "./TestCasesPage.js";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
-import { executionService } from "../services/executionService.js";
 import { uiAutomationService } from "../services/uiAutomationService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
@@ -51,8 +48,6 @@ const emptyStepForm = {
   category: "",
   method: "",
   locator: "",
-  action: "",
-  value: "",
   description: "",
   status: "active"
 };
@@ -235,206 +230,6 @@ const operationGroups = [
   }
 ];
 
-const elementOperationGroups = operationGroups.filter(
-  (group) => group.title !== "WEB 定制开发" && !group.title.startsWith("安卓 ")
-);
-
-const specialOperationGroups = {
-  断言操作: [{
-    title: "断言操作",
-    color: "#2548b8",
-    items: [
-      { tag: "assert_text", name: "页面文本包含", params: ["locating", "expected"] },
-      { tag: "assert_text_equals", name: "元素文本等于", params: ["locating", "expected"] },
-      { tag: "assert_title", name: "页面标题包含", params: ["expected"] },
-      { tag: "assert_title_equals", name: "页面标题等于", params: ["expected"] },
-      { tag: "assert_url", name: "页面 URL 包含", params: ["expected"] },
-      { tag: "assert_element_exists", name: "元素存在", params: ["locating"] },
-      { tag: "assert_visible", name: "元素可见", params: ["locating"] },
-      { tag: "assert_hidden", name: "元素隐藏", params: ["locating"] },
-      { tag: "assert_enabled", name: "元素启用", params: ["locating"] },
-      { tag: "assert_disabled", name: "元素禁用", params: ["locating"] },
-      { tag: "assert_checked", name: "元素已选中", params: ["locating"] },
-      { tag: "assert_unchecked", name: "元素未选中", params: ["locating"] },
-      { tag: "assert_value_equals", name: "输入值等于", params: ["locating", "expected"] },
-      { tag: "assert_attribute_equals", name: "元素属性等于", params: ["locating", "attribute_name", "expected"] },
-      { tag: "assert_attribute_contains", name: "元素属性包含", params: ["locating", "attribute_name", "expected"] },
-      { tag: "assert_count", name: "元素数量等于", params: ["locating", "expected_count"] },
-      { tag: "assert_variable", name: "变量比较", params: ["left_value", "operator", "right_value"] },
-      { tag: "assert_variable_exists", name: "变量存在", params: ["variable_name"] },
-      { tag: "assert_regex", name: "正则匹配", params: ["left_value", "pattern"] }
-    ]
-  }],
-  SQL操作: [{
-    title: "SQL 操作",
-    color: "#d97706",
-    items: [{ tag: "sql_query", name: "执行 PostgreSQL 查询", params: ["connection_string", "sql", "result_variable"] }]
-  }],
-  自定义变量: [{
-    title: "自定义变量",
-    color: "#2548b8",
-    items: [{ tag: "set_variable", name: "设置变量", params: ["variable_name", "variable_value"] }]
-  }],
-  条件判断: [{
-    title: "条件判断",
-    color: "#64748b",
-    items: [{ tag: "condition", name: "变量条件判断", params: ["left_value", "operator", "right_value"] }]
-  }],
-  python代码: [{
-    title: "Python 代码",
-    color: "#60a5fa",
-    items: [{ tag: "python_code", name: "执行 Python 代码", params: ["python_code"] }]
-  }]
-};
-
-function operationGroupsForType(type) {
-  return specialOperationGroups[type] || elementOperationGroups;
-}
-
-const operationParamLabels = {
-  _time: "等待时间",
-  locating: "选择元素",
-  locating1: "选择元素 A",
-  locating2: "选择元素 B",
-  input_value: "输入内容",
-  url: "URL 地址",
-  path: "保存路径",
-  file_path: "文件路径",
-  file_name: "文件名称",
-  storage_state: "Cookie 数据",
-  set_cache_key: "缓存变量名",
-  file_key: "文件变量名",
-  keyboard: "按键",
-  text: "文本内容",
-  count: "数量",
-  package_name: "应用包名",
-  catalogue: "目录",
-  time_: "等待时间",
-  n: "数值",
-  individual: "页签序号",
-  x: "横坐标 X",
-  y: "纵坐标 Y",
-  sx: "起点 X",
-  sy: "起点 Y",
-  ex: "终点 X",
-  ey: "终点 Y",
-  x_key: "X 坐标变量名",
-  y_key: "Y 坐标变量名",
-  expected: "期望值",
-  expected_count: "期望数量",
-  attribute_name: "属性名称",
-  pattern: "正则表达式",
-  left_value: "左值（支持 ${变量名}）",
-  operator: "比较方式",
-  right_value: "右值（支持 ${变量名}）",
-  connection_string: "PostgreSQL 连接串",
-  sql: "SQL 查询",
-  result_variable: "结果变量名",
-  variable_name: "变量名",
-  variable_value: "变量值（支持 ${变量名}）",
-  python_code: "Python 代码"
-};
-
-function operationGroupLabel(title = "") {
-  return title.startsWith("WEB ") ? title.slice(4) : title.replace(/^安卓 /, "安卓·");
-}
-
-function parseStepFlow(description = "") {
-  try {
-    const flow = JSON.parse(description);
-    if (flow?.schema === "synapse-flow-v1" && Array.isArray(flow.nodes) && Array.isArray(flow.connections)) return flow;
-  } catch {
-    // 兼容原有的纯文本步骤描述。
-  }
-  return { schema: "synapse-flow-v1", nodes: [], connections: [] };
-}
-
-function formatStepSequence(description = "") {
-  const flow = parseStepFlow(description);
-  if (flow.nodes.length) return flow.nodes.map((node) => node.operationName || node.title || node.type).filter(Boolean).join(" → ");
-  return description;
-}
-
-function orderFlowNodes(nodes, connections) {
-  if (!nodes.length) return [];
-  const incoming = new Set(connections.map((connection) => connection.to));
-  const ordered = [];
-  const visited = new Set();
-  let current = nodes.find((node) => !incoming.has(node.id)) || nodes[0];
-  while (current && !visited.has(current.id)) {
-    ordered.push(current);
-    visited.add(current.id);
-    const nextID = connections.find((connection) => connection.from === current.id)?.to;
-    current = nodes.find((node) => node.id === nextID);
-  }
-  nodes.forEach((node) => {
-    if (!visited.has(node.id)) ordered.push(node);
-  });
-  return ordered;
-}
-
-export function buildDebugActions(nodes, connections, pageElements = []) {
-  return nodes.map((node) => {
-    const action = buildDebugAction(node, pageElements);
-    const outgoing = connections.filter((connection) => connection.from === node.id);
-    return {
-      ...action,
-      nodeId: String(node.id),
-      next: outgoing.find((connection) => !connection.branch)?.to?.toString() || "",
-      trueNext: outgoing.find((connection) => connection.branch === "true")?.to?.toString() || "",
-      falseNext: outgoing.find((connection) => connection.branch === "false")?.to?.toString() || ""
-    };
-  });
-}
-
-function buildDebugAction(node, pageElements = []) {
-  const values = node.values || {};
-  const elementName = (locator) => pageElements.find((item) => item.locator === locator)?.name || "元素";
-  switch (node.tag) {
-    case "w_wait_for_timeout": return { action: "waitForTimeout", value: values._time, label: `等待 ${values._time || 0} 秒` };
-    case "w_goto": return { action: "goto", url: values.url, label: `打开 ${values.url || "URL"}` };
-    case "w_screenshot": return { action: "screenshot", name: values.path || undefined, label: "页面截图" };
-    case "w_click":
-    case "w_force_click": return { action: "click", selector: values.locating, label: `点击${elementName(values.locating)}` };
-    case "w_dblclick": return { action: "dblclick", selector: values.locating, label: `双击${elementName(values.locating)}` };
-    case "w_input":
-    case "w_clear_input": return { action: "fill", selector: values.locating, value: values.input_value || "", label: `输入${elementName(values.locating)} ${values.input_value || "空值"}` };
-    case "w_hover": return { action: "hover", selector: values.locating, label: `悬停${elementName(values.locating)}` };
-    case "assert_text": return { action: "assertText", selector: values.locating, text: values.expected, label: "断言页面文本" };
-    case "assert_text_equals": return { action: "assertTextEquals", selector: values.locating, text: values.expected, label: "断言元素文本等于" };
-    case "assert_title": return { action: "assertTitle", text: values.expected, label: "断言页面标题" };
-    case "assert_title_equals": return { action: "assertTitleEquals", text: values.expected, label: "断言页面标题等于" };
-    case "assert_url": return { action: "assertURL", text: values.expected, label: "断言页面 URL" };
-    case "assert_element_exists": return { action: "assertElementExists", selector: values.locating, label: "断言元素存在" };
-    case "assert_visible": return { action: "assertVisible", selector: values.locating, label: "断言元素可见" };
-    case "assert_hidden": return { action: "assertHidden", selector: values.locating, label: "断言元素隐藏" };
-    case "assert_enabled": return { action: "assertEnabled", selector: values.locating, label: "断言元素启用" };
-    case "assert_disabled": return { action: "assertDisabled", selector: values.locating, label: "断言元素禁用" };
-    case "assert_checked": return { action: "assertChecked", selector: values.locating, label: "断言元素已选中" };
-    case "assert_unchecked": return { action: "assertUnchecked", selector: values.locating, label: "断言元素未选中" };
-    case "assert_value_equals": return { action: "assertValueEquals", selector: values.locating, text: values.expected, label: "断言输入值" };
-    case "assert_attribute_equals": return { action: "assertAttribute", selector: values.locating, attribute: values.attribute_name, text: values.expected, operator: "equals", label: "断言元素属性等于" };
-    case "assert_attribute_contains": return { action: "assertAttribute", selector: values.locating, attribute: values.attribute_name, text: values.expected, operator: "contains", label: "断言元素属性包含" };
-    case "assert_count": return { action: "assertCount", selector: values.locating, count: values.expected_count, label: "断言元素数量" };
-    case "assert_variable": return { action: "assertVariable", left: values.left_value, operator: values.operator, right: values.right_value, label: "断言变量" };
-    case "assert_variable_exists": return { action: "assertVariableExists", name: values.variable_name, label: "断言变量存在" };
-    case "assert_regex": return { action: "assertRegex", value: values.left_value, pattern: values.pattern, label: "断言正则匹配" };
-    case "sql_query": return { action: "sqlQuery", connectionString: values.connection_string, query: values.sql, resultVariable: values.result_variable, label: "执行 SQL 查询" };
-    case "set_variable": return { action: "setVariable", name: values.variable_name, value: values.variable_value, label: `设置变量 ${values.variable_name}` };
-    case "condition": return { action: "condition", left: values.left_value, operator: values.operator, right: values.right_value, label: "条件判断" };
-    case "python_code": return { action: "pythonCode", code: values.python_code, label: "执行 Python 代码" };
-    default: throw new Error(`暂不支持调试操作：${node.operationName || node.tag}`);
-  }
-}
-
-function debugStatusLabel(status, debugging) {
-  if (debugging || status === "queued" || status === "running") return "调试执行中";
-  if (status === "success") return "调试通过";
-  if (status === "failed") return "调试失败";
-  if (status === "canceled") return "调试已取消";
-  return "等待调试";
-}
-
 const stepNodeTypes = [
   { label: "元素操作", color: "#10b981" },
   { label: "断言操作", color: "#2548b8" },
@@ -459,147 +254,29 @@ export function UIAutomationPage({ activePath }) {
     return <TestCasesPage />;
   }
 
-  if (section === "全局变量") {
-    return <GlobalVariablesPage />;
-  }
-
   const resource = listSectionMap[section] || uiAutomationService.elements;
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
   return (
-    <ResourceListPage
-      title={section}
-      description="界面自动化资产管理"
-      panelTitle={`${section}列表`}
-      rows={pageItems(data)}
-      loading={loading}
-      error={error}
-      columns={[
-        { key: "id", title: "ID" },
-        { key: "name", title: "名称" },
-        { key: "category", title: "分类" },
-        { key: "method", title: "模块/方法" },
-        { key: "locator", title: "定位/地址" },
-        { key: "status", title: "状态" },
-        { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) }
-      ]}
-    />
+    <>
+      <PageHeader title={section} description="界面自动化资产管理" />
+      <StateBlock loading={loading} error={error}>
+        <DataTable
+          rows={pageItems(data)}
+          columns={[
+            { key: "id", title: "ID" },
+            { key: "name", title: "名称" },
+            { key: "category", title: "分类" },
+            { key: "method", title: "模块/方法" },
+            { key: "locator", title: "定位/地址" },
+            { key: "status", title: "状态" },
+            { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) }
+          ]}
+        />
+      </StateBlock>
+    </>
   );
 }
-
-const emptyVariableForm = { name: "", value: "", category: "string", method: "project", action: "", locator: "", description: "", status: "active" };
-
-function GlobalVariablesPage() {
-  const [form, setForm] = useState(emptyVariableForm);
-  const [query, setQuery] = useState("");
-  const [modal, setModal] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false);
-  const { data, loading, error, reload } = useAsyncData(() => uiAutomationService.variables.list({ page: 1, pageSize: 100 }), []);
-  const { data: productsData, loading: productsLoading } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
-  const productOptions = useMemo(() => pageItems(productsData).map((item) => ({ value: String(item.id), label: `${item.projectName}/${item.name}` })), [productsData]);
-  const { data: environmentsData, loading: environmentsLoading } = useAsyncData(
-    () => form.method === "environment" && form.action ? configService.testObjects.list({ productId: form.action, page: 1, pageSize: 200 }) : Promise.resolve({ items: [] }),
-    [form.method, form.action]
-  );
-  const environmentOptions = useMemo(() => pageItems(environmentsData).map((item) => ({ value: item.envName, label: item.envName })), [environmentsData]);
-  const rows = pageItems(data).filter((row) => !query || [row.name, row.action, row.locator, row.description].some((value) => String(value || "").toLowerCase().includes(query.toLowerCase())));
-
-  function openCreate() {
-    setEditing(null);
-    setForm(emptyVariableForm);
-    setModal(true);
-  }
-
-  function openEdit(row) {
-    setEditing(row);
-    setForm({ name: row.name, value: row.value, category: row.category || "string", method: row.method || "project", action: row.action || "", locator: row.locator || "", description: row.description || "", status: row.status || "active" });
-    setModal(true);
-  }
-
-  async function save(event) {
-    event.preventDefault();
-    if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(form.name)) {
-      setNotice("变量名必须以字母或下划线开头，只能包含字母、数字、点、横线和下划线。");
-      return;
-    }
-    if (!form.action) {
-      setNotice("请选择变量所属的项目/产品。");
-      return;
-    }
-    if (form.method === "environment" && !form.locator) {
-      setNotice("请选择环境级变量所属的环境。");
-      return;
-    }
-    if (form.category === "json") {
-      try { JSON.parse(form.value); } catch { setNotice("变量值不是有效的 JSON。"); return; }
-    }
-    setBusy(true);
-    setNotice("");
-    try {
-      if (editing) await uiAutomationService.variables.update(editing.id, form);
-      else await uiAutomationService.variables.create(form);
-      await reload();
-      setModal(false);
-      setNotice(editing ? "全局变量已更新。" : "全局变量已创建。");
-    } catch (err) {
-      setNotice(err.message || "保存全局变量失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(row) {
-    if (!window.confirm(`确认删除变量“${row.name}”吗？`)) return;
-    setBusy(true);
-    try {
-      await uiAutomationService.variables.remove(row.id);
-      await reload();
-      setNotice("全局变量已删除。");
-    } catch (err) {
-      setNotice(err.message || "删除全局变量失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const columns = [
-    { key: "name", title: "变量名称", render: (row) => <div className="variable-name-cell"><code>{row.name}</code><button onClick={() => navigator.clipboard?.writeText(`\${${row.name}}`)} type="button">复制引用</button></div> },
-    { key: "value", title: "变量值", render: (row) => <code className="variable-value">{formatVariableValue(row)}</code> },
-    { key: "category", title: "类型", render: (row) => variableTypeLabel(row.category) },
-    { key: "method", title: "作用域", render: (row) => row.method === "environment" ? "环境级" : "项目级" },
-    { key: "action", title: "项目/产品", render: (row) => productOptions.find((item) => item.value === String(row.action))?.label || row.action || "-" },
-    { key: "locator", title: "环境", render: (row) => row.method === "environment" ? row.locator || "-" : "-" },
-    { key: "status", title: "状态", render: (row) => <span className={`status-badge ${row.status === "active" ? "status-passed" : ""}`}>{row.status === "active" ? "启用" : "停用"}</span> },
-    { key: "updatedAt", title: "更新时间", render: (row) => formatTime(row.updatedAt) },
-    { key: "operation", title: "操作", render: (row) => <div className="action-links"><button className="link-button" onClick={() => openEdit(row)} type="button">编辑</button><button className="link-button danger-link" onClick={() => remove(row)} type="button">删除</button></div> }
-  ];
-
-  return <div className="section-stack global-variable-page">
-    <PageHeader title="全局变量" description="集中维护界面自动化执行过程中复用的项目与环境参数" />
-    <section className="variable-overview"><div><span>变量总数</span><strong>{pageItems(data).length}</strong></div><div><span>已启用</span><strong>{pageItems(data).filter((row) => row.status === "active").length}</strong></div><div><span>环境变量</span><strong>{pageItems(data).filter((row) => row.method === "environment").length}</strong></div><div className="variable-syntax"><span>引用语法</span><strong>{"${variable_name}"}</strong></div></section>
-    <section className="resource-panel">
-      <div className="panel-header"><strong>变量列表</strong><button className="primary-button compact-button" onClick={openCreate} type="button">新增变量</button></div>
-      <div className="variable-toolbar"><input className="text-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索变量名称、项目或环境" /><span>优先级：用例变量 ＞ 环境变量 ＞ 项目变量</span></div>
-      {notice ? <div className="inline-notice">{notice}</div> : null}
-      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={rows} emptyText="暂无全局变量，请先新增变量" /></TablePanel></StateBlock>
-    </section>
-    {modal ? <div className="modal-backdrop"><form className="modal-card variable-modal" onSubmit={save}><div className="modal-header"><strong>{editing ? "编辑全局变量" : "新增全局变量"}</strong><button className="modal-close" onClick={() => setModal(false)} type="button">×</button></div><div className="variable-form-grid">
-      <label className="form-field"><span>变量名称</span><input className="text-input" disabled={Boolean(editing)} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如 base_url" /></label>
-      <label className="form-field"><span>变量类型</span><select className="text-input" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="string">文本</option><option value="number">数字</option><option value="boolean">布尔值</option><option value="json">JSON</option></select></label>
-      <label className="form-field"><span>作用域</span><select className="text-input" value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value, locator: "" })}><option value="project">项目级</option><option value="environment">环境级</option></select></label>
-      <label className="form-field"><span>项目/产品</span><select className="text-input" disabled={productsLoading} value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value, locator: "" })}><option value="">{productsLoading ? "正在加载项目/产品" : "请选择项目/产品"}</option>{productOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-      {form.method === "environment" ? <label className="form-field"><span>环境名称</span><select className="text-input" disabled={!form.action || environmentsLoading} value={form.locator} onChange={(event) => setForm({ ...form, locator: event.target.value })}><option value="">{!form.action ? "请先选择项目/产品" : environmentsLoading ? "正在加载环境" : "请选择环境"}</option>{environmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label> : null}
-      <label className="form-field variable-value-field"><span>变量值</span><textarea className="text-area" rows="4" value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} placeholder="请输入变量值" /></label>
-      <label className="form-field variable-value-field"><span>描述</span><textarea className="text-area" rows="2" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="说明变量用途" /></label>
-      <label className="form-field"><span>状态</span><select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="active">启用</option><option value="disabled">停用</option></select></label>
-    </div><div className="variable-reference-preview"><span>使用方式</span><code>{form.name ? `\${${form.name}}` : "${variable_name}"}</code></div><div className="modal-actions"><button className="icon-text-button compact-button" onClick={() => setModal(false)} type="button">取消</button><button className="primary-button compact-button" disabled={busy} type="submit">{busy ? "保存中" : "保存变量"}</button></div></form></div> : null}
-  </div>;
-}
-
-function variableTypeLabel(value) { return { string: "文本", number: "数字", boolean: "布尔值", json: "JSON" }[value] || "文本"; }
-function formatVariableValue(row) { const value = String(row.value || ""); return value.length > 48 ? `${value.slice(0, 48)}…` : value || "-"; }
 
 function PageStepsPage() {
   const [form, setForm] = useState(initialStepFilters);
@@ -745,28 +422,11 @@ function PageStepsPage() {
     }
   }
 
-  async function openStepWorkbench(row) {
-    setBusy(true);
-    setNotice("");
-    try {
-      const result = await uiAutomationService.steps.list({ id: row.id, page: 1, pageSize: 1 });
-      const latestStep = pageItems(result)[0];
-      if (!latestStep) throw new Error("页面步骤不存在或已被删除");
-      persistPageState("ui.steps.workingStep", latestStep);
-      setWorkingStep(latestStep);
-    } catch (err) {
-      setNotice(err.message || "加载页面步骤失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (workingStep) {
     return (
       <StepWorkbench
         step={workingStep}
-        onBack={async () => {
-          await reload();
+        onBack={() => {
           clearPageState("ui.steps.workingStep");
           setWorkingStep(null);
         }}
@@ -881,7 +541,7 @@ function PageStepsPage() {
                     <th>模块名称</th>
                     <th>所属页面</th>
                     <th>步骤名称</th>
-                    <th className="step-sequence-column">预估步骤顺序</th>
+                    <th>预估步骤顺序</th>
                     <th>状态</th>
                     <th>操作</th>
                   </tr>
@@ -898,10 +558,8 @@ function PageStepsPage() {
                         <td>{row.method || "-"}</td>
                         <td>{row.locator || "-"}</td>
                         <td>{row.name || "-"}</td>
-                        <td className="step-sequence-column">
-                          <div className="step-sequence-text" title={formatStepSequence(row.description)}>
-                            {formatStepSequence(row.description) || "-"}
-                          </div>
+                        <td className="cell-ellipsis cell-wide" title={row.description || ""}>
+                          {row.description || "-"}
                         </td>
                         <td>
                           <span className={row.status === "disabled" ? "status-badge status-failed" : "status-badge status-passed"}>
@@ -912,7 +570,10 @@ function PageStepsPage() {
                           <div className="action-links">
                             <button
                               className="link-button"
-                              onClick={() => openStepWorkbench(row)}
+                              onClick={() => {
+                                persistPageState("ui.steps.workingStep", row);
+                                setWorkingStep(row);
+                              }}
                               type="button"
                             >
                               调试
@@ -922,7 +583,10 @@ function PageStepsPage() {
                             </button>
                             <button
                               className="link-button"
-                              onClick={() => openStepWorkbench(row)}
+                              onClick={() => {
+                                persistPageState("ui.steps.workingStep", row);
+                                setWorkingStep(row);
+                              }}
                               type="button"
                             >
                               步骤
@@ -1005,8 +669,6 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
           category: source.category || "",
           method: source.method || "",
           locator: source.locator || "",
-          action: source.action || "",
-          value: source.value || "",
           description: source.description || "",
           status: source.status || "active"
         }
@@ -1062,8 +724,8 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
         category: form.category.trim(),
         method: form.method.trim(),
         locator: form.locator.trim(),
-        action: form.action,
-        value: form.value.trim(),
+        action: "",
+        value: "",
         description: form.description.trim(),
         status: form.status || "active"
       },
@@ -1128,6 +790,17 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
             <span>步骤名称</span>
             <input className="text-input" placeholder="请输入页面步骤名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           </label>
+          <label className="form-field form-field-inline">
+            <span>状态</span>
+            <select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+              <option value="active">通过</option>
+              <option value="disabled">失败</option>
+            </select>
+          </label>
+          <label className="form-field field-span-2">
+            <span>预估步骤顺序</span>
+            <textarea className="text-area" rows="3" placeholder="例如：-> 设置 -> 点击 -> 结果" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+          </label>
         </div>
         {error ? <div className="form-error modal-error">{error}</div> : null}
         <div className="modal-actions">
@@ -1144,89 +817,19 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
 }
 
 function StepWorkbench({ step, onBack }) {
-  const [nodes, setNodes] = useState(() => parseStepFlow(step.description).nodes);
-  const [connections, setConnections] = useState(() => parseStepFlow(step.description).connections);
-  const [nodeSeq, setNodeSeq] = useState(() => Math.max(0, ...parseStepFlow(step.description).nodes.map((node) => Number(node.id) || 0)) + 1);
+  const [nodes, setNodes] = useState([]);
+  const [nodeSeq, setNodeSeq] = useState(1);
   const [selectedNode, setSelectedNode] = useState(null);
   const [draggingItem, setDraggingItem] = useState(null);
   const [draggingNode, setDraggingNode] = useState(null);
   const [panningCanvas, setPanningCanvas] = useState(null);
   const [zoom, setZoom] = useState(1);
-  const [configError, setConfigError] = useState("");
-  const [operationMenuOpen, setOperationMenuOpen] = useState(false);
-  const [activeOperationGroup, setActiveOperationGroup] = useState(elementOperationGroups[0].title);
-  const [pageElementOptions, setPageElementOptions] = useState([]);
-  const [pageElementsLoading, setPageElementsLoading] = useState(false);
-  const [toast, setToast] = useState("");
-  const [connectingFrom, setConnectingFrom] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [debugging, setDebugging] = useState(false);
-  const [debugHeadless, setDebugHeadless] = useState(true);
-  const [debugResult, setDebugResult] = useState(null);
-  const [detailTab, setDetailTab] = useState("config");
-  const [debugBaseURL, setDebugBaseURL] = useState("");
   const canvasRef = useRef(null);
-  const operationPickerRef = useRef(null);
   const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
   const selected = selectedNode ? nodes.find((node) => node.id === selectedNode.id) || selectedNode : null;
   const canvasSize = { width: 1200, height: 720 };
-  const availableOperationGroups = operationGroupsForType(selected?.type);
-  const operationOptions = availableOperationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
-  const activeGroup = availableOperationGroups.find((group) => group.title === activeOperationGroup) || availableOperationGroups[0];
-  const operationDisplay = selected?.tag
-    ? `${operationGroupLabel(selected.operationGroup)} / ${selected.operationName}`
-    : "请选择节点操作";
-  const connectionCount = connections.length;
-  const connectedNodeIds = new Set(connections.flatMap((connection) => [connection.from, connection.to]));
-  const unconnectedCount = nodes.filter((node) => !connectedNodeIds.has(node.id)).length;
-
-  useEffect(() => {
-    const closeOperationMenu = (event) => {
-      if (!operationPickerRef.current?.contains(event.target)) setOperationMenuOpen(false);
-    };
-    document.addEventListener("mousedown", closeOperationMenu);
-    return () => document.removeEventListener("mousedown", closeOperationMenu);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    async function loadPageElements() {
-      setPageElementsLoading(true);
-      try {
-        const pages = await uiAutomationService.elements.list({ pageName: step.locator || "", page: 1, pageSize: 100 });
-        const pageRows = pageItems(pages);
-        const pageRow = pageRows.find((item) => item.name === step.locator) || pageRows[0];
-        if (!pageRow) {
-          if (active) setPageElementOptions([]);
-          return;
-        }
-        if (active) setDebugBaseURL(pageRow.locator || "");
-        const elements = await uiAutomationService.pageElements.list({ pageId: pageRow.id, page: 1, pageSize: 200 });
-        if (active) {
-          setPageElementOptions(
-            pageItems(elements)
-              .map((item) => ({ id: item.id, name: item.name, locator: item.locator1 || item.locator2 || item.locator3 || "" }))
-              .filter((item) => item.locator)
-          );
-        }
-      } catch {
-        if (active) setPageElementOptions([]);
-      } finally {
-        if (active) setPageElementsLoading(false);
-      }
-    }
-    loadPageElements();
-    return () => {
-      active = false;
-    };
-  }, [step.locator]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(""), 2200);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
+  const operationOptions = operationGroups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.title })));
 
   const createNode = (item, event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1246,12 +849,8 @@ function StepWorkbench({ step, onBack }) {
       y: Math.max(24, (event.clientY - rect.top + event.currentTarget.scrollTop) / zoomRef.current - 24)
     };
 
-    const previousNode = nodes[nodes.length - 1];
     setNodeSeq((value) => value + 1);
     setNodes((current) => [...current, nextNode]);
-    if (previousNode && previousNode.type !== "条件判断" && !connections.some((connection) => connection.from === previousNode.id)) {
-      setConnections((current) => [...current, { from: previousNode.id, to: nextNode.id }]);
-    }
     setSelectedNode(nextNode);
   };
 
@@ -1370,53 +969,6 @@ function StepWorkbench({ step, onBack }) {
     });
   };
 
-  const startConnection = (event, node, branch = "") => {
-    event.preventDefault();
-    event.stopPropagation();
-    setConnectingFrom({ nodeId: node.id, branch });
-    setSelectedNode(node);
-    setToast("请选择目标节点");
-  };
-
-  const completeConnection = (event, node) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!connectingFrom) return;
-    if (connectingFrom.nodeId === node.id) {
-      setToast("不能连接当前节点");
-      return;
-    }
-    const remainingConnections = connections.filter((connection) => !(connection.from === connectingFrom.nodeId && (connection.branch || "") === connectingFrom.branch) && connection.to !== node.id);
-    const pending = [node.id];
-    const visited = new Set();
-    while (pending.length) {
-      const cursor = pending.pop();
-      if (cursor === connectingFrom.nodeId) {
-        setToast("不能形成循环连接");
-        return;
-      }
-      if (visited.has(cursor)) continue;
-      visited.add(cursor);
-      remainingConnections.filter((connection) => connection.from === cursor).forEach((connection) => pending.push(connection.to));
-    }
-    setConnections([...remainingConnections, { from: connectingFrom.nodeId, to: node.id, ...(connectingFrom.branch ? { branch: connectingFrom.branch } : {}) }]);
-    setConnectingFrom(null);
-    setSelectedNode(node);
-    setToast("连接成功");
-  };
-
-  const deleteSelectedNode = async () => {
-    if (!selected) return;
-    const nextNodes = nodes.filter((node) => node.id !== selected.id);
-    const nextConnections = connections.filter((connection) => connection.from !== selected.id && connection.to !== selected.id);
-    if (await persistFlow(nextNodes, nextConnections, "节点已删除")) {
-      setNodes(nextNodes);
-      setConnections(nextConnections);
-      if (connectingFrom?.nodeId === selected.id) setConnectingFrom(null);
-      setSelectedNode(null);
-    }
-  };
-
   const updateSelectedNode = (patch) => {
     if (!selected) return;
     setNodes((current) => current.map((node) => (node.id === selected.id ? { ...node, ...patch } : node)));
@@ -1424,8 +976,6 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const selectOperation = (tag) => {
-    setConfigError("");
-    setOperationMenuOpen(false);
     const item = operationOptions.find((option) => option.tag === tag);
     if (!item) {
       updateSelectedNode({
@@ -1435,15 +985,11 @@ function StepWorkbench({ step, onBack }) {
         tag: "",
         params: [],
         values: {},
-        locator: "未配置",
-        saved: false
+        locator: "未配置"
       });
       return;
     }
-    const values = item.params.reduce((result, param) => ({
-      ...result,
-      [param]: selected?.values?.[param] || (param === "operator" ? "equals" : "")
-    }), {});
+    const values = item.params.reduce((result, param) => ({ ...result, [param]: selected?.values?.[param] || "" }), {});
     updateSelectedNode({
       operationGroup: item.group,
       operationName: item.name,
@@ -1451,140 +997,8 @@ function StepWorkbench({ step, onBack }) {
       tag: item.tag,
       params: item.params,
       values,
-      locator: item.params.includes("locating") ? values.locating || "请配置元素定位" : item.params.join(", ") || "无需参数",
-      saved: false
+      locator: item.params.includes("locating") ? values.locating || "请配置元素定位" : item.params.join(", ") || "无需参数"
     });
-  };
-
-  const toggleOperationMenu = () => {
-    if (!operationMenuOpen) {
-      const selectedGroupVisible = availableOperationGroups.some((group) => group.title === selected?.operationGroup);
-      setActiveOperationGroup(selectedGroupVisible ? selected.operationGroup : availableOperationGroups[0].title);
-    }
-    setOperationMenuOpen((open) => !open);
-  };
-
-  const updateOperationParam = (param, value) => {
-    setConfigError("");
-    updateSelectedNode({ values: { ...selected.values, [param]: value }, saved: false });
-  };
-
-  const persistFlow = async (nextNodes = nodes, nextConnections = connections, successMessage = "保存成功") => {
-    setSaving(true);
-    setConfigError("");
-    try {
-      const description = JSON.stringify({ schema: "synapse-flow-v1", nodes: nextNodes, connections: nextConnections });
-      await uiAutomationService.steps.update(step.id, {
-        name: step.name || "",
-        category: step.category || "",
-        method: step.method || "",
-        locator: step.locator || "",
-        action: step.action || "",
-        value: step.value || "",
-        description,
-        status: step.status || "active"
-      });
-      persistPageState("ui.steps.workingStep", { ...step, description });
-      setToast(successMessage);
-      return true;
-    } catch (error) {
-      setConfigError(error.message || "保存失败，请稍后重试");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveNodeConfig = async () => {
-    if (!selected.tag) {
-      setConfigError("请选择元素操作");
-      return;
-    }
-    const missingParam = selected.params.find((param) => !String(selected.values?.[param] || "").trim());
-    if (missingParam) {
-      setConfigError(`请输入${operationParamLabels[missingParam] || missingParam}`);
-      return;
-    }
-    const savedNode = {
-      ...selected,
-      saved: true,
-      locator: selected.params.includes("locating") ? selected.values.locating : selected.params.length ? "参数已配置" : "无需参数"
-    };
-    const nextNodes = nodes.map((node) => (node.id === selected.id ? savedNode : node));
-    if (await persistFlow(nextNodes, connections)) {
-      setNodes(nextNodes);
-      setSelectedNode(savedNode);
-    }
-  };
-
-  const runDebug = async () => {
-    setConfigError("");
-    if (!nodes.length) {
-      setConfigError("请先添加调试节点");
-      return;
-    }
-    if (nodes.some((node) => !node.saved)) {
-      setConfigError("请先保存所有节点配置");
-      return;
-    }
-    const incompleteCondition = nodes.find((node) => node.type === "条件判断" && (
-      !connections.some((connection) => connection.from === node.id && connection.branch === "true")
-      || !connections.some((connection) => connection.from === node.id && connection.branch === "false")
-    ));
-    if (incompleteCondition) {
-      setConfigError(`条件节点“${incompleteCondition.title}”必须同时连接真、假分支`);
-      return;
-    }
-    const incomingNodeIDs = new Set(connections.map((connection) => connection.to));
-    const roots = nodes.filter((node) => !incomingNodeIDs.has(node.id));
-    const reachable = new Set();
-    const pendingNodeIDs = roots.length === 1 ? [roots[0].id] : [];
-    while (pendingNodeIDs.length) {
-      const nodeID = pendingNodeIDs.pop();
-      if (reachable.has(nodeID)) continue;
-      reachable.add(nodeID);
-      connections.filter((connection) => connection.from === nodeID).forEach((connection) => pendingNodeIDs.push(connection.to));
-    }
-    if (roots.length !== 1 || reachable.size !== nodes.length) {
-      setConfigError("所有节点必须连接成一个完整流程后才能调试");
-      return;
-    }
-    let actions;
-    try {
-      actions = buildDebugActions(nodes, connections, pageElementOptions);
-    } catch (error) {
-      setConfigError(error.message);
-      return;
-    }
-    if (!(await persistFlow(nodes, connections, "画布已保存"))) return;
-    setDebugging(true);
-    setDetailTab("debug");
-    setDebugResult({ status: "queued", result: null });
-    try {
-      const task = await executionService.debug({
-        url: actions.some((action) => action.action === "goto") ? "" : debugBaseURL,
-        actions,
-        timeoutSeconds: 30,
-        headless: debugHeadless
-      });
-      const deadline = Date.now() + 60000;
-      let result = task;
-      while (Date.now() < deadline) {
-        result = await executionService.debugStatus(task.taskId, task.executorId);
-        setDebugResult(result);
-        if (["success", "failed", "canceled"].includes(result.status)) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      if (!["success", "failed", "canceled"].includes(result.status)) {
-        throw new Error("调试执行超时，请检查执行器状态");
-      }
-      setToast(result.status === "success" ? "调试通过" : "调试失败");
-    } catch (error) {
-      setDebugResult({ status: "failed", result: { error: error.message || "调试失败" } });
-      setToast("调试失败");
-    } finally {
-      setDebugging(false);
-    }
   };
 
   const handleWheel = (event) => {
@@ -1599,22 +1013,19 @@ function StepWorkbench({ step, onBack }) {
   return (
     <section className="step-workbench">
       <div className="step-workbench-header">
-        <div className="toolbar-title">
-          <strong>页面步骤工作台 / {step.id} / {step.name || "-"}</strong>
+        <div>
+          <h2>页面步骤工作台 / {step.id} / {step.name || "-"}</h2>
+          <p>编排页面步骤、维护节点配置，并查看最近一次调试结果</p>
         </div>
         <div className="action-row">
           <button className="icon-text-button compact-button" type="button">
             美化画布
           </button>
-          <button className="primary-button compact-button" disabled={saving} onClick={() => persistFlow(nodes, connections, "画布保存成功")} type="button">
-            {saving ? "保存中" : "保存画布"}
+          <button className="primary-button compact-button" type="button">
+            保存画布
           </button>
-          <div className="debug-mode-switch" aria-label="调试浏览器模式">
-            <button className={!debugHeadless ? "active" : ""} disabled={debugging} onClick={() => setDebugHeadless(false)} type="button">有头</button>
-            <button className={debugHeadless ? "active" : ""} disabled={debugging} onClick={() => setDebugHeadless(true)} type="button">无头</button>
-          </div>
-          <button className="success-button compact-button" disabled={debugging || saving} onClick={runDebug} type="button">
-            {debugging ? "调试中" : "调试"}
+          <button className="success-button compact-button" type="button">
+            调试
           </button>
           <button className="icon-text-button compact-button" onClick={onBack} type="button">
             返回
@@ -1624,9 +1035,8 @@ function StepWorkbench({ step, onBack }) {
 
       <div className="step-workbench-grid">
         <aside className="step-palette">
-          <div className="toolbar-title">
-            <strong>操作面板</strong>
-          </div>
+          <strong>操作面板</strong>
+          <p>拖入节点类型</p>
           <div className="palette-list">
             {stepNodeTypes.map((item) => (
               <button
@@ -1647,15 +1057,15 @@ function StepWorkbench({ step, onBack }) {
 
         <main className="flow-panel">
           <div className="flow-panel-header">
-            <div className="toolbar-title">
+            <div>
               <strong>流程画布</strong>
-              {connectingFrom ? <small className="connection-mode-tip">请选择目标节点左侧连接点</small> : null}
+              <p>从左侧拖入节点，连接执行顺序后保存画布</p>
             </div>
             <div className="flow-stats">
               <span className="warning-stat">未保存 {nodes.filter((node) => !node.saved).length}</span>
-              <span className="warning-stat">未连接 {unconnectedCount}</span>
+              <span className="warning-stat">未连接 {nodes.length > 1 ? 1 : 0}</span>
               <span>节点 {nodes.length}</span>
-              <span>连线 {connectionCount}</span>
+              <span>连线 {Math.max(0, nodes.length - 1)}</span>
               <span>步骤 {nodes.length}</span>
             </div>
           </div>
@@ -1689,57 +1099,20 @@ function StepWorkbench({ step, onBack }) {
               <>
                 <div className="canvas-content" style={{ height: canvasSize.height * zoom, width: canvasSize.width * zoom }}>
                   <div className="free-node-layer" style={{ height: canvasSize.height, transform: `scale(${zoom})`, width: canvasSize.width }}>
-                    <svg className="flow-connections" height={canvasSize.height} width={canvasSize.width} aria-hidden="true">
-                      <defs>
-                        <marker id="flow-arrow" markerHeight="7" markerWidth="8" orient="auto" refX="7" refY="3.5">
-                          <path d="M0,0 L8,3.5 L0,7 Z" />
-                        </marker>
-                      </defs>
-                      {connections.map((connection) => {
-                        const node = nodes.find((item) => item.id === connection.from);
-                        const nextNode = nodes.find((item) => item.id === connection.to);
-                        if (!node || !nextNode) return null;
-                        const startX = node.x + 156;
-                        const startY = node.y + (connection.branch === "true" ? 20 : connection.branch === "false" ? 46 : 32);
-                        const endX = nextNode.x;
-                        const endY = nextNode.y + 32;
-                        const curve = Math.max(55, Math.abs(endX - startX) / 2);
-                        return (
-                          <path
-                            className="flow-connection-path"
-                            d={`M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`}
-                            key={`${connection.from}-${connection.to}-${connection.branch || "next"}`}
-                            markerEnd="url(#flow-arrow)"
-                          />
-                        );
-                      })}
-                    </svg>
                     {nodes.map((node) => (
-                      <div
-                        className={`${selected?.id === node.id ? "flow-node active" : "flow-node"}${connectingFrom?.nodeId === node.id ? " is-connecting" : ""}`}
+                      <button
+                        className={selected?.id === node.id ? "flow-node active" : "flow-node"}
                         key={node.id}
                         onMouseDown={(event) => handleNodeMouseDown(event, node)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") setSelectedNode(node);
-                        }}
-                        role="button"
                         style={{ borderLeftColor: node.color, left: node.x, top: node.y }}
-                        tabIndex="0"
+                        type="button"
                       >
-                        <button aria-label={`连接到${node.title}`} className="node-port input-port" onClick={(event) => completeConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
                         <span>{node.type}</span>
                         <strong>{node.title}</strong>
                         <small>{node.tag || "未配置"}</small>
                         <em>{node.saved ? "已配置" : "未保存"}</em>
-                        {node.type === "条件判断" ? (
-                          <>
-                            <button aria-label={`从${node.title}真分支开始连接`} className="node-port output-port condition-true-port" onClick={(event) => startConnection(event, node, "true")} onMouseDown={(event) => event.stopPropagation()} type="button">真</button>
-                            <button aria-label={`从${node.title}假分支开始连接`} className="node-port output-port condition-false-port" onClick={(event) => startConnection(event, node, "false")} onMouseDown={(event) => event.stopPropagation()} type="button">假</button>
-                          </>
-                        ) : (
-                          <button aria-label={`从${node.title}开始连接`} className="node-port output-port" onClick={(event) => startConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
-                        )}
-                      </div>
+                        <i />
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -1767,102 +1140,29 @@ function StepWorkbench({ step, onBack }) {
             {selected ? <span>{selected.type}</span> : null}
           </div>
           <div className="detail-tabs">
-            <button className={detailTab === "config" ? "active" : ""} onClick={() => setDetailTab("config")} type="button">
+            <button className="active" type="button">
               节点配置
             </button>
-            <button className={detailTab === "debug" ? "active" : ""} onClick={() => setDetailTab("debug")} type="button">调试结果</button>
+            <button type="button">调试结果</button>
           </div>
-          {detailTab === "config" ? (selected ? (
+          {selected ? (
             <div className="node-config">
               <div className="recent-element-box">
-                <strong>{selected.type === "元素操作" || selected.type === "断言操作" ? "最近测试的元素信息" : "节点运行上下文"}</strong>
-                <div>{selected.type === "元素操作" || selected.type === "断言操作" ? "暂无元素信息" : "可使用 ${变量名} 引用前序节点结果"}</div>
+                <strong>最近测试的元素信息</strong>
+                <div>暂无元素信息</div>
               </div>
               <div className="node-section-title">节点详情</div>
-              <div className="form-field required-field">
-                <span>节点操作</span>
-                <div className="operation-cascader" ref={operationPickerRef}>
-                  <button
-                    aria-expanded={operationMenuOpen}
-                    aria-haspopup="listbox"
-                    className={operationMenuOpen ? "operation-cascader-trigger is-open" : "operation-cascader-trigger"}
-                    onClick={toggleOperationMenu}
-                    type="button"
-                  >
-                    <span className={selected.tag ? "" : "placeholder"}>{operationDisplay}</span>
-                    <i>⌄</i>
-                  </button>
-                  {operationMenuOpen ? (
-                    <div className="operation-cascader-menu">
-                      <div className="operation-group-list" role="listbox" aria-label="操作分类">
-                        {availableOperationGroups.map((group) => (
-                          <button
-                            aria-selected={activeGroup.title === group.title}
-                            className={activeGroup.title === group.title ? "active" : ""}
-                            key={group.title}
-                            onClick={() => setActiveOperationGroup(group.title)}
-                            onMouseEnter={() => setActiveOperationGroup(group.title)}
-                            type="button"
-                          >
-                            <span>{operationGroupLabel(group.title)}</span><i>›</i>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="operation-item-list" role="listbox" aria-label={operationGroupLabel(activeGroup.title)}>
-                        {activeGroup.items.map((item) => (
-                          <button
-                            aria-selected={selected.tag === item.tag}
-                            className={selected.tag === item.tag ? "active" : ""}
-                            key={item.tag}
-                            onClick={() => selectOperation(item.tag)}
-                            type="button"
-                          >
-                            {item.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              {selected.params.map((param) => (
-                <label className="form-field required-field" key={param}>
-                  <span>{operationParamLabels[param] || param}</span>
-                  {param === "operator" ? (
-                    <select className="text-input" value={selected.values?.[param] || "equals"} onChange={(event) => updateOperationParam(param, event.target.value)}>
-                      <option value="equals">等于</option>
-                      <option value="notEquals">不等于</option>
-                      <option value="contains">包含</option>
-                      <option value="greaterThan">大于</option>
-                      <option value="lessThan">小于</option>
-                    </select>
-                  ) : param.startsWith("locating") ? (
-                    <select
-                      className="text-input"
-                      disabled={pageElementsLoading || pageElementOptions.length === 0}
-                      value={selected.values?.[param] || ""}
-                      onChange={(event) => updateOperationParam(param, event.target.value)}
-                    >
-                      <option value="">
-                        {pageElementsLoading ? "正在加载页面元素" : pageElementOptions.length ? "请选择页面元素" : "暂无可选页面元素"}
-                      </option>
-                      {pageElementOptions.map((element) => (
-                        <option key={`${param}-${element.id}`} value={element.locator}>
-                          {element.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <textarea
-                      className="text-area node-param-input"
-                      placeholder={`请输入${operationParamLabels[param] || param}`}
-                      rows={param === "python_code" || param === "sql" ? 8 : 3}
-                      value={selected.values?.[param] || ""}
-                      onChange={(event) => updateOperationParam(param, event.target.value)}
-                    />
-                  )}
-                </label>
-              ))}
+              <label className="form-field required-field">
+                <span>元素操作</span>
+                <select className="text-input" value={selected.tag || ""} onChange={(event) => selectOperation(event.target.value)}>
+                  <option value="">请选择元素操作</option>
+                  {operationOptions.map((item) => (
+                    <option key={item.tag} value={item.tag}>
+                      {item.group} / {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="form-field">
                 <span>备注</span>
                 <textarea
@@ -1872,43 +1172,15 @@ function StepWorkbench({ step, onBack }) {
                   onChange={(event) => updateSelectedNode({ remark: event.target.value })}
                 />
               </label>
-              {configError ? <div className="form-error">{configError}</div> : null}
-              <div className="node-config-actions">
-                <button className="danger-button compact-button" disabled={saving} onClick={deleteSelectedNode} type="button">
-                  删除节点
-                </button>
-                <button className="primary-button compact-button" disabled={saving} onClick={saveNodeConfig} type="button">
-                  {saving ? "保存中" : "保存配置"}
-                </button>
-              </div>
             </div>
           ) : (
             <div className="empty-detail">
               <strong>暂未选择节点</strong>
               <p>在左侧画布中点击一个节点后，这里会显示元素、操作和断言配置。</p>
             </div>
-          )) : (
-            <div className="debug-result-panel">
-              <div className={`debug-status debug-status-${debugResult?.status || "idle"}`}>
-                <strong>{debugStatusLabel(debugResult?.status, debugging)}</strong>
-                <span>{debugResult?.taskId || "尚未启动调试任务"}</span>
-              </div>
-              {debugResult?.result?.output ? (
-                <div className="debug-output">
-                  <strong>执行进度</strong>
-                  <div className="debug-console" aria-live="polite">
-                    <div className="debug-console-title">调试执行窗口</div>
-                    <pre>{debugResult.result.output.split("\n").filter(Boolean).map((line) => `> ${line}`).join("\n")}</pre>
-                  </div>
-                </div>
-              ) : null}
-              {debugResult?.result?.error ? <div className="debug-output debug-error"><strong>错误信息</strong><pre>{debugResult.result.error}</pre></div> : null}
-              {!debugResult ? <div className="empty-detail"><strong>暂无调试结果</strong><p>点击页面右上角“调试”后，这里会实时显示执行结果。</p></div> : null}
-            </div>
           )}
         </aside>
       </div>
-      {toast ? <div className="success-toast" role="status">{toast}</div> : null}
     </section>
   );
 }
@@ -2298,29 +1570,39 @@ function PageElementPanel({ pageRow, onBack }) {
   }
 
   return (
-    <div className="section-stack">
-      <PageHeader title="页面元素配置" description={`页面对象：${pageRow.id} / ${pageRow.name || "-"}`} />
-      <section className="resource-panel">
-        <div className="panel-header">
-          <strong>元素列表</strong>
+    <section className="resource-panel page-element-config">
+      <div className="page-config-header">
+        <div>
+          <h2>页面元素配置 / {pageRow.id} / {pageRow.name || "-"}</h2>
+          <p className="panel-subtitle">维护页面元素定位、操作配置和批量导入数据</p>
         </div>
+        <button className="icon-text-button compact-button" onClick={onBack} type="button">
+          返回
+        </button>
+      </div>
 
-        <div className="list-actions">
-          <button className="icon-text-button compact-button" onClick={onBack} type="button">
-            返回
+      <div className="page-config-toolbar">
+        <span />
+        <div className="action-row">
+          <button className="primary-button compact-button" type="button">
+            下载模板
           </button>
-          <div className="action-row">
-            <button className="icon-text-button compact-button" type="button">下载模板</button>
-            <button className="icon-text-button compact-button" type="button">点击上传</button>
-            <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">新增</button>
-            <button className="danger-button compact-button" disabled={busy} onClick={handleBulkDelete} type="button">批量删除</button>
-          </div>
+          <button className="primary-button compact-button" type="button">
+            点击上传
+          </button>
+          <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
+            单个新增
+          </button>
+          <button className="danger-button compact-button" disabled={busy} onClick={handleBulkDelete} type="button">
+            批量删除
+          </button>
         </div>
+      </div>
 
-        {notice ? <div className="inline-notice">{notice}</div> : null}
+      {notice ? <div className="inline-notice">{notice}</div> : null}
 
-        <StateBlock loading={loading} error={error}>
-          <TablePanel>
+      <StateBlock loading={loading} error={error}>
+        <TablePanel>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -2397,9 +1679,8 @@ function PageElementPanel({ pageRow, onBack }) {
               setElementPageSize(value);
             }}
           />
-          </TablePanel>
-        </StateBlock>
-      </section>
+        </TablePanel>
+      </StateBlock>
 
       {modal ? (
         <PageElementModal
@@ -2428,7 +1709,7 @@ function PageElementPanel({ pageRow, onBack }) {
           }}
         />
       ) : null}
-    </div>
+    </section>
   );
 }
 
@@ -2738,3 +2019,5 @@ function PageElementModal({ busy, modal, pageRow, onClose, onSubmit }) {
 function uniqueOptions(rows, key) {
   return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
 }
+
+

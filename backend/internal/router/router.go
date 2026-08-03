@@ -18,6 +18,8 @@ type Dependencies struct {
 	ExecutionController     *controller.ExecutionController
 	NotificationController  *controller.NotificationController
 	APIAutomationController *controller.APIAutomationController
+	DataFactoryController   *controller.DataFactoryController
+	AIController            *controller.AIController
 	AuthMiddleware          gin.HandlerFunc
 }
 
@@ -51,6 +53,24 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerExecutionRoutes(authed, deps)
 	registerNotificationRoutes(authed, deps)
 	registerAPIAutomationRoutes(authed, deps)
+	registerDataFactoryRoutes(authed, deps)
+	registerAIRoutes(authed, deps)
+}
+
+func registerDataFactoryRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/data-factory")
+	group.GET("/generators", deps.DataFactoryController.ListGenerators)
+	group.POST("/generators/preview", deps.DataFactoryController.Preview)
+}
+
+func registerAIRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/ai")
+	group.GET("/config", deps.AIController.GetConfig)
+	group.POST("/models", deps.AIController.SaveModel)
+	group.DELETE("/models/:id", deps.AIController.DeleteModel)
+	group.POST("/test-connection", deps.AIController.TestConnection)
+	group.POST("/preferences", deps.AIController.SavePreferences)
+	group.POST("/chat", deps.AIController.Chat)
 }
 
 func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {

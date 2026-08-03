@@ -4,6 +4,8 @@ import { ConfigPage } from "../pages/ConfigPage.js";
 import { UIAutomationPage } from "../pages/UIAutomationPage.js";
 import { ExecutionPage } from "../pages/ExecutionPage.js";
 import { APIAutomationPage } from "../pages/APIAutomationPage.js";
+import { DataFactoryPage } from "../pages/DataFactoryPage.js";
+import { AIPage } from "../pages/AIPage.js";
 
 export const routes = [
   {
@@ -25,6 +27,14 @@ export const routes = [
   {
     match: (path) => path[0] === "接口自动化",
     Component: APIAutomationPage
+  },
+  {
+    match: (path) => path[0] === "数据工厂",
+    Component: DataFactoryPage
+  },
+  {
+    match: (path) => path[0] === "AI 智能",
+    Component: AIPage
   },
   {
     match: (path) => path[0] === "执行中心",

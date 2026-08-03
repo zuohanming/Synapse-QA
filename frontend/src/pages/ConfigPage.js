@@ -1,12 +1,10 @@
-import { Activity, Copy, KeyRound, Plus, RefreshCw, Server, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Copy, KeyRound, RefreshCw } from "lucide-react";
+import { useState } from "react";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
-import { executionService } from "../services/executionService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
 
@@ -21,137 +19,18 @@ export function ConfigPage({ activePath }) {
   if (section === "项目产品") {
     return <ProductConfigPage />;
   }
-  if (section === "测试对象") {
-    return <TestObjectConfigPage />;
-  }
 
-  const resource = configService.projects;
+  const resource = section === "测试对象" ? configService.testObjects : configService.projects;
   const { data, loading, error } = useAsyncData(() => resource.list({ page: 1, pageSize: 20 }), [section]);
 
-  return <ResourceListPage title={section} description="测试配置资产管理" panelTitle={`${section}列表`} rows={pageItems(data)} columns={columnsFor(section)} loading={loading} error={error} />;
-}
-
-function TestObjectConfigPage() {
-  const [filters, setFilters] = useState({ id: "", envName: "", productId: "" });
-  const [query, setQuery] = useState(filters);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [modal, setModal] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const { data: projectsData } = useAsyncData(() => configService.projects.list({ page: 1, pageSize: 200 }), []);
-  const { data: productsData } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 500 }), []);
-  const projects = pageItems(projectsData);
-  const products = pageItems(productsData);
-  const { data, loading, error, reload } = useAsyncData(
-    () => configService.testObjects.list({ ...query, page, pageSize }),
-    [query.id, query.envName, query.productId, page, pageSize]
+  return (
+    <>
+      <PageHeader title={section} description="测试配置资产管理" />
+      <StateBlock loading={loading} error={error}>
+        <DataTable rows={pageItems(data)} columns={columnsFor(section)} />
+      </StateBlock>
+    </>
   );
-  const rows = pageItems(data);
-  const total = Number(data?.total || 0);
-
-  async function remove(row) {
-    if (!window.confirm(`确认删除测试环境“${row.envName}”吗？`)) return;
-    setBusy(true);
-    setNotice("");
-    try {
-      await configService.testObjects.remove(row.id);
-      await reload();
-      setNotice("测试对象已删除。");
-    } catch (requestError) {
-      setNotice(requestError.message || "删除测试对象失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const columns = [
-    { key: "id", title: "ID" },
-    { key: "productName", title: "产品" },
-    { key: "envName", title: "环境名称" },
-    { key: "target", title: "目标地址" },
-    { key: "autoType", title: "自动化类型" },
-    { key: "permission", title: "权限", render: (row) => `${row.queryEnabled ? "查询" : ""}${row.queryEnabled && row.writeEnabled ? " / " : ""}${row.writeEnabled ? "写入" : ""}` || "无" },
-    { key: "owner", title: "负责人" },
-    { key: "actions", title: "操作", render: (row) => <div className="action-row"><button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">编辑</button><button className="danger-link" disabled={busy} onClick={() => remove(row)} type="button">删除</button></div> }
-  ];
-
-  return <div className="section-stack">
-    <PageHeader title="测试对象" description="维护各产品在不同环境中的访问地址，供接口调试和测试用例执行选择" />
-    <section className="resource-panel">
-      <div className="panel-header"><strong>测试对象列表</strong></div>
-      <form className="filter-grid" onSubmit={(event) => { event.preventDefault(); setPage(1); setQuery(filters); }}>
-        <label className="form-field"><span>ID</span><input className="text-input" placeholder="测试对象 ID" value={filters.id} onChange={(event) => setFilters({ ...filters, id: event.target.value })} /></label>
-        <label className="form-field"><span>环境名称</span><input className="text-input" placeholder="例如：测试环境" value={filters.envName} onChange={(event) => setFilters({ ...filters, envName: event.target.value })} /></label>
-        <label className="form-field"><span>产品</span><select className="text-input" value={filters.productId} onChange={(event) => setFilters({ ...filters, productId: event.target.value })}><option value="">全部产品</option>{products.map((item) => <option key={item.id} value={item.id}>{item.projectName ? `${item.projectName} / ` : ""}{item.name}</option>)}</select></label>
-        <div className="toolbar-row"><button className="primary-button compact-button" type="submit">搜索</button><button className="icon-text-button compact-button" onClick={() => { const empty = { id: "", envName: "", productId: "" }; setFilters(empty); setQuery(empty); setPage(1); }} type="button">重置</button></div>
-      </form>
-      <div className="list-actions"><div><span className="muted-text">共 {total} 个环境</span></div><button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button"><Plus size={14} />新增测试对象</button></div>
-      {notice ? <div className="inline-notice">{notice}</div> : null}
-      <StateBlock loading={loading} error={error}><TablePanel><DataTable columns={columns} rows={rows} emptyText="暂无测试对象" /><PaginationBar page={page} pageSize={pageSize} total={total} totalPages={Math.max(1, Math.ceil(total / pageSize))} onPageChange={setPage} onPageSizeChange={(value) => { setPage(1); setPageSize(value); }} /></TablePanel></StateBlock>
-    </section>
-    {modal ? <TestObjectModal busy={busy} modal={modal} products={products} projects={projects} onClose={() => setModal(null)} onSubmit={async (payload) => {
-      setBusy(true);
-      setNotice("");
-      try {
-        if (modal.mode === "edit") await configService.testObjects.update(modal.row.id, payload);
-        else await configService.testObjects.create(payload);
-        setModal(null);
-        await reload();
-        setNotice(modal.mode === "edit" ? "测试对象已更新。" : "测试对象已创建。");
-      } finally {
-        setBusy(false);
-      }
-    }} /> : null}
-  </div>;
-}
-
-function TestObjectModal({ busy, modal, products, projects, onClose, onSubmit }) {
-  const source = modal.row;
-  const sourceProduct = products.find((item) => String(item.id) === String(source?.productId));
-  const [form, setForm] = useState({
-    projectId: sourceProduct?.projectId || "",
-    productId: source?.productId || "",
-    envName: source?.envName || "",
-    target: source?.target || "",
-    deployEnv: source?.deployEnv || "测试环境",
-    autoType: source?.autoType || "接口自动化",
-    owner: source?.owner || "",
-    queryEnabled: source?.queryEnabled ?? true,
-    writeEnabled: source?.writeEnabled ?? true
-  });
-  const [formError, setFormError] = useState("");
-  const availableProducts = products.filter((item) => !form.projectId || String(item.projectId) === String(form.projectId));
-
-  async function submit(event) {
-    event.preventDefault();
-    setFormError("");
-    try {
-      await onSubmit({
-        productId: Number(form.productId), envName: form.envName.trim(), target: form.target.trim(),
-        deployEnv: form.deployEnv, autoType: form.autoType, owner: form.owner.trim(),
-        queryEnabled: form.queryEnabled, writeEnabled: form.writeEnabled
-      });
-    } catch (requestError) {
-      setFormError(requestError.message || "保存测试对象失败");
-    }
-  }
-
-  return <div className="modal-backdrop"><form className="modal-card modal-card-small" onSubmit={submit}>
-    <div className="modal-header"><strong>{modal.mode === "edit" ? "编辑测试对象" : "新增测试对象"}</strong><button className="modal-close" onClick={onClose} type="button"><X size={17} /></button></div>
-    <div className="modal-form">
-      <label className="form-field"><span>* 所属项目</span><select required className="text-input" value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value, productId: "" })}><option value="">请选择项目</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label className="form-field"><span>* 所属产品</span><select required className="text-input" value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value })}><option value="">请选择产品</option>{availableProducts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label className="form-field"><span>* 环境名称</span><input required className="text-input" placeholder="例如：测试环境" value={form.envName} onChange={(event) => setForm({ ...form, envName: event.target.value })} /></label>
-      <label className="form-field"><span>* 目标地址</span><input required className="text-input" placeholder="https://api-test.example.com" value={form.target} onChange={(event) => setForm({ ...form, target: event.target.value })} /></label>
-      <label className="form-field"><span>部署环境</span><select className="text-input" value={form.deployEnv} onChange={(event) => setForm({ ...form, deployEnv: event.target.value })}>{["开发环境", "测试环境", "预发布环境", "生产环境"].map((item) => <option key={item}>{item}</option>)}</select></label>
-      <label className="form-field"><span>自动化类型</span><select className="text-input" value={form.autoType} onChange={(event) => setForm({ ...form, autoType: event.target.value })}><option>接口自动化</option><option>界面自动化</option><option>通用</option></select></label>
-      <label className="form-field"><span>* 负责人</span><input required className="text-input" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} /></label>
-      <div className="form-field"><span>执行权限</span><label><input checked={form.queryEnabled} onChange={(event) => setForm({ ...form, queryEnabled: event.target.checked })} type="checkbox" /> 允许查询请求</label><label><input checked={form.writeEnabled} onChange={(event) => setForm({ ...form, writeEnabled: event.target.checked })} type="checkbox" /> 允许写入请求</label></div>
-    </div>
-    {formError ? <div className="form-error modal-error">{formError}</div> : null}
-    <div className="modal-actions"><button className="icon-text-button compact-button" onClick={onClose} type="button">取消</button><button className="primary-button compact-button" disabled={busy} type="submit">{busy ? "保存中" : "保存"}</button></div>
-  </form></div>;
 }
 
 function columnsFor(section) {
@@ -879,8 +758,9 @@ function ProductModulePage({ product, onBack }) {
     <div className="section-stack">
       <section className="resource-panel product-module-page">
         <div className="page-config-header">
-          <div className="toolbar-title">
-            <strong>产品模块配置 / {product.id} / {product.name}</strong>
+          <div>
+            <h2>产品模块配置 / {product.id} / {product.name}</h2>
+            <p className="panel-subtitle">维护当前产品下的模块结构和模块名称</p>
           </div>
           <div className="action-row">
             <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">
@@ -898,6 +778,7 @@ function ProductModulePage({ product, onBack }) {
               <strong>模块导航</strong>
               <span>{total}</span>
             </div>
+            <p>按层级快速定位模块</p>
             <input className="text-input" placeholder="搜索模块" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
             <div className="module-chip-row">
               <span>一级 {level1Options.length}</span>
@@ -1120,134 +1001,68 @@ function uniqueValues(rows, key) {
   return [...new Set(rows.map((row) => row[key]).filter(Boolean))];
 }
 
-function executorStatusMeta(status) {
-  if (status === "online") return { className: "is-online", label: "在线" };
-  if (status === "pending" || status === "registered") return { className: "is-pending", label: "待连接" };
-  if (status === "suspect") return { className: "is-pending", label: "连接异常" };
-  return { className: "is-offline", label: "离线" };
-}
-
 function ExecutorConfigPage() {
-  const {
-    data: executors,
-    loading: executorsLoading,
-    error: executorsError,
-    reload: reloadExecutors
-  } = useAsyncData(() => executionService.executors(), []);
-  const [generatedTokens, setGeneratedTokens] = useState({});
-  const [busyExecutorId, setBusyExecutorId] = useState("");
+  const { data, loading, error, reload } = useAsyncData(() => configService.executorToken.get(), []);
+  const [generated, setGenerated] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [createModal, setCreateModal] = useState(false);
-  const [createForm, setCreateForm] = useState({ executorId: "", name: "" });
 
-  const executorRows = Array.isArray(executors) ? executors : [];
-  const onlineCount = executorRows.filter((item) => item.status === "online").length;
+  const token = generated?.token || "";
+  const envText = token ? `EXECUTOR_SHARED_TOKEN=${token}` : "EXECUTOR_SHARED_TOKEN=请先生成 Token";
 
-  useEffect(() => {
-    const timer = window.setInterval(() => reloadExecutors({ silent: true }), 10000);
-    return () => window.clearInterval(timer);
-  }, [reloadExecutors]);
-
-  async function handleGenerate(executorId) {
-    setBusyExecutorId(executorId);
+  async function handleGenerate() {
+    setBusy(true);
     setNotice("");
     try {
-      const result = await executionService.generateExecutorToken(executorId);
-      setGeneratedTokens((current) => ({ ...current, [executorId]: result.token }));
-      setNotice(`已为执行器 ${executorId} 生成专属 Token，旧 Token 已失效。`);
+      const result = await configService.executorToken.generate();
+      setGenerated(result);
+      await reload();
+      setNotice("Token 已生成，请及时配置到执行器环境变量。");
     } catch (err) {
       setNotice(err.message);
     } finally {
-      setBusyExecutorId("");
+      setBusy(false);
     }
   }
 
-  async function handleCopy(executorId) {
-    const token = generatedTokens[executorId];
-    await navigator.clipboard.writeText(`EXECUTOR_ID=${executorId}\nEXECUTOR_SHARED_TOKEN=${token}`);
-    setNotice(`已复制执行器 ${executorId} 的专属配置。`);
-  }
-
-  async function handleCreate(event) {
-    event.preventDefault();
-    setBusyExecutorId("__create__");
-    setNotice("");
-    try {
-      const result = await executionService.createExecutor({ executorId: createForm.executorId.trim(), name: createForm.name.trim() });
-      setGeneratedTokens((current) => ({ ...current, [result.executorId]: result.token }));
-      await reloadExecutors();
-      setCreateModal(false);
-      setCreateForm({ executorId: "", name: "" });
-      setNotice(`执行器 ${result.executorId} 已创建，请复制专属 Token 完成连接。`);
-    } catch (err) {
-      setNotice(err.message);
-    } finally {
-      setBusyExecutorId("");
+  async function handleCopy() {
+    if (!token) {
+      setNotice("请先生成 Token");
+      return;
     }
+    await navigator.clipboard.writeText(envText);
+    setNotice("已复制环境变量配置");
   }
 
   return (
     <>
-      <PageHeader title="执行器配置" description="每个执行器使用独立凭据，状态和权限互不影响" />
-      <section className="resource-panel executor-status-panel">
-        <div className="panel-header">
-          <div>
-            <div className="settings-title"><Activity size={18} />执行器运行状态</div>
-            <p className="panel-description">在线 {onlineCount} / 共 {executorRows.length} 个，状态每 10 秒自动更新</p>
+      <PageHeader title="执行器配置" description="维护平台与执行器之间的连接凭据" />
+      <StateBlock loading={loading} error={error}>
+        <div className="settings-panel">
+          <div className="settings-row">
+            <div>
+              <div className="settings-title">
+                <KeyRound size={18} />
+                执行器共享 Token
+              </div>
+              <p>当前 Token：{generated?.maskedToken || data?.maskedToken || "未生成"}</p>
+              <p>更新时间：{formatTime(generated?.updatedAt || data?.updatedAt)}</p>
+            </div>
+            <div className="settings-actions">
+              <button className="icon-text-button" disabled={busy} onClick={handleGenerate} type="button">
+                <RefreshCw size={16} />
+                {busy ? "生成中" : "生成 Token"}
+              </button>
+              <button className="icon-text-button" onClick={handleCopy} type="button">
+                <Copy size={16} />
+                复制配置
+              </button>
+            </div>
           </div>
-          <div className="settings-actions">
-            <button className="icon-text-button compact-button" onClick={() => setCreateModal(true)} type="button"><Plus size={15} />新增执行器</button>
-            <button className="icon-text-button compact-button" disabled={executorsLoading} onClick={() => reloadExecutors()} type="button"><RefreshCw className={executorsLoading ? "spin-icon" : ""} size={15} />刷新状态</button>
-          </div>
+          <pre className="token-output">{envText}</pre>
+          {notice ? <div className="inline-notice">{notice}</div> : null}
         </div>
-        <StateBlock loading={executorsLoading} error={executorsError}>
-          {executorRows.length ? <div className="executor-card-grid">
-            {executorRows.map((item) => {
-              const statusMeta = executorStatusMeta(item.status);
-              return <article className={`executor-card ${statusMeta.className}`} key={item.executorId}>
-                <div className="executor-card-head">
-                  <div className="executor-name-cell"><span className="executor-icon"><Server size={17} /></span><div><strong>{item.name || item.executorId}</strong><small>{item.executorId}</small></div></div>
-                  <span className={`executor-state ${statusMeta.className}`}><i />{statusMeta.label}</span>
-                </div>
-                <div className="executor-load-grid">
-                  <div><span>运行中</span><strong>{item.runningTasks || 0}</strong></div>
-                  <div><span>排队中</span><strong>{item.queuedTasks || 0}</strong></div>
-                  <div><span>最大并发</span><strong>{item.maxWorkers || 1}</strong></div>
-                </div>
-                <div className="executor-card-detail">
-                  <div><span>服务地址</span><code className="executor-endpoint">{item.endpoint || "-"}</code></div>
-                  <div><span>最后心跳</span><strong>{formatTime(item.lastHeartbeatAt)}</strong></div>
-                </div>
-                <div className="executor-card-footer">
-                  <span>支持类型</span>
-                  <div className="executor-capabilities">{(item.supportedTypes || []).map((type) => <span key={type}>{type.toUpperCase()}</span>)}</div>
-                </div>
-                <div className="executor-token-zone">
-                  <div className="executor-token-actions">
-                    <span><KeyRound size={14} />专属 Token</span>
-                    <button className="link-button" disabled={Boolean(busyExecutorId)} onClick={() => handleGenerate(item.executorId)} type="button">
-                      {busyExecutorId === item.executorId ? "生成中" : generatedTokens[item.executorId] ? "重新生成" : "生成 Token"}
-                    </button>
-                  </div>
-                  {generatedTokens[item.executorId] ? <div className="executor-token-result"><code>{generatedTokens[item.executorId]}</code><button aria-label={`复制 ${item.executorId} 配置`} onClick={() => handleCopy(item.executorId)} type="button"><Copy size={14} /></button></div> : <small>Token 仅在生成后显示一次，请立即复制到对应执行器。</small>}
-                </div>
-              </article>;
-            })}
-          </div> : <div className="executor-empty">暂无已注册执行器，请启动执行器并确认 Token 配置正确。</div>}
-        </StateBlock>
-        {notice ? <div className="inline-notice">{notice}</div> : null}
-      </section>
-      {createModal ? <div className="modal-backdrop">
-        <section aria-label="新增执行器" className="modal-card executor-create-modal">
-          <div className="modal-header"><div><strong>新增执行器</strong><p>创建独立身份并生成一对一连接 Token</p></div><button aria-label="关闭新增执行器" className="modal-close" onClick={() => setCreateModal(false)} type="button"><X size={17} /></button></div>
-          <form onSubmit={handleCreate}>
-            <label className="form-field"><span>执行器 ID</span><input className="text-input" onChange={(event) => setCreateForm((current) => ({ ...current, executorId: event.target.value }))} placeholder="例如 executor-beijing-01" required value={createForm.executorId} /></label>
-            <label className="form-field"><span>执行器名称</span><input className="text-input" onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} placeholder="例如 北京 UI 执行器" required value={createForm.name} /></label>
-            <div className="executor-create-hint"><KeyRound size={15} /><span>创建后 Token 仅显示一次，需要粘贴到对应执行器登录页。</span></div>
-            <div className="modal-actions"><button className="icon-text-button compact-button" onClick={() => setCreateModal(false)} type="button">取消</button><button className="primary-button compact-button" disabled={busyExecutorId === "__create__"} type="submit">{busyExecutorId === "__create__" ? "创建中" : "创建并生成 Token"}</button></div>
-          </form>
-        </section>
-      </div> : null}
+      </StateBlock>
     </>
   );
 }
