@@ -266,7 +266,7 @@ func assertCaptureSessionAndCommandState(t *testing.T, ctx context.Context, db *
 func TestElementCaptureCandidateRetryIsIdempotentOnPostgreSQL(t *testing.T) {
 	db, ctx := capturePostgresTestDB(t, "element_capture_candidate_idempotency")
 	for _, statement := range []string{
-		`create table page_elements(id bigserial primary key,page_id bigint not null,fingerprint text not null,deleted_at timestamptz)`,
+		`create table page_elements(id bigserial primary key,page_id bigint not null,name text not null default '',fingerprint text not null,deleted_at timestamptz)`,
 		`create table element_capture_sessions(id text primary key,page_id bigint not null,executor_id text not null,token_hash text not null,status text not null,candidate_count int not null default 0,expires_at timestamptz not null,updated_at timestamptz not null default now())`,
 		`create table element_capture_candidates(id text primary key,cursor_id bigserial,session_id text not null,client_capture_id text not null,name text not null,fingerprint text not null,capture_url text not null,tag_name text not null,accessible_name text not null,locators jsonb not null,quality_score double precision not null,duplicate_element_id bigint,conflict_status text not null default '',conflict_resolution text not null default '',status text not null,expires_at timestamptz not null,unique(session_id,client_capture_id))`,
 	} {
