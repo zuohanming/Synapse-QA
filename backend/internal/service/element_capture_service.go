@@ -86,6 +86,9 @@ type CaptureCommandRepository interface {
 type CaptureCommandCleanupRepository interface {
 	CleanupCommands(context.Context, time.Time) error
 }
+type CaptureExpiredDataRepository interface {
+	CleanupExpiredData(context.Context, time.Time) error
+}
 
 type PageAccessRepository interface {
 	PageAccessible(ctx context.Context, pageID int64, actor string) (bool, error)
@@ -286,6 +289,11 @@ func (s *ElementCaptureService) StartScheduler(ctx context.Context) {
 			if repo, ok := s.repo.(CaptureCommandCleanupRepository); ok {
 				if err := repo.CleanupCommands(ctx, s.now()); err != nil && !errors.Is(err, context.Canceled) {
 					log.Printf("清理采集命令失败：%v", err)
+				}
+			}
+			if repo, ok := s.repo.(CaptureExpiredDataRepository); ok {
+				if err := repo.CleanupExpiredData(ctx, s.now()); err != nil && !errors.Is(err, context.Canceled) {
+					log.Printf("清理采集临时数据失败：%v", err)
 				}
 			}
 			select {

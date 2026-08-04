@@ -244,6 +244,22 @@ func (r *ElementCaptureRepository) CleanupCommands(ctx context.Context, now time
 	return err
 }
 
+// CleanupExpiredData 删除到期候选，并使终态会话的令牌摘要失效。
+func (r *ElementCaptureRepository) CleanupExpiredData(ctx context.Context, now time.Time) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `delete from element_capture_candidates where expires_at <= $1`, now); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `update element_capture_sessions set token_hash='',updated_at=now() where status in ('completed','expired','failed') and token_hash<>''`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func newLeasedCaptureToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

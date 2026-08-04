@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,8 @@ import (
 
 // main 只负责应用装配：数据库连接、迁移、依赖注入、路由注册和服务启动。
 func main() {
+	appCtx, stopApp := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopApp()
 	dsn := env("DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/synapse_qa?sslmode=disable")
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -63,8 +67,8 @@ func main() {
 	apiAutomationService.ConfigureDebug(executorRepo, env("EXECUTOR_CALLBACK_BASE", "http://127.0.0.1:8080"))
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
-	executionService.StartScheduler(context.Background())
-	elementCaptureService.StartScheduler(context.Background())
+	executionService.StartScheduler(appCtx)
+	elementCaptureService.StartScheduler(appCtx)
 
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery(), ginCORS())
@@ -84,7 +88,18 @@ func main() {
 
 	addr := env("API_ADDR", "127.0.0.1:8080")
 	log.Printf("Synapse QA API 已启动：http://%s", addr)
-	log.Fatal(engine.Run(addr))
+	server := &http.Server{Addr: addr, Handler: engine}
+	go func() {
+		<-appCtx.Done()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancelShutdown()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("API 优雅关闭失败：%v", err)
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 // ginCORS 是 Gin 版本的跨域中间件，供 React 开发服务器调用后端 API。
