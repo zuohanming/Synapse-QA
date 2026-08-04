@@ -59,7 +59,7 @@ options => {
     return safeText(element.innerText, 512);
   };
   const safeAttributes = element => {
-    const names = ["id", "class", "role", "name", "type", "placeholder", "aria-label",
+    const names = ["id", "class", "role", "name", "type", "placeholder", "autocomplete", "aria-label",
       "aria-labelledby", "data-testid", "data-test", "data-qa", "data-cy"];
     const result = {};
     for (const name of names) {

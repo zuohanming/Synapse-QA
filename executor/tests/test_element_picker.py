@@ -9,10 +9,17 @@ import pytest
 
 from app.models.capture import CaptureCandidate, CaptureLocator, CaptureMode
 from app.services.element_picker import (
+    _DOM_EXTRACT_SCRIPT,
+    PICKER_SCRIPT,
     ElementPicker,
     PickerSecurityError,
     scan_for_sensitive_data,
 )
+
+
+def test_picker_and_dom_recheck_keep_the_same_safe_attribute_set():
+    assert '"autocomplete"' in PICKER_SCRIPT
+    assert '"autocomplete"' in _DOM_EXTRACT_SCRIPT
 
 
 class FakeLocator:
