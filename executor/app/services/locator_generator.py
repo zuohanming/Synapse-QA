@@ -9,7 +9,7 @@ from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
 from app.services.capture_security import contains_secret_text, is_sensitive_key, sanitize_public_url
 
 
-_SCORES = {"testid": 95, "id": 90, "role": 85, "form-label": 84, "label": 82, "css": 70, "text": 60, "xpath": 40}
+_SCORES = {"testid": 95, "id": 90, "role": 85, "form-label": 95, "label": 82, "css": 70, "text": 60, "xpath": 40}
 _PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 _CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
@@ -149,7 +149,11 @@ def _build_locators(seeds: list[_LocatorSeed], snapshot: ElementSnapshot) -> lis
 
 
 def _match_count(snapshot: ElementSnapshot, strategy: str, value: str) -> int | None:
-    raw = snapshot.locator_matches.get(f"{strategy}:{value}", snapshot.locator_matches.get(value))
+    match_key = "xpath" if strategy == "form-label" else strategy
+    raw = snapshot.locator_matches.get(
+        f"{strategy}:{value}",
+        snapshot.locator_matches.get(f"{match_key}:{value}", snapshot.locator_matches.get(value)),
+    )
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         return None
     return raw
@@ -225,7 +229,8 @@ def _form_label_xpath(tag: str, label: str) -> str:
     safe_tag = _normalize_text(tag).lower()
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", safe_tag):
         safe_tag = "*"
-    return f"//*[normalize-space()={_xpath_literal(label)}]/following::{safe_tag}[1]"
+    form_item = "contains(concat(' ', normalize-space(@class), ' '), ' el-form-item ')"
+    return f"//*[self::fieldset or @role='group' or {form_item}][.//*[normalize-space()={_xpath_literal(label)}]]//{safe_tag}"
 
 
 def _xpath_literal(value: str) -> str:

@@ -36,13 +36,13 @@ def test_generates_priority_order_for_role_label_css_text_and_xpath():
 
 
 def test_generates_unique_form_context_locator_for_inputs_sharing_component_class():
-    xpath = "//*[normalize-space()='账号']/following::input[1]"
+    xpath = "//*[self::fieldset or @role='group' or contains(concat(' ', normalize-space(@class), ' '), ' el-form-item ')][.//*[normalize-space()='账号']]//input"
     candidate = build_candidate(
         ElementSnapshot(
             tag="input",
             attributes={"class": "el-input__inner", "placeholder": "请输入账号"},
             form_label="账号",
-            locator_matches={f"form-label:{xpath}": 1, 'css:[placeholder="请输入账号"]': 1, "css:input.el-input__inner": 2},
+            locator_matches={f"xpath:{xpath}": 1, 'css:[placeholder="请输入账号"]': 1, "css:input.el-input__inner": 2},
         )
     )
 
