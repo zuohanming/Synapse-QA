@@ -3625,3 +3625,15 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .element-capture-drawer { animation: none; }
 }
+.page-element-version-dialog { width: min(760px, 94vw); max-height: min(760px, 90vh); overflow: hidden; }
+.page-element-version-dialog .modal-header > div { display: grid; gap: 3px; }
+.page-element-version-dialog .modal-header span { color: var(--muted); font-size: 12px; }
+.page-element-capture-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 16px; border-bottom: 1px solid var(--border); }
+.page-element-capture-meta > span { display: grid; min-width: 0; gap: 5px; padding: 11px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; }
+.page-element-capture-meta small { color: var(--muted); }
+.page-element-capture-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-element-version-list { display: grid; gap: 8px; padding: 16px; overflow: auto; }
+.page-element-version-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.page-element-version-list article > div { display: grid; gap: 3px; }
+.page-element-version-list article span, .page-element-version-list article small { color: var(--muted); }
+@media (max-width: 640px) { .page-element-capture-meta { grid-template-columns: 1fr; } .page-element-version-list article { grid-template-columns: 1fr; } }

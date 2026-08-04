@@ -2,12 +2,15 @@
 import { useEffect } from "react";
 import { TestCasesPage } from "./TestCasesPage.js";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
+import { ElementCaptureDrawer } from "../components/ElementCaptureDrawer.js";
+import { ElementCaptureLauncher } from "../components/ElementCaptureLauncher.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ResourceListPage } from "../components/ResourceListPage.js";
 import { StateBlock } from "../components/StateBlock.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { configService } from "../services/configService.js";
 import { executionService } from "../services/executionService.js";
+import { elementCaptureService } from "../services/elementCaptureService.js";
 import { uiAutomationService } from "../services/uiAutomationService.js";
 import { formatTime, pageItems } from "../utils/formatters.js";
 import { clearPageState, persistPageState, readPageState } from "../utils/routeState.js";
@@ -2235,6 +2238,12 @@ function PageElementPanel({ pageRow, onBack }) {
   const [elementPageSize, setElementPageSize] = useState(20);
   const [selectedIds, setSelectedIds] = useState([]);
   const [modal, setModal] = useState(null);
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  const [captureSession, setCaptureSession] = useState(null);
+  const [versionElement, setVersionElement] = useState(null);
+  const [versions, setVersions] = useState([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [executors, setExecutors] = useState([]);
 
   const { data, loading, error, reload } = useAsyncData(
     () => uiAutomationService.pageElements.list({ pageId: pageRow.id, page: elementPage, pageSize: elementPageSize }),
@@ -2245,6 +2254,48 @@ function PageElementPanel({ pageRow, onBack }) {
   const total = data?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / elementPageSize));
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
+
+  async function openCaptureLauncher() {
+    setNotice("");
+    try {
+      const result = await executionService.executors();
+      setExecutors(pageItems(result));
+      setLauncherOpen(true);
+    } catch (err) {
+      setNotice(err.message || "读取执行器状态失败");
+    }
+  }
+
+  async function openVersions(row) {
+    setVersionElement(row);
+    setVersionsLoading(true);
+    setNotice("");
+    try {
+      const result = await elementCaptureService.versions(row.id);
+      setVersions(pageItems(result));
+    } catch (err) {
+      setNotice(err.message || "读取版本记录失败");
+      setVersionElement(null);
+    } finally {
+      setVersionsLoading(false);
+    }
+  }
+
+  async function rollbackVersion(version) {
+    if (!window.confirm(`确认将元素“${versionElement.name}”回滚至 V${version.version} 吗？系统会生成一个新版本。`)) return;
+    setVersionsLoading(true);
+    try {
+      await elementCaptureService.rollback(versionElement.id, version.version);
+      const result = await elementCaptureService.versions(versionElement.id);
+      setVersions(pageItems(result));
+      await reload();
+      setNotice(`元素已回滚至 V${version.version}，并生成新版本。`);
+    } catch (err) {
+      setNotice(err.message || "版本回滚失败");
+    } finally {
+      setVersionsLoading(false);
+    }
+  }
 
   function toggleSelectAll() {
     if (allSelected) {
@@ -2313,6 +2364,7 @@ function PageElementPanel({ pageRow, onBack }) {
             <button className="icon-text-button compact-button" type="button">下载模板</button>
             <button className="icon-text-button compact-button" type="button">点击上传</button>
             <button className="primary-button compact-button" onClick={() => setModal({ mode: "create", row: null })} type="button">新增</button>
+            <button className="success-button compact-button" onClick={openCaptureLauncher} type="button">自动采集</button>
             <button className="danger-button compact-button" disabled={busy} onClick={handleBulkDelete} type="button">批量删除</button>
           </div>
         </div>
@@ -2369,6 +2421,9 @@ function PageElementPanel({ pageRow, onBack }) {
                           </button>
                           <button className="link-button" onClick={() => setModal({ mode: "edit", row })} type="button">
                             编辑
+                          </button>
+                          <button className="link-button" onClick={() => openVersions(row)} type="button">
+                            版本
                           </button>
                           <button className="link-button danger-link" disabled={busy} onClick={() => handleDelete(row)} type="button">
                             删除
@@ -2427,6 +2482,52 @@ function PageElementPanel({ pageRow, onBack }) {
             }
           }}
         />
+      ) : null}
+      {launcherOpen ? (
+        <ElementCaptureLauncher
+          executors={executors}
+          pageRow={pageRow}
+          onClose={() => setLauncherOpen(false)}
+          onStarted={(session) => {
+            setLauncherOpen(false);
+            setCaptureSession(session);
+          }}
+        />
+      ) : null}
+      {captureSession ? (
+        <ElementCaptureDrawer
+          session={captureSession}
+          onClose={() => setCaptureSession(null)}
+          onSaved={async () => {
+            await reload();
+            setNotice("采集候选已保存，元素列表已刷新。");
+          }}
+        />
+      ) : null}
+      {versionElement ? (
+        <div className="modal-backdrop">
+          <section aria-labelledby="page-element-version-title" aria-modal="true" className="modal-card page-element-version-dialog" role="dialog">
+            <div className="modal-header">
+              <div><strong id="page-element-version-title">元素版本</strong><span>{versionElement.name}</span></div>
+              <button aria-label="关闭版本弹窗" className="modal-close" onClick={() => setVersionElement(null)} type="button">×</button>
+            </div>
+            <div className="page-element-capture-meta">
+              <span><small>来源</small><strong>{versionElement.captureSource || "手工维护"}</strong></span>
+              <span><small>采集 URL</small><strong title={versionElement.captureUrl || ""}>{versionElement.captureUrl || "-"}</strong></span>
+              <span><small>标签 / 可访问名称</small><strong>{[versionElement.tagName, versionElement.accessibleName].filter(Boolean).join(" · ") || "-"}</strong></span>
+              <span><small>质量 / 最近验证</small><strong>{versionElement.qualityScore ? `${versionElement.qualityScore} 分` : "-"} · {formatTime(versionElement.lastVerifiedAt)}</strong></span>
+            </div>
+            <div className="page-element-version-list">
+              {versionsLoading ? <p>正在加载版本记录…</p> : versions.length ? versions.map((item) => (
+                <article key={item.id || item.version}>
+                  <div><strong>V{item.version}</strong><span>{item.changeSummary || "版本快照"}</span></div>
+                  <small>{item.createdBy || "-"} · {formatTime(item.createdAt)}</small>
+                  <button className="icon-text-button compact-button" disabled={versionsLoading || item.version === versionElement.currentVersion} onClick={() => rollbackVersion(item)} type="button">回滚到此版本</button>
+                </article>
+              )) : <p>暂无版本记录</p>}
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );
