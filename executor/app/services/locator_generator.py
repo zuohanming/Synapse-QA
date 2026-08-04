@@ -9,7 +9,7 @@ from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
 from app.services.capture_security import contains_secret_text, is_sensitive_key, sanitize_public_url
 
 
-_SCORES = {"testid": 95, "id": 90, "role": 85, "label": 82, "css": 70, "text": 60, "xpath": 40}
+_SCORES = {"testid": 95, "id": 90, "role": 85, "form-label": 84, "label": 82, "css": 70, "text": 60, "xpath": 40}
 _PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 _CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
@@ -56,14 +56,16 @@ def build_candidate(snapshot: ElementSnapshot) -> CaptureCandidate:
     attributes = _normalized_attributes(snapshot.attributes)
     accessible_name = _safe_text(snapshot.accessible_name)
     label = _safe_text(snapshot.label)
+    form_label = _safe_text(snapshot.form_label)
     visible_text = _safe_text(snapshot.visible_text)
     capture_url = sanitize_public_url(snapshot.capture_url) if snapshot.capture_url else ""
-    seeds, rejected_reasons = _locator_seeds(snapshot, attributes, accessible_name, label, visible_text)
+    seeds, rejected_reasons = _locator_seeds(snapshot, attributes, accessible_name, label, form_label, visible_text)
     locators = _build_locators(seeds, snapshot)
     if not locators:
         raise ValueError("候选项缺少可靠定位器")
-    name = accessible_name or label or visible_text or "未命名元素"
-    fingerprint = _fingerprint(snapshot.tag, attributes, accessible_name or label or visible_text)
+    semantic_name = accessible_name or label or form_label or visible_text
+    name = semantic_name or "未命名元素"
+    fingerprint = _fingerprint(snapshot.tag, attributes, semantic_name)
     return CaptureCandidate(
         name=name,
         fingerprint=fingerprint,
@@ -77,7 +79,7 @@ def build_candidate(snapshot: ElementSnapshot) -> CaptureCandidate:
 
 
 def _locator_seeds(
-    snapshot: ElementSnapshot, attributes: dict[str, str], accessible_name: str, label: str, visible_text: str,
+    snapshot: ElementSnapshot, attributes: dict[str, str], accessible_name: str, label: str, form_label: str, visible_text: str,
 ) -> tuple[list[_LocatorSeed], list[str]]:
     seeds: list[_LocatorSeed] = []
     rejected: list[str] = []
@@ -96,6 +98,12 @@ def _locator_seeds(
         seeds.append(_LocatorSeed("role", "role", f"{role}[name={json.dumps(accessible_name, ensure_ascii=False)}]"))
     if label:
         seeds.append(_LocatorSeed("label", "label", label))
+    if form_label:
+        seeds.append(_LocatorSeed("form-label", "xpath", _form_label_xpath(snapshot.tag, form_label)))
+    for key in ("name", "aria-label", "placeholder", "autocomplete"):
+        value = attributes.get(key, "")
+        if _is_safe_token(value):
+            seeds.append(_LocatorSeed("css", "css", f"[{_css_escape_identifier(key)}={_css_string(value)}]"))
     for key in sorted(attributes):
         value = attributes[key]
         if key.startswith("data-") and key != "data-testid" and _is_safe_token(value):
@@ -211,6 +219,21 @@ def _stable_class_selector(tag: str, classes: str) -> str:
     if not stable_classes:
         return ""
     return _css_escape_identifier(_normalize_text(tag).lower()) + "".join(f".{_css_escape_identifier(token)}" for token in stable_classes)
+
+
+def _form_label_xpath(tag: str, label: str) -> str:
+    safe_tag = _normalize_text(tag).lower()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", safe_tag):
+        safe_tag = "*"
+    return f"//label[normalize-space()={_xpath_literal(label)}]/following::{safe_tag}[1]"
+
+
+def _xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    return "concat(" + ", \"'\", ".join(f"'{part}'" for part in value.split("'")) + ")"
 
 
 def _css_string(value: str) -> str:

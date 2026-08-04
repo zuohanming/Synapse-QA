@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 
 _BINDING_NAME = "__synapseCapturePick"
 _ALLOWED_FIELDS = {
-    "tag", "attributes", "accessibleName", "label", "visibleText", "role", "depth", "path", "locatorMatches",
+    "tag", "attributes", "accessibleName", "label", "formLabel", "visibleText", "role", "depth", "path", "locatorMatches",
 }
 _ALLOWED_ATTRIBUTES = {
-    "id", "class", "role", "name", "type", "placeholder", "aria-label", "aria-labelledby",
+    "id", "class", "role", "name", "type", "placeholder", "autocomplete", "aria-label", "aria-labelledby",
     "data-testid", "data-test", "data-qa", "data-cy",
 }
 _FORBIDDEN_KEYS = {
@@ -72,6 +72,11 @@ options => {
     if (!element.labels) return "";
     return safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512);
   };
+  const formLabelText = element => {
+    const formItem = element.closest(".el-form-item, fieldset, [role='group']");
+    if (!formItem) return "";
+    return safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend")), 512);
+  };
   const structuredPath = element => {
     const path = [];
     let current = element;
@@ -91,12 +96,14 @@ options => {
     const attributes = safeAttributes(element);
     const text = visibleText(element);
     const label = labelText(element);
+    const formLabel = formLabelText(element);
     const path = structuredPath(element);
     return {
       tag: element.tagName.toLowerCase(),
       attributes,
       accessibleName: safeText(attributes["aria-label"] || label || text, 512),
       label,
+      formLabel,
       visibleText: text,
       role: safeText(attributes.role, 64),
       depth: path.length,
@@ -238,13 +245,17 @@ element => {
     return safeText(item.innerText, 512);
   };
   const attributes = {};
-  for (const name of ["id", "class", "role", "name", "type", "placeholder", "aria-label",
+  for (const name of ["id", "class", "role", "name", "type", "placeholder", "autocomplete", "aria-label",
       "aria-labelledby", "data-testid", "data-test", "data-qa", "data-cy"]) {
     const value = safeText(element.getAttribute(name), 256);
     if (value) attributes[name] = value;
   }
   const label = element.labels
     ? safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512)
+    : "";
+  const formItem = element.closest(".el-form-item, fieldset, [role='group']");
+  const formLabel = formItem
+    ? safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend")), 512)
     : "";
   const path = [];
   let current = element;
@@ -264,6 +275,7 @@ element => {
     attributes,
     accessibleName: safeText(attributes["aria-label"] || label || text, 512),
     label,
+    formLabel,
     visibleText: text,
     role: safeText(attributes.role, 64),
     depth: path.length,
@@ -495,6 +507,7 @@ class ElementPicker:
                 attributes=payload["attributes"],
                 accessible_name=payload["accessibleName"],
                 label=payload["label"],
+                form_label=payload["formLabel"],
                 visible_text=payload["visibleText"],
                 depth=payload["depth"],
                 capture_url=sanitize_public_url(capture_url),
@@ -672,6 +685,7 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
         "attributes": attributes,
         "accessibleName": _safe_scalar(raw.get("accessibleName", ""), 512),
         "label": _safe_scalar(raw.get("label", ""), 512),
+        "formLabel": _safe_scalar(raw.get("formLabel", ""), 512),
         "visibleText": _safe_scalar(raw.get("visibleText", ""), 512),
         "role": role,
         "depth": depth,

@@ -53,6 +53,7 @@ class ElementSnapshot(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
     accessible_name: str = Field(default="", exclude=True, repr=False)
     label: str = Field(default="", exclude=True, repr=False)
+    form_label: str = Field(default="", exclude=True, repr=False)
     visible_text: str = Field(default="", exclude=True, repr=False)
     css_selector: str = Field(default="", exclude=True, repr=False)
     xpath: str = Field(default="", exclude=True, repr=False)
