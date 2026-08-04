@@ -461,7 +461,11 @@ describe("ElementCaptureDrawer", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "关闭候选审核" }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(elementCaptureService.stop).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    ));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(opener).toHaveFocus();
     opener.remove();
   });

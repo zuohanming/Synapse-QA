@@ -235,6 +235,7 @@ export function ElementCaptureDrawer({
   const [actionError, setActionError] = useState("");
   const [candidateIssues, setCandidateIssues] = useState({});
   const [saving, setSaving] = useState(false);
+  const [closing, setClosing] = useState(false);
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
   const previousFocusRef = useRef(typeof document === "undefined" ? null : document.activeElement);
@@ -422,8 +423,14 @@ export function ElementCaptureDrawer({
     return selectedIDs.size > 0 || dirtyRef.current.size > 0;
   }
 
-  function requestClose() {
+  async function requestClose() {
     if (hasUnsavedChanges() && !window.confirm("仍有未保存的选择或审核修改，确认关闭吗？")) return;
+    if (!terminalStatuses.has(sessionState.status)) {
+      setClosing(true);
+      const stopped = await stopSession();
+      setClosing(false);
+      if (!stopped) return;
+    }
     abortAllRequests();
     restoreFocus();
     onClose();
@@ -586,10 +593,12 @@ export function ElementCaptureDrawer({
       await runAction((signal) => elementCaptureService.stop(sessionState.id, { signal }));
       setSessionState((current) => ({ ...current, status: "completed" }));
       setDisconnected(false);
+      return true;
     } catch (error) {
       if (error?.name !== "AbortError") {
         setActionError(error?.message || "停止采集失败");
       }
+      return false;
     }
   }
 
@@ -691,11 +700,12 @@ export function ElementCaptureDrawer({
             <button
               aria-label="关闭候选审核"
               className="element-capture-icon-button"
+              disabled={closing}
               onClick={requestClose}
               ref={closeRef}
               type="button"
             >
-              ×
+              {closing ? "…" : "×"}
             </button>
           </div>
         </header>
