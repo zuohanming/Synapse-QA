@@ -1,10 +1,6 @@
 import os
 
 
-def _csv_values(name: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in os.getenv(name, "").split(",") if item.strip())
-
-
 def _environment_value(name: str, default: str) -> str:
     value = os.getenv(name)
     if value:
@@ -22,6 +18,10 @@ def _environment_value(name: str, default: str) -> str:
     return default
 
 
+def _csv_values(name: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in _environment_value(name, "").split(",") if item.strip())
+
+
 def save_executor_token(token: str) -> None:
     os.environ["EXECUTOR_SHARED_TOKEN"] = token
     settings.executor_shared_token = token
@@ -37,9 +37,9 @@ class Settings:
     executor_id = os.getenv("EXECUTOR_ID", "local-python-executor")
     executor_name = os.getenv("EXECUTOR_NAME", "本地 Python 执行器")
     executor_version = os.getenv("EXECUTOR_VERSION", "1.0.0")
-    executor_endpoint = os.getenv("EXECUTOR_ENDPOINT", "http://127.0.0.1:8090")
+    executor_endpoint = _environment_value("EXECUTOR_ENDPOINT", "http://127.0.0.1:8090")
     executor_shared_token = _environment_value("EXECUTOR_SHARED_TOKEN", "synapse-local-executor-token")
-    platform_base_url = os.getenv("PLATFORM_BASE_URL", "http://127.0.0.1:8080")
+    platform_base_url = _environment_value("PLATFORM_BASE_URL", "http://127.0.0.1:8080")
     heartbeat_interval_seconds = int(os.getenv("EXECUTOR_HEARTBEAT_INTERVAL_SECONDS", "10"))
     capture_command_poll_interval_seconds = 2
     capture_allowed_origins = _csv_values("CAPTURE_ALLOWED_ORIGINS")
