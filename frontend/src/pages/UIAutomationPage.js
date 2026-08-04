@@ -2259,7 +2259,7 @@ function PageElementPanel({ pageRow, onBack }) {
     setNotice("");
     try {
       const result = await executionService.executors();
-      setExecutors(pageItems(result));
+      setExecutors(Array.isArray(result) ? result : pageItems(result));
       setLauncherOpen(true);
     } catch (err) {
       setNotice(err.message || "读取执行器状态失败");
