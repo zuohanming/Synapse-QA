@@ -31,6 +31,7 @@ func (routerCaptureService) ListCandidates(context.Context, int64, string, int64
 func (routerCaptureService) UpdateCandidate(context.Context, string, string, int64, model.CaptureCandidateUpdateRequest) error {
 	return nil
 }
+func (routerCaptureService) DeleteCandidate(context.Context, string, string, int64) error { return nil }
 func (routerCaptureService) BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error) {
 	return model.BatchSaveResult{}, &service.CandidateIssuesError{Issues: []model.CandidateIssue{{CandidateID: 1, Field: "name", Message: "候选项名称不可靠"}}}
 }

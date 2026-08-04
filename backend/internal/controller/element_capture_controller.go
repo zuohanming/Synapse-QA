@@ -21,6 +21,7 @@ type elementCaptureService interface {
 	StopSession(context.Context, string, string) error
 	ListCandidates(context.Context, int64, string, int64, int) ([]model.ElementCaptureCandidate, error)
 	UpdateCandidate(context.Context, string, string, int64, model.CaptureCandidateUpdateRequest) error
+	DeleteCandidate(context.Context, string, string, int64) error
 	BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error)
 	Heartbeat(context.Context, string, string, string, string, string, string) error
 	AddCandidate(context.Context, string, string, model.CaptureCandidateCreateRequest) (model.ElementCaptureCandidate, error)
@@ -145,6 +146,24 @@ func (ctl *ElementCaptureController) UpdateCandidate(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"message": "候选项已更新"})
+}
+
+func (ctl *ElementCaptureController) DeleteCandidate(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	claims, authorized := claimsFromContext(c)
+	if !authorized {
+		return
+	}
+	candidateID, err := strconv.ParseInt(c.Param("candidateId"), 10, 64)
+	if err != nil || candidateID <= 0 {
+		fail(c, http.StatusBadRequest, "候选项 ID 无效")
+		return
+	}
+	if err := ctl.service.DeleteCandidate(c.Request.Context(), claims.Username, c.Param("id"), candidateID); err != nil {
+		failCaptureError(c, err)
+		return
+	}
+	ok(c, gin.H{"message": "候选项已删除"})
 }
 
 func (ctl *ElementCaptureController) SaveCandidates(c *gin.Context) {

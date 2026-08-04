@@ -45,6 +45,7 @@ func (s *captureControllerServiceStub) ListCandidates(context.Context, int64, st
 func (s *captureControllerServiceStub) UpdateCandidate(context.Context, string, string, int64, model.CaptureCandidateUpdateRequest) error {
 	return nil
 }
+func (s *captureControllerServiceStub) DeleteCandidate(context.Context, string, string, int64) error { return nil }
 func (s *captureControllerServiceStub) BatchSave(context.Context, string, model.CandidateBatchSaveRequest) (model.BatchSaveResult, error) {
 	return model.BatchSaveResult{}, nil
 }

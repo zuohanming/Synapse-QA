@@ -201,6 +201,7 @@ func registerCaptureCandidateRoutes(authed *gin.RouterGroup, deps Dependencies) 
 	capture := authed.Group("/ui/page-elements")
 	capture.GET("/capture-sessions/:id/candidates", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
 	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
+	capture.DELETE("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.DeleteCandidate)
 	capture.POST("/capture-sessions/:id/save", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
 }
 

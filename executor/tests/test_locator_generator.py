@@ -36,7 +36,7 @@ def test_generates_priority_order_for_role_label_css_text_and_xpath():
 
 
 def test_generates_unique_form_context_locator_for_inputs_sharing_component_class():
-    xpath = "//label[normalize-space()='账号']/following::input[1]"
+    xpath = "//*[normalize-space()='账号']/following::input[1]"
     candidate = build_candidate(
         ElementSnapshot(
             tag="input",

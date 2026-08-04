@@ -29,6 +29,7 @@ describe("elementCaptureService", () => {
     await elementCaptureService.get("session-1");
     await elementCaptureService.mode("session-1", "operate");
     await elementCaptureService.stop("session-1");
+    await elementCaptureService.remove("session-1", 12);
     await elementCaptureService.update("session-1", 12, { name: "登录按钮" });
     await elementCaptureService.save("session-1", [{ candidateId: 12, resolution: "create" }]);
     await elementCaptureService.versions(42);
@@ -42,15 +43,16 @@ describe("elementCaptureService", () => {
       "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session-1/mode",
       "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session-1/stop",
       "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session-1/candidates/12",
+      "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session-1/candidates/12",
       "http://127.0.0.1:8080/api/ui/page-elements/capture-sessions/session-1/save",
       "http://127.0.0.1:8080/api/ui/page-elements/42/versions",
       "http://127.0.0.1:8080/api/ui/page-elements/42/versions/3/rollback"
     ]);
     expect(global.fetch.mock.calls.map(([, options]) => options.method || "GET")).toEqual([
-      "POST", "GET", "PATCH", "POST", "PATCH", "POST", "GET", "POST"
+      "POST", "GET", "PATCH", "POST", "DELETE", "PATCH", "POST", "GET", "POST"
     ]);
     expect(JSON.parse(global.fetch.mock.calls[2][1].body)).toEqual({ mode: "operate" });
-    expect(JSON.parse(global.fetch.mock.calls[5][1].body)).toEqual({
+    expect(JSON.parse(global.fetch.mock.calls[6][1].body)).toEqual({
       items: [{ candidateId: 12, resolution: "create" }]
     });
   });

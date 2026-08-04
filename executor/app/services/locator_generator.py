@@ -225,7 +225,7 @@ def _form_label_xpath(tag: str, label: str) -> str:
     safe_tag = _normalize_text(tag).lower()
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", safe_tag):
         safe_tag = "*"
-    return f"//label[normalize-space()={_xpath_literal(label)}]/following::{safe_tag}[1]"
+    return f"//*[normalize-space()={_xpath_literal(label)}]/following::{safe_tag}[1]"
 
 
 def _xpath_literal(value: str) -> str:

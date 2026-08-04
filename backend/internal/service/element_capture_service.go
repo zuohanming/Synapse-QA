@@ -63,6 +63,10 @@ type CandidateCaptureRepository interface {
 	SaveCandidates(ctx context.Context, actor string, req model.CandidateBatchSaveRequest, validate func(model.CaptureBatchData) error) (model.BatchSaveResult, error)
 }
 
+type CaptureCandidateDeletionRepository interface {
+	DeleteCandidate(ctx context.Context, actor, sessionID string, candidateID int64) (bool, error)
+}
+
 type CaptureVersionRepository interface {
 	ListVersions(ctx context.Context, userID, elementID int64) ([]model.PageElementVersion, error)
 	RollbackVersion(ctx context.Context, actor string, elementID int64, version int) (model.PageElementVersion, error)
@@ -471,6 +475,21 @@ func (s *ElementCaptureService) UpdateCandidate(ctx context.Context, actor, sess
 	}
 	if !updated {
 		return notFound("采集候选项不存在或会话不可审核")
+	}
+	return nil
+}
+
+func (s *ElementCaptureService) DeleteCandidate(ctx context.Context, actor, sessionID string, candidateID int64) error {
+	repo, ok := s.repo.(CaptureCandidateDeletionRepository)
+	if !ok {
+		return notFound("候选项不存在")
+	}
+	deleted, err := repo.DeleteCandidate(ctx, actor, sessionID, candidateID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return notFound("候选项不存在或已处理")
 	}
 	return nil
 }

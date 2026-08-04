@@ -3503,7 +3503,7 @@ body,
 .element-capture-candidate.is-unnamed::before,
 .element-capture-candidate.is-unreliable::before { background: var(--warning); }
 .element-capture-candidate.is-conflict::before { background: var(--danger); }
-.element-capture-candidate-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 10px; }
+.element-capture-candidate-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; align-items: start; gap: 10px; }
 .element-capture-candidate-main > input { margin-top: 23px; }
 .element-capture-candidate-identity { display: grid; gap: 5px; }
 .element-capture-candidate-identity label { display: grid; gap: 4px; }
@@ -3526,6 +3526,7 @@ body,
 .element-capture-quality-label.is-unnamed,
 .element-capture-quality-label.is-unreliable { color: color-mix(in srgb, var(--warning) 85%, var(--text)); background: color-mix(in srgb, var(--warning) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warning) 24%, var(--line)); }
 .element-capture-quality-label.is-conflict { color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); border-color: color-mix(in srgb, var(--danger) 22%, var(--line)); }
+.element-capture-candidate-delete { align-self: start; margin-top: 15px; min-height: 26px; padding: 3px 8px; color: var(--danger); background: transparent; border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--line)); border-radius: 4px; font-size: 11px; }
 
 .element-capture-locators { display: grid; gap: 5px; padding-left: 28px; }
 .element-capture-locators > div { display: grid; grid-template-columns: 72px minmax(0, 1fr) 38px 52px; min-height: 31px; align-items: center; gap: 8px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; }
@@ -3603,6 +3604,7 @@ body,
   .element-capture-candidate { padding-right: 12px; padding-left: 15px; }
   .element-capture-candidate-main { grid-template-columns: 18px minmax(0, 1fr); }
   .element-capture-quality-label { grid-column: 2; justify-self: start; margin-top: 0; }
+  .element-capture-candidate-delete { grid-column: 2; justify-self: start; margin-top: 0; }
   .element-capture-locators,
   .element-capture-guidance,
   .element-capture-issues,

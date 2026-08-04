@@ -558,6 +558,19 @@ export function ElementCaptureDrawer({
     });
   }
 
+  async function removeCandidate(cursorId) {
+    setActionError("");
+    try {
+      await runAction((signal) => elementCaptureService.remove(sessionState.id, cursorId, { signal }));
+      setCandidates((current) => current.filter((item) => item.cursorId !== cursorId));
+      setSelectedIDs((current) => new Set([...current].filter((id) => id !== cursorId)));
+      dirtyRef.current.delete(cursorId);
+      setSessionState((current) => ({ ...current, candidateCount: Math.max(0, current.candidateCount - 1) }));
+    } catch (error) {
+      if (error?.name !== "AbortError") setIssue(cursorId, error?.message || "删除候选项失败");
+    }
+  }
+
   function toggleVisibleCandidates() {
     setSelectedIDs((current) => {
       const next = new Set(current);
@@ -816,6 +829,13 @@ export function ElementCaptureDrawer({
                     <span className={`element-capture-quality-label is-${category}`}>
                       {qualitySegments.find((segment) => segment.key === category)?.label}
                     </span>
+                    <button
+                      className="element-capture-candidate-delete"
+                      onClick={() => removeCandidate(candidate.cursorId)}
+                      type="button"
+                    >
+                      删除
+                    </button>
                   </div>
 
                   <div className="element-capture-locators" aria-label={`候选 ${candidate.cursorId} 定位器`}>

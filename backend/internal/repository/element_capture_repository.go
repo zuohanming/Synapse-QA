@@ -872,6 +872,32 @@ func (r *ElementCaptureRepository) UpdateCandidate(ctx context.Context, actor, s
 	return false, nil
 }
 
+func (r *ElementCaptureRepository) DeleteCandidate(ctx context.Context, actor, sessionID string, candidateID int64) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var removedSessionID string
+	err = tx.QueryRowContext(ctx, `
+		delete from element_capture_candidates c using element_capture_sessions s
+		where c.session_id=s.id and c.cursor_id=$1 and c.session_id=$2 and c.status='pending'
+		  and s.status in ('active','completed')
+		  and (s.created_by=$3 or exists(select 1 from users u join roles ro on ro.id=u.role_id where u.username=$3 and u.deleted_at is null and ro.code='admin'))
+		returning c.session_id
+	`, candidateID, sessionID, actor).Scan(&removedSessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `update element_capture_sessions set candidate_count=greatest(candidate_count-1,0),updated_at=now() where id=$1`, removedSessionID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
 func (r *ElementCaptureRepository) GetBatchSaveData(ctx context.Context, actor, sessionID string, _ []int64) (model.CaptureBatchData, error) {
 	var data model.CaptureBatchData
 	err := r.db.QueryRowContext(ctx, `

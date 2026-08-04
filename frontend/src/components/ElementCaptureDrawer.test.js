@@ -18,6 +18,7 @@ vi.mock("../services/elementCaptureService.js", () => ({
     candidates: vi.fn(),
     update: vi.fn(),
     save: vi.fn(),
+    remove: vi.fn(),
     mode: vi.fn(),
     stop: vi.fn()
   }
@@ -76,6 +77,7 @@ describe("ElementCaptureDrawer", () => {
     elementCaptureService.mode.mockResolvedValue({ message: "已更新" });
     elementCaptureService.stop.mockResolvedValue({ message: "已停止" });
     elementCaptureService.save.mockResolvedValue({ savedCandidateIds: [], ignoredCandidateIds: [] });
+    elementCaptureService.remove.mockResolvedValue({ message: "候选项已删除" });
   });
 
   afterEach(() => {
@@ -233,6 +235,19 @@ describe("ElementCaptureDrawer", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("已达到 400 个");
     expect(screen.getByRole("alert")).toHaveTextContent("接近 500 个上限");
+  });
+
+  it("删除候选会调用接口并从待审核列表移除", async () => {
+    elementCaptureService.candidates.mockResolvedValue([candidate(1)]);
+    render(<ElementCaptureDrawer session={session} />);
+
+    const row = await screen.findByTestId("element-capture-candidate-1");
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => expect(elementCaptureService.remove).toHaveBeenCalledWith(
+      "session-1", 1, expect.objectContaining({ signal: expect.any(AbortSignal) })
+    ));
+    expect(screen.queryByTestId("element-capture-candidate-1")).not.toBeInTheDocument();
   });
 
   it("保存门禁覆盖未命名、可靠唯一定位、冲突 target、200 上限和 400 预警", () => {

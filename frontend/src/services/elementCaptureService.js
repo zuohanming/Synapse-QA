@@ -106,6 +106,13 @@ export const elementCaptureService = {
     );
   },
 
+  remove(id, candidateId, { signal } = {}) {
+    return request(
+      `${capturePath}/${resourceID(id)}/candidates/${resourceID(candidateId, "candidateId")}`,
+      optionsWithSignal("DELETE", undefined, signal)
+    );
+  },
+
   candidates(id, { afterId = 0, limit = 100, signal } = {}) {
     const safeAfterID = integerParam(afterId, "afterId", { min: 0 });
     const safeLimit = integerParam(limit, "limit", { min: 1, max: 200 });

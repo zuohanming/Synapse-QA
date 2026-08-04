@@ -75,7 +75,7 @@ options => {
   const formLabelText = element => {
     const formItem = element.closest(".el-form-item, fieldset, [role='group']");
     if (!formItem) return "";
-    return safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend")), 512);
+    return safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend, .name")), 512);
   };
   const structuredPath = element => {
     const path = [];
@@ -255,7 +255,7 @@ element => {
     : "";
   const formItem = element.closest(".el-form-item, fieldset, [role='group']");
   const formLabel = formItem
-    ? safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend")), 512)
+    ? safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend, .name")), 512)
     : "";
   const path = [];
   let current = element;
