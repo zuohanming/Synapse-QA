@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -99,17 +99,25 @@ class CaptureSessionManager:
         browser_factory: Any | None = None,
         picker: ElementPicker | None = None,
         state_callback: Callable[[bool, str], None] | None = None,
+        session_closed_callback: Callable[[CaptureHeartbeatContext, str], Awaitable[None]] | None = None,
         network_validator: Callable[..., str] = validate_network_target,
     ) -> None:
         self._browser_factory = browser_factory or PlaywrightBrowserFactory()
         self._picker = picker or ElementPicker(rate_limit_per_second=settings.capture_rate_limit_per_second)
         self._state_callback = state_callback
+        self._session_closed_callback = session_closed_callback
         self._network_validator = network_validator
         self._session: _ActiveSession | None = None
         self._lock = asyncio.Lock()
 
     def set_state_callback(self, callback: Callable[[bool, str], None] | None) -> None:
         self._state_callback = callback
+
+    def set_session_closed_callback(
+        self,
+        callback: Callable[[CaptureHeartbeatContext, str], Awaitable[None]] | None,
+    ) -> None:
+        self._session_closed_callback = callback
 
     async def start(self, command: CaptureStartCommand) -> CaptureState:
         if command.headless:
@@ -150,6 +158,7 @@ class CaptureSessionManager:
                     context=context,
                     page=page,
                 )
+                browser.on("disconnected", lambda: self._schedule_browser_disconnect(command.session_id, browser))
 
                 async def receive_pick(source: dict[str, Any], handle: Any, payload: dict[str, Any]) -> None:
                     await self._handle_pick(command.session_id, source, handle, payload)
@@ -203,6 +212,34 @@ class CaptureSessionManager:
                 self._notify_state(False, "")
             else:
                 await self._picker.close()
+
+    def _schedule_browser_disconnect(self, session_id: str, browser: Any) -> None:
+        try:
+            asyncio.get_running_loop().create_task(self._handle_browser_disconnect(session_id, browser))
+        except RuntimeError:
+            logger.warning("浏览器关闭事件未能绑定到采集事件循环")
+
+    async def _handle_browser_disconnect(self, session_id: str, browser: Any) -> None:
+        async with self._lock:
+            session = self._session
+            if not session or session.state.session_id != session_id or session.browser is not browser:
+                return
+            context = CaptureHeartbeatContext(
+                session_id=session.state.session_id,
+                token=session.token,
+                browser_context_id=session.state.browser_context_id,
+                current_url=session.current_url,
+                command_receipt=session.receipt,
+            )
+            self._session = None
+            await self._cleanup_session(session)
+            self._notify_state(False, "")
+
+        if self._session_closed_callback:
+            try:
+                await self._session_closed_callback(context, "browser_closed")
+            except Exception:
+                logger.exception("浏览器关闭后同步采集会话失败")
 
     def heartbeat_context(self) -> CaptureHeartbeatContext | None:
         session = self._session

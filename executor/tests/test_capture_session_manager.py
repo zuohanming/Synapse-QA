@@ -73,12 +73,22 @@ class FakeBrowser:
     def __init__(self, context: FakeContext) -> None:
         self.context = context
         self.closed = False
+        self.disconnected_handlers = []
+
+    def on(self, event: str, handler) -> None:
+        assert event == "disconnected"
+        self.disconnected_handlers.append(handler)
+
+    def disconnect(self) -> None:
+        for handler in tuple(self.disconnected_handlers):
+            handler()
 
     async def new_context(self) -> FakeContext:
         return self.context
 
     async def close(self) -> None:
         self.closed = True
+        self.disconnect()
 
 
 class FakeBrowserLease:
@@ -370,6 +380,23 @@ async def test_network_error_keeps_session_and_start_receipt_for_next_cycle():
     assert client.heartbeat_receipts == ["start-receipt", "start-receipt"]
     assert manager.heartbeat_context().command_receipt == ""
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_browser_close_stops_local_capture_and_reports_platform_failure():
+    factory = FakeBrowserFactory()
+    manager = capture_manager(factory)
+    client = FakePlatformClient()
+    client.commands = [start_command()]
+    poller = CaptureCommandPoller(client, manager)
+
+    await poller.run_once()
+    factory.lease.browser.disconnect()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert manager.health_state() == {"active": False}
+    assert client.failures == ["browser_closed"]
 
 
 @pytest.mark.asyncio

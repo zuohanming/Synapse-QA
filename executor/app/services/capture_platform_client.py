@@ -166,6 +166,8 @@ class CaptureCommandPoller:
         self._thread_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._sleep = asyncio.sleep
+        if hasattr(self._manager, "set_session_closed_callback"):
+            self._manager.set_session_closed_callback(self._handle_browser_closed)
 
     def set_auth_failure_handler(self, handler: Callable[[], None] | None) -> None:
         self._on_auth_failure = handler
@@ -270,6 +272,10 @@ class CaptureCommandPoller:
         if 200 <= response.status < 300:
             self._manager.confirm_start_heartbeat()
             return
+        await self._handle_terminal_response(response, context.session_id)
+
+    async def _handle_browser_closed(self, context: CaptureHeartbeatContext, reason: str) -> None:
+        response = await self._client.fail(context, reason)
         await self._handle_terminal_response(response, context.session_id)
 
     async def _flush_candidates(self) -> None:
