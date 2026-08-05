@@ -41,11 +41,20 @@ bash ./start.sh
 密码：admin123
 ```
 
+## 文档
+
+| 文档 | 说明 |
+| --- | --- |
+| [产品需求总纲（PRD）](docs/PRD.md) | 产品定位、信息架构、全局规则、验收基线 |
+| [模块文档索引](docs/modules/README.md) | 按二级菜单拆分的 25 份业务模块文档 |
+| [AI 全流程自动化设计方案](docs/AI全流程自动化设计方案.md) | AI 自然语言驱动测试全流程的专项方案 |
+| [技术文档](docs/technical/) | 后端架构规划、API 设计、分层说明等 |
+
 ## 目录
 
 ```text
 backend/   Go Gin 后端
 frontend/  React 前端
 executor/  Python 执行器
-docs/      架构和分层文档
+docs/      产品与模块文档、技术文档、每日更新
 ```

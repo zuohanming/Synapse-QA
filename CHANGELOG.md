@@ -29,3 +29,5 @@
 - 前端新增测试用例筛选、分页、新增、编辑、删除、批量删除、导入、导出、详情和参数化数据 UI。
 - 前端新增 Vitest 组件测试、Playwright 关键 E2E 和覆盖率统计配置。
 - 新增 `SPEC.md`、`tasks/test-case-module.md`、`docs/api-test-case.md`、`PR_DESCRIPTION.md`、`SUMMARY.md`。
+- 产品文档重构为多文档体系：新增 `docs/modules/` 下 25 份业务模块文档与索引，`docs/PRD.md` 精简为产品总纲（V2.0），技术文档移入 `docs/technical/`，根目录 README 增加文档入口。
+- 新增 `docs/AI全流程自动化设计方案.md`：规划 AI 自然语言全流程自动化（全自主闭环、任务式异步管道、Redis + Asynq、三阶段实施）。
