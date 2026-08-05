@@ -112,7 +112,7 @@ options => {
     };
   };
   const emit = bundle => Promise.resolve(globalThis.__synapseCapturePick({...bundle, nonce})).catch(() => {});
-  const effectiveMode = () => state.alt ? (state.mode === "pick" ? "operate" : "pick") : state.mode;
+  const effectiveMode = altKey => altKey ? (state.mode === "pick" ? "operate" : "pick") : state.mode;
 
   const clear = () => {
     const highlight = host?.shadowRoot?.querySelector("[data-highlight]");
@@ -122,6 +122,7 @@ options => {
   const setMode = mode => {
     if (mode !== "pick" && mode !== "operate") return;
     state.mode = mode;
+    state.alt = false;
     host?.shadowRoot?.querySelectorAll("[data-mode]").forEach(
       button => button.setAttribute("aria-pressed", String(button.getAttribute("data-mode") === mode))
     );
@@ -177,14 +178,14 @@ options => {
 
     const mouseover = event => {
       const element = eventElement(event);
-      if (element && effectiveMode() === "pick") {
+      if (element && effectiveMode(Boolean(event.altKey)) === "pick") {
         state.target = element;
         showHighlight(element);
       }
     };
     const click = event => {
       const element = eventElement(event);
-      if (!element || effectiveMode() !== "pick") return;
+      if (!element || effectiveMode(Boolean(event.altKey)) !== "pick") return;
       event.preventDefault();
       event.stopImmediatePropagation();
       emit({action: "pick", element, payload: extract(element)});

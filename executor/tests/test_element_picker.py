@@ -22,6 +22,11 @@ def test_picker_and_dom_recheck_keep_the_same_safe_attribute_set():
     assert '"autocomplete"' in _DOM_EXTRACT_SCRIPT
 
 
+def test_picker_uses_pointer_modifier_state_and_clears_stale_alt_on_mode_change():
+    assert "effectiveMode(Boolean(event.altKey))" in PICKER_SCRIPT
+    assert "state.alt = false;" in PICKER_SCRIPT
+
+
 class FakeLocator:
     def __init__(self, count: int = 1, *, sensitive: bool = False) -> None:
         self._count = count
