@@ -53,6 +53,25 @@ def test_generates_unique_form_context_locator_for_inputs_sharing_component_clas
     assert candidate.name == "账号"
 
 
+def test_native_button_text_and_stable_business_class_are_framework_compatible():
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="button",
+            attributes={"class": "el-button el-button--primary login-content_form_btn", "type": "button"},
+            visible_text="登录",
+            depth=11,
+            locator_matches={
+                'role:button[name="登录"]': 1,
+                'css:[class~="login-content_form_btn"]': 1,
+                "css:button.el-button.el-button--primary.login-content_form_btn": 1,
+            },
+        )
+    )
+
+    assert any(locator.type == "role" and locator.unique and locator.score >= 70 for locator in candidate.locators)
+    assert any(locator.value == '[class~="login-content_form_btn"]' and locator.unique for locator in candidate.locators)
+
+
 def test_filters_dynamic_id_and_class_but_keeps_stable_business_id():
     candidate = build_candidate(
         ElementSnapshot(

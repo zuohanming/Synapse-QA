@@ -9,7 +9,7 @@ from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
 from app.services.capture_security import contains_secret_text, is_sensitive_key, sanitize_public_url
 
 
-_SCORES = {"testid": 95, "id": 90, "role": 85, "form-label": 95, "label": 82, "css": 70, "text": 60, "xpath": 40}
+_SCORES = {"testid": 95, "id": 90, "framework": 90, "role": 85, "form-label": 95, "label": 82, "css": 70, "text": 60, "xpath": 40}
 _PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 _CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
@@ -93,9 +93,10 @@ def _locator_seeds(
         seeds.append(_LocatorSeed("id", "id", element_id))
     elif element_id:
         rejected.append("已过滤不安全定位器")
-    role = attributes.get("role", "")
-    if accessible_name and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", role or ""):
-        seeds.append(_LocatorSeed("role", "role", f"{role}[name={json.dumps(accessible_name, ensure_ascii=False)}]"))
+    role = attributes.get("role", "") or _native_role(snapshot.tag, attributes)
+    role_name = accessible_name or visible_text
+    if role_name and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", role or ""):
+        seeds.append(_LocatorSeed("role", "role", f"{role}[name={json.dumps(role_name, ensure_ascii=False)}]"))
     if label:
         seeds.append(_LocatorSeed("label", "label", label))
     if form_label:
@@ -117,6 +118,8 @@ def _locator_seeds(
     class_selector = _stable_class_selector(snapshot.tag, attributes.get("class", ""))
     if class_selector:
         seeds.append(_LocatorSeed("css", "css", class_selector))
+    for class_name in _stable_business_classes(attributes.get("class", "")):
+        seeds.append(_LocatorSeed("framework", "css", f"[class~={_css_string(class_name)}]"))
     if visible_text:
         seeds.append(_LocatorSeed("text", "text", visible_text))
     xpath = snapshot.xpath.strip()
@@ -149,7 +152,7 @@ def _build_locators(seeds: list[_LocatorSeed], snapshot: ElementSnapshot) -> lis
 
 
 def _match_count(snapshot: ElementSnapshot, strategy: str, value: str) -> int | None:
-    match_key = "xpath" if strategy == "form-label" else strategy
+    match_key = {"form-label": "xpath", "framework": "css"}.get(strategy, strategy)
     raw = snapshot.locator_matches.get(
         f"{strategy}:{value}",
         snapshot.locator_matches.get(f"{match_key}:{value}", snapshot.locator_matches.get(value)),
@@ -223,6 +226,20 @@ def _stable_class_selector(tag: str, classes: str) -> str:
     if not stable_classes:
         return ""
     return _css_escape_identifier(_normalize_text(tag).lower()) + "".join(f".{_css_escape_identifier(token)}" for token in stable_classes)
+
+
+def _stable_business_classes(classes: str) -> list[str]:
+    tokens = sorted({_normalize_text(token) for token in classes.split() if _is_safe_token(token)})
+    return [token for token in tokens if "_" in token]
+
+
+def _native_role(tag: str, attributes: dict[str, str]) -> str:
+    normalized_tag = _normalize_text(tag).lower()
+    if normalized_tag == "button":
+        return "button"
+    if normalized_tag == "a" and attributes.get("href"):
+        return "link"
+    return ""
 
 
 def _form_label_xpath(tag: str, label: str) -> str:
