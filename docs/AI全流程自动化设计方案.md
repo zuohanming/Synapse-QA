@@ -299,4 +299,5 @@ create table if not exists ai_model_calls (
 
 - [产品总纲](PRD.md)
 - [后端架构规划](technical/backend-architecture.md)（AI 数据模型初稿、AI 安全与审计）
+- [AI Token 节省设计](AI-Token节省设计.md)（工具式按需上下文、Agent 循环与裁剪规则）
 - 模块文档：[AI 智能](modules/21-AI智能.md)、[执行中心 - 执行调度](modules/22-执行中心-执行调度.md)、[接口自动化 - 接口测试用例](modules/18-接口自动化-接口测试用例.md)、[界面自动化 - 页面步骤与画布](modules/13-界面自动化-页面步骤与画布.md)

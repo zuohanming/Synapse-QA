@@ -31,3 +31,4 @@
 - 新增 `SPEC.md`、`tasks/test-case-module.md`、`docs/api-test-case.md`、`PR_DESCRIPTION.md`、`SUMMARY.md`。
 - 产品文档重构为多文档体系：新增 `docs/modules/` 下 25 份业务模块文档与索引，`docs/PRD.md` 精简为产品总纲（V2.0），技术文档移入 `docs/technical/`，根目录 README 增加文档入口。
 - 新增 `docs/AI全流程自动化设计方案.md`：规划 AI 自然语言全流程自动化（全自主闭环、任务式异步管道、Redis + Asynq、三阶段实施）。
+- 新增 `docs/AI-Token节省设计.md`：定义 AI 全流程管道的 token 节省策略（工具式按需上下文、Agent 循环、结果裁剪、前缀缓存）。
