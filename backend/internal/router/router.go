@@ -9,18 +9,19 @@ import (
 )
 
 type Dependencies struct {
-	AuthController          *controller.AuthController
-	SystemController        *controller.SystemController
-	CatalogController       *controller.CatalogController
-	AutomationController    *controller.AutomationController
-	ExecutorController      *controller.ExecutorController
-	TestCaseController      *controller.TestCaseController
-	ExecutionController     *controller.ExecutionController
-	NotificationController  *controller.NotificationController
-	APIAutomationController *controller.APIAutomationController
-	DataFactoryController   *controller.DataFactoryController
-	AIController            *controller.AIController
-	AuthMiddleware          gin.HandlerFunc
+	AuthController           *controller.AuthController
+	SystemController         *controller.SystemController
+	CatalogController        *controller.CatalogController
+	AutomationController     *controller.AutomationController
+	ExecutorController       *controller.ExecutorController
+	TestCaseController       *controller.TestCaseController
+	ExecutionController      *controller.ExecutionController
+	ElementCaptureController *controller.ElementCaptureController
+	NotificationController   *controller.NotificationController
+	APIAutomationController  *controller.APIAutomationController
+	DataFactoryController    *controller.DataFactoryController
+	AIController             *controller.AIController
+	AuthMiddleware           gin.HandlerFunc
 }
 
 // RegisterRoutes 是唯一的路由注册入口。
@@ -31,6 +32,12 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	})
 	api.POST("/executors/register", deps.ExecutorController.Register)
 	api.POST("/executors/heartbeat", deps.ExecutorController.Heartbeat)
+	executorCapture := api.Group("/executor/element-capture")
+	executorCapture.POST("/:id/heartbeat", deps.ElementCaptureController.Heartbeat)
+	executorCapture.POST("/:id/candidates", deps.ElementCaptureController.AddCandidate)
+	executorCapture.POST("/:id/fail", deps.ElementCaptureController.FailSession)
+	executorCapture.GET("/commands", deps.ElementCaptureController.ListCommands)
+	executorCapture.POST("/commands/:id/ack", deps.ElementCaptureController.AckCommand)
 	// 执行器回调使用任务 ID 作为一次性关联凭据，不依赖用户登录态。
 	api.POST("/executions/tasks/:taskId/callback", deps.ExecutionController.Callback)
 	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
@@ -38,6 +45,9 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/api-automation/test-runs/tasks/:taskId/callback", deps.APIAutomationController.TestRunCallback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
+	// 候选项响应始终先设置 no-store，连 JWT 认证失败响应也不例外。
+	captureNoStoreAuthed := api.Group("", captureNoStore(), deps.AuthMiddleware)
+	registerCaptureCandidateRoutes(captureNoStoreAuthed, deps)
 
 	authed := api.Group("", deps.AuthMiddleware)
 	authed.GET("/auth/me", deps.AuthController.Me)
@@ -179,6 +189,8 @@ func registerConfigRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.POST("/config/products", deps.CatalogController.CreateProduct)
 	authed.PATCH("/config/products/:id", deps.CatalogController.UpdateProduct)
 	authed.DELETE("/config/products/:id", deps.CatalogController.DeleteProduct)
+	authed.GET("/config/products/:id/stats", deps.CatalogController.ProductStats)
+	authed.POST("/config/products/:id/copy", deps.CatalogController.CopyProduct)
 	authed.GET("/config/product-modules", deps.CatalogController.ListProductModules)
 	authed.POST("/config/product-modules", deps.CatalogController.CreateProductModule)
 	authed.PATCH("/config/product-modules/:id", deps.CatalogController.UpdateProductModule)
@@ -198,6 +210,28 @@ func registerUIRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.POST("/ui/page-elements", deps.AutomationController.CreatePageElement)
 	authed.PATCH("/ui/page-elements/:id", deps.AutomationController.UpdatePageElement)
 	authed.DELETE("/ui/page-elements/:id", deps.AutomationController.DeletePageElement)
+	capture := authed.Group("/ui/page-elements")
+	capture.POST("/capture-sessions", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.CreateSession)
+	capture.GET("/capture-sessions/:id", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.GetSession)
+	capture.PATCH("/capture-sessions/:id/mode", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SetMode)
+	capture.POST("/capture-sessions/:id/stop", controller.RequirePermission("ui.element.capture"), deps.ElementCaptureController.StopSession)
+	capture.GET("/:id/versions", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListVersions)
+	capture.POST("/:id/versions/:version/rollback", controller.RequirePermission("ui.element.rollback"), deps.ElementCaptureController.RollbackVersion)
+}
+
+func registerCaptureCandidateRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	capture := authed.Group("/ui/page-elements")
+	capture.GET("/capture-sessions/:id/candidates", controller.RequirePermission("ui.element.read"), deps.ElementCaptureController.ListCandidates)
+	capture.PATCH("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.UpdateCandidate)
+	capture.DELETE("/capture-sessions/:id/candidates/:candidateId", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.DeleteCandidate)
+	capture.POST("/capture-sessions/:id/save", controller.RequirePermission("ui.element.manage"), deps.ElementCaptureController.SaveCandidates)
+}
+
+func captureNoStore() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	}
 }
 
 func registerUIAssetRoutes(authed *gin.RouterGroup, path string, assetType string, deps Dependencies) {

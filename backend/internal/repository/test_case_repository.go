@@ -178,7 +178,7 @@ func (r *TestCaseRepository) Delete(ctx context.Context, id int64) (int64, error
 
 func (r *TestCaseRepository) ExistsProduct(ctx context.Context, id int64) bool {
 	var exists bool
-	_ = r.db.QueryRowContext(ctx, `select exists(select 1 from products where id = $1 and deleted_at is null)`, id).Scan(&exists)
+	_ = r.db.QueryRowContext(ctx, `select exists(select 1 from products where id = $1 and deleted_at is null and status = 'active')`, id).Scan(&exists)
 	return exists
 }
 

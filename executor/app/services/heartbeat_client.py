@@ -14,6 +14,12 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
 class HeartbeatClient:
     """负责执行器向平台注册和定时心跳。"""
 
@@ -22,6 +28,8 @@ class HeartbeatClient:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_auth_failure = on_auth_failure
+        self._auth_failure_notified = threading.Event()
+        self._auth_failure_lock = threading.Lock()
 
     def set_auth_failure_handler(self, handler: Callable[[], None] | None) -> None:
         self._on_auth_failure = handler
@@ -37,6 +45,7 @@ class HeartbeatClient:
         }
         status = self._post("/api/executors/register", payload, token, notify_auth_failure=False)
         if status == 200:
+            self._auth_failure_notified.clear()
             return True, "连接成功"
         if status == 401:
             return False, "Token 无效或已失效"
@@ -48,6 +57,7 @@ class HeartbeatClient:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._auth_failure_notified.clear()
         self._thread = threading.Thread(target=self._loop, name="executor-heartbeat", daemon=True)
         self._thread.start()
 
@@ -103,20 +113,32 @@ class HeartbeatClient:
             },
             method="POST",
         )
+        opener = urllib.request.build_opener(_NoRedirectHandler())
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with opener.open(request, timeout=5) as response:
                 return response.status
         except urllib.error.HTTPError as error:
-            logger.warning("执行器心跳鉴权失败：path=%s status=%s", path, error.code)
-            if error.code == 401 and notify_auth_failure:
-                self._stop_event.set()
-                if self._on_auth_failure:
-                    self._on_auth_failure()
-            return error.code
+            try:
+                logger.warning("执行器心跳鉴权失败：path=%s status=%s", path, error.code)
+                if error.code == 401 and notify_auth_failure:
+                    self._stop_event.set()
+                    self.notify_auth_failure()
+                return error.code
+            finally:
+                error.close()
         except (urllib.error.URLError, TimeoutError):
             logger.warning("执行器无法连接平台：path=%s", path)
             # 平台短暂不可达时不影响本地任务执行，下一轮心跳会继续补报。
             return 0
+
+    def notify_auth_failure(self) -> None:
+        """合并普通心跳和采集回调的 401，确保 GUI 只收到一次失效通知。"""
+        with self._auth_failure_lock:
+            if self._auth_failure_notified.is_set():
+                return
+            self._auth_failure_notified.set()
+        if self._on_auth_failure:
+            self._on_auth_failure()
 
     def _checks(self) -> dict[str, bool]:
         return {

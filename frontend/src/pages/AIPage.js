@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { MessageSquare, CheckCircle, Wand2, AlertTriangle, Cpu, Sparkles, ArrowRight, Zap, FileText, Search, Eye, EyeOff, Check, X, Loader2, RefreshCw, Shield, Sliders, Send, RotateCcw, Bot, User, Plus, Trash2 } from "lucide-react";
 import { aiService } from "../services/aiService.js";
+import "./AIPage.css";
 
 export function AIPage({ activePath }) {
   const subPage = activePath[1] || "AI 助手";

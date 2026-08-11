@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TestCasesPage } from "./TestCasesPage.js";
+import { UIAutomationPage } from "./UIAutomationPage.js";
 
 function apiResponse(data) {
   return Promise.resolve({
@@ -162,6 +163,13 @@ describe("UIAutomationPage 测试用例页", () => {
     render(<TestCasesPage />);
     expect(await screen.findByText("登录成功")).toBeInTheDocument();
     expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/test-cases?page=1&pageSize=20"), expect.any(Object));
+  });
+
+  it("页面元素自动采集弹窗展示数组响应中的在线 UI 执行器", async () => {
+    render(<UIAutomationPage activePath={["界面自动化", "页面元素"]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加元素" }));
+    fireEvent.click(await screen.findByRole("button", { name: "自动采集" }));
+    expect(await screen.findByText("local")).toBeInTheDocument();
   });
 
   it("支持直接执行单条测试用例", async () => {

@@ -70,7 +70,7 @@ func (r *AutomationRepository) ListTestObjects(ctx context.Context, idFilter, en
 }
 
 func (r *AutomationRepository) CreateTestObject(ctx context.Context, req model.TestObjectRequest) error {
-	_, err := r.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) values($1, $2, $3, $4, $5, $6, $7, $8)`, req.ProductID, req.EnvName, req.Target, req.DeployEnv, req.AutoType, req.Owner, req.QueryEnabled, req.WriteEnabled)
+	_, err := r.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) select id,$2,$3,$4,$5,$6,$7,$8 from products where id=$1 and deleted_at is null and status='active'`, req.ProductID, req.EnvName, req.Target, req.DeployEnv, req.AutoType, req.Owner, req.QueryEnabled, req.WriteEnabled)
 	return err
 }
 
@@ -176,7 +176,9 @@ func (r *AutomationRepository) ListPageElements(ctx context.Context, pageID int6
 		return nil, 0, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		select id, page_id, name, type1, locator1, index1, type2, locator2, index2, type3, locator3, index3, ai_prompt, wait_time, created_at, updated_at
+		select id, page_id, name, type1, locator1, index1, type2, locator2, index2, type3, locator3, index3, ai_prompt, wait_time,
+			fingerprint, capture_source, capture_url, tag_name, accessible_name, quality_score, captured_by, captured_at, last_verified_at, verification_status, current_version,
+			created_at, updated_at
 		from page_elements
 		where page_id = $1 and deleted_at is null
 		order by id desc
@@ -189,7 +191,7 @@ func (r *AutomationRepository) ListPageElements(ctx context.Context, pageID int6
 	var items []model.PageElement
 	for rows.Next() {
 		var item model.PageElement
-		if err := rows.Scan(&item.ID, &item.PageID, &item.Name, &item.Type1, &item.Locator1, &item.Index1, &item.Type2, &item.Locator2, &item.Index2, &item.Type3, &item.Locator3, &item.Index3, &item.AIPrompt, &item.WaitTime, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.PageID, &item.Name, &item.Type1, &item.Locator1, &item.Index1, &item.Type2, &item.Locator2, &item.Index2, &item.Type3, &item.Locator3, &item.Index3, &item.AIPrompt, &item.WaitTime, &item.Fingerprint, &item.CaptureSource, &item.CaptureURL, &item.TagName, &item.AccessibleName, &item.QualityScore, &item.CapturedBy, &item.CapturedAt, &item.LastVerifiedAt, &item.VerificationStatus, &item.CurrentVersion, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, item)

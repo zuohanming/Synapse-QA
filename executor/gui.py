@@ -2,6 +2,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import urllib.error
 import urllib.request
@@ -30,8 +31,7 @@ if sys.stderr is None:
 
 import uvicorn
 
-from app.api.routes import create_app
-from app.api.routes import heartbeat_client
+from app.api.routes import configure_gui_callbacks, create_app, heartbeat_client
 from app.core.config import save_executor_token, settings
 
 
@@ -88,6 +88,9 @@ class ExecutorGui:
         self.server_thread: threading.Thread | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.auth_result_queue: queue.Queue[tuple[bool, str]] = queue.Queue()
+        self.ui_event_queue: queue.Queue[tuple] = queue.Queue()
+        self.closing = False
+        self._after_server_stop = None
 
         self.status_var = tk.StringVar(value="未启动")
         self.health_var = tk.StringVar(value="等待启动")
@@ -107,10 +110,12 @@ class ExecutorGui:
         self.login_message_var = tk.StringVar(value="请输入执行器专属 Token")
         self.login_button: ttk.Button | None = None
         self.authenticated = False
+        self.capture_active = False
 
         self._setup_logging()
         self._setup_style()
         self._build_login_ui()
+        self.root.after(50, self._drain_ui_events)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _setup_logging(self) -> None:
@@ -330,7 +335,10 @@ class ExecutorGui:
 
     def _show_main(self) -> None:
         self.authenticated = True
-        heartbeat_client.set_auth_failure_handler(lambda: self.root.after(0, self._auth_expired))
+        configure_gui_callbacks(
+            self.queue_capture_status,
+            self.queue_auth_expired,
+        )
         self._build_ui()
         self.authenticated = True
         self.root.after(300, self._drain_logs)
@@ -389,6 +397,37 @@ class ExecutorGui:
         self.status_var.set(value)
         self._apply_state_badges()
 
+    def queue_capture_status(self, active: bool, page_title: str) -> None:
+        """供采集轮询线程调用，把 Tk 状态更新切回主线程。"""
+        self.ui_event_queue.put(("capture", active, page_title))
+
+    def queue_auth_expired(self) -> None:
+        self.ui_event_queue.put(("auth_expired",))
+
+    def _drain_ui_events(self) -> None:
+        while True:
+            try:
+                event = self.ui_event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if event[0] == "capture":
+                self._apply_capture_status(bool(event[1]), str(event[2]))
+            elif event[0] == "auth_expired":
+                self._auth_expired()
+            elif event[0] == "server_stopped":
+                self._set_status("已停止")
+        if not self.closing:
+            self.root.after(50, self._drain_ui_events)
+
+    def _apply_capture_status(self, active: bool, page_title: str) -> None:
+        self.capture_active = active
+        if active:
+            self._set_status(f"正在采集 · {page_title or '页面元素'}")
+        elif self.server_thread is not None and self.server_thread.is_alive():
+            self._set_status("运行中")
+        else:
+            self._set_status("已停止")
+
     def _set_health(self, value: str) -> None:
         self.health_var.set(value)
         self._apply_state_badges()
@@ -406,7 +445,7 @@ class ExecutorGui:
     def _configure_badge(self, badge: tk.Label | None, value: str) -> None:
         if badge is None:
             return
-        if value in {"运行中", "正常"}:
+        if value in {"运行中", "正常"} or value.startswith("正在采集 · "):
             badge.configure(bg="#e6f4ed", fg=SUCCESS)
         elif value in {"启动中", "停止中", "等待启动"}:
             badge.configure(bg="#f7efe3", fg=WARNING)
@@ -436,7 +475,7 @@ class ExecutorGui:
         except Exception:
             logging.exception("执行器服务启动失败")
         finally:
-            self.root.after(0, lambda: self._set_status("已停止"))
+            self.ui_event_queue.put(("server_stopped",))
 
     def stop_server(self) -> None:
         if not self.server:
@@ -453,7 +492,8 @@ class ExecutorGui:
         try:
             with urllib.request.urlopen(settings.executor_endpoint.rstrip("/") + "/health", timeout=1.5) as response:
                 if response.status == 200:
-                    self._set_status("运行中")
+                    if not self.capture_active:
+                        self._set_status("运行中")
                     self._set_health("正常")
                 else:
                     self._set_health(f"异常 HTTP {response.status}")
@@ -480,8 +520,20 @@ class ExecutorGui:
         self.root.after(300, self._drain_logs)
 
     def close(self) -> None:
+        if self.closing:
+            return
+        self.closing = True
         self.stop_server()
-        self.root.after(500, self.root.destroy)
+        self._wait_for_server_stop(time.monotonic() + 15)
+
+    def _wait_for_server_stop(self, deadline: float) -> None:
+        thread = self.server_thread
+        if thread is not None and thread.is_alive() and time.monotonic() < deadline:
+            self.root.after(50, self._wait_for_server_stop, deadline)
+            return
+        if thread is not None:
+            thread.join(timeout=0)
+        self.root.destroy()
 
     def run(self) -> None:
         self.root.mainloop()

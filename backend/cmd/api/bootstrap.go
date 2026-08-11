@@ -213,6 +213,45 @@ func (a *app) migrate(ctx context.Context) error {
 			updated_at timestamptz not null default now(),
 			created_at timestamptz not null default now()
 		)`,
+		`create table if not exists element_capture_sessions (
+			id text primary key,
+			page_id bigint not null references ui_assets(id),
+			executor_id text not null references executors(executor_id),
+			browser_context_id text not null,
+			created_by text not null,
+			status text not null default 'active',
+			mode text not null,
+			current_url text not null default '',
+			candidate_count int not null default 0,
+			expires_at timestamptz not null,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists element_capture_candidates (
+			id text primary key,
+			cursor_id bigserial,
+			session_id text not null references element_capture_sessions(id) on delete cascade,
+			client_capture_id text not null,
+			fingerprint text not null,
+			tag_name text not null default '',
+			accessible_name text not null default '',
+			locators jsonb not null default '[]'::jsonb,
+			quality_score double precision not null default 0,
+			status text not null default 'pending',
+			expires_at timestamptz not null,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create table if not exists page_element_versions (
+			id bigserial primary key,
+			page_element_id bigint not null references page_elements(id),
+			version int not null,
+			snapshot jsonb not null,
+			change_summary text not null default '',
+			created_by text not null,
+			created_at timestamptz not null default now(),
+			unique(page_element_id, version)
+		)`,
 		`create table if not exists execution_runs (
 			id bigserial primary key,
 			run_type text not null default 'ui',
@@ -317,11 +356,29 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table notification_preferences add column if not exists use_system_defaults boolean not null default true`,
 		`alter table ui_assets add column if not exists deleted_at timestamptz`,
 		`alter table page_elements add column if not exists deleted_at timestamptz`,
+		`alter table page_elements add column if not exists fingerprint text not null default ''`,
+		`alter table page_elements add column if not exists capture_source text not null default ''`,
+		`alter table page_elements add column if not exists capture_url text not null default ''`,
+		`alter table page_elements add column if not exists tag_name text not null default ''`,
+		`alter table page_elements add column if not exists accessible_name text not null default ''`,
+		`alter table page_elements add column if not exists quality_score double precision not null default 0`,
+		`alter table page_elements add column if not exists captured_by text not null default ''`,
+		`alter table page_elements add column if not exists captured_at timestamptz`,
+		`alter table page_elements add column if not exists last_verified_at timestamptz`,
+		`alter table page_elements add column if not exists verification_status text not null default ''`,
+		`alter table page_elements add column if not exists current_version int not null default 1`,
+		`create index if not exists idx_element_capture_sessions_expires_at on element_capture_sessions(expires_at)`,
+		`create index if not exists idx_element_capture_candidates_expires_at on element_capture_candidates(expires_at)`,
 		`alter table projects add column if not exists status text not null default 'active'`,
 		`alter table projects add column if not exists updated_at timestamptz not null default now()`,
 		`alter table projects add column if not exists deleted_at timestamptz`,
 		`alter table products add column if not exists ui_type text not null default 'WEB'`,
 		`alter table products add column if not exists api_type text not null default 'WEB'`,
+		`alter table products add column if not exists code text not null default ''`,
+		`alter table products add column if not exists owner text not null default ''`,
+		`alter table products add column if not exists status text not null default 'active'`,
+		`update products set code='P' || project_id || '-PRD' || id where code=''`,
+		`create unique index if not exists uq_products_code on products(code) where deleted_at is null`,
 		`alter table products add column if not exists updated_at timestamptz not null default now()`,
 		`alter table products add column if not exists deleted_at timestamptz`,
 		`alter table product_modules add column if not exists level1 text not null default ''`,
@@ -585,12 +642,71 @@ func (a *app) migrate(ctx context.Context) error {
 			unique(debug_run_id, assertion_index)
 		)`,
 	}
+	statements = append(statements, elementCaptureMigrationStatements()...)
 	for _, statement := range statements {
 		if _, err := a.db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func elementCaptureMigrationStatements() []string {
+	return []string{
+		`alter table element_capture_sessions add column if not exists token_hash text not null default ''`,
+		`alter table element_capture_sessions add column if not exists browser_channel text not null default ''`,
+		`alter table element_capture_sessions add column if not exists last_heartbeat_at timestamptz not null default now()`,
+		`alter table element_capture_sessions add column if not exists interrupted_at timestamptz`,
+		`alter table element_capture_sessions add column if not exists recovery_expires_at timestamptz`,
+		`alter table element_capture_candidates add column if not exists name text not null default ''`,
+		`alter table element_capture_candidates add column if not exists capture_url text not null default ''`,
+		`alter table element_capture_candidates add column if not exists client_capture_id text`,
+		`update element_capture_candidates set client_capture_id=id where client_capture_id is null or client_capture_id=''`,
+		`alter table element_capture_candidates alter column client_capture_id set not null`,
+		`alter table element_capture_candidates add column if not exists duplicate_element_id bigint references page_elements(id)`,
+		`alter table element_capture_candidates add column if not exists conflict_status text not null default ''`,
+		`alter table element_capture_candidates add column if not exists conflict_resolution text not null default ''`,
+		`alter table element_capture_candidates add column if not exists cursor_id bigserial`,
+		`do $$
+		begin
+			if exists(select 1 from page_elements where deleted_at is null group by page_id, lower(name) having count(*) > 1) then
+				raise exception 'migration blocked: duplicate active page element names';
+			end if;
+		end $$`,
+		`create unique index if not exists uq_page_elements_active_name on page_elements(page_id, lower(name)) where deleted_at is null`,
+		`drop index if exists uq_page_elements_active_fingerprint`,
+		`do $$
+		begin
+			if exists(select 1 from pg_constraint where conrelid='element_capture_candidates'::regclass and conname='element_capture_candidates_cursor_id_key' and contype='u') then
+				alter table element_capture_candidates drop constraint element_capture_candidates_cursor_id_key;
+			end if;
+		end $$`,
+		`create unique index if not exists uq_element_capture_candidates_cursor_id on element_capture_candidates(cursor_id)`,
+		`create unique index if not exists uq_element_capture_candidates_session_client_capture on element_capture_candidates(session_id,client_capture_id)`,
+		`drop index if exists uq_element_capture_sessions_active_executor`,
+		`create unique index if not exists uq_element_capture_sessions_active_executor on element_capture_sessions(executor_id) where status in ('starting', 'active', 'interrupted')`,
+		`create table if not exists element_capture_commands (
+			id bigserial primary key,
+			session_id text not null references element_capture_sessions(id) on delete cascade,
+			executor_id text not null references executors(executor_id),
+			command_type text not null,
+			payload jsonb not null default '{}'::jsonb,
+			status text not null default 'pending',
+			expires_at timestamptz not null,
+			claimed_at timestamptz,
+			created_at timestamptz not null default now()
+		)`,
+		`alter table element_capture_commands add column if not exists lease_until timestamptz`,
+		`alter table element_capture_commands add column if not exists attempts int not null default 0`,
+		`alter table element_capture_commands add column if not exists acked_at timestamptz`,
+		`alter table element_capture_commands add column if not exists lease_receipt_hash text not null default ''`,
+		`update element_capture_commands set payload=payload-'token' where payload ? 'token'`,
+		`update element_capture_commands set status='queued' where status='pending'`,
+		`update element_capture_commands set status=case when expires_at <= now() then 'expired' else 'queued' end, lease_until=null, lease_receipt_hash='' where status='claimed'`,
+		`drop index if exists idx_element_capture_commands_pending`,
+		`create index if not exists idx_element_capture_commands_claim on element_capture_commands(executor_id, id) where status in ('queued','leased')`,
+		`create index if not exists idx_element_capture_commands_retention on element_capture_commands(status, created_at)`,
+	}
 }
 
 // seed 保证本地开发环境具备默认账号和基础数据。

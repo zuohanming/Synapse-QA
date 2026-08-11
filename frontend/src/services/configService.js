@@ -11,7 +11,7 @@ function resource(path) {
 
 export const configService = {
   projects: resource("/config/projects"),
-  products: resource("/config/products"),
+  products: { ...resource("/config/products"), stats: (id) => request(`/config/products/${id}/stats`), copy: (id, body) => request(`/config/products/${id}/copy`, { method: "POST", body: JSON.stringify(body) }) },
   productModules: {
     list: (params = {}) => request(`/config/product-modules${toQuery(params)}`),
     create: (body) => request("/config/product-modules", { method: "POST", body: JSON.stringify(body) }),

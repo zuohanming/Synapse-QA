@@ -510,7 +510,7 @@ func (e *AIToolExecutor) searchInterfaces(ctx context.Context, userID int64, arg
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("共找到 %d 个接口：\n\n| ID | 名称 | 方法 | 路径 | 状态 |\n|----|------|------|------|------|\n"))
+	sb.WriteString(fmt.Sprintf("共找到 %d 个接口：\n\n| ID | 名称 | 方法 | 路径 | 状态 |\n|----|------|------|------|------|\n", page.Total))
 
 	items := toMapSlice(page.Items)
 	for i, m := range items {

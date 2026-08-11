@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Braces, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3, Sparkles, Brain, MessageSquare, CheckCircle, Wand2, AlertTriangle, Cpu } from "lucide-react";
+import { Bell, Braces, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3, Sparkles } from "lucide-react";
 import { menuData } from "../config/appConfig.js";
 import { useAuth } from "../hooks/useAuth.js";
 import { NotificationCenter } from "./NotificationCenter.js";
@@ -9,8 +9,7 @@ const menuIcons = {
   "首页": <Home size={18} />,
   "界面自动化": <Monitor size={18} />,
   "接口自动化": <Braces size={18} />,
-  "数据工厂": <Sparkles size={18} />,
-  "AI 智能": <Brain size={18} />,
+  "数据工厂": <Database size={18} />,
   "接口管理": <Gauge size={16} />,
   "请求头管理": <KeyRound size={16} />,
   "测试配置": <Settings size={18} />,
@@ -25,6 +24,12 @@ const menuIcons = {
   "测试对象": <Database size={16} />,
   "执行器配置": <Play size={16} />,
   "执行中心": <ClipboardCheck size={18} />,
+  "AI 智能": <Sparkles size={18} />,
+  "AI 助手": <Sparkles size={16} />,
+  "智能断言": <Sparkles size={16} />,
+  "用例生成": <Sparkles size={16} />,
+  "失败分析": <Sparkles size={16} />,
+  "AI 设置": <Settings size={16} />,
   "执行记录": <Play size={16} />,
   "测试报告": <BarChart3 size={16} />,
   "系统概览": <Gauge size={16} />,
@@ -33,13 +38,7 @@ const menuIcons = {
   "外观设置": <Settings size={16} />,
   "用户管理": <Users size={16} />,
   "角色与权限": <Shield size={16} />,
-  "操作日志": <FileCode size={16} />,
-  "Mock 生成器": <Sparkles size={16} />,
-  "AI 助手": <MessageSquare size={16} />,
-  "智能断言": <CheckCircle size={16} />,
-  "用例生成": <Wand2 size={16} />,
-  "失败分析": <AlertTriangle size={16} />,
-  "AI 设置": <Cpu size={16} />
+  "操作日志": <FileCode size={16} />
 };
 
 const groupPermissions = {
@@ -47,9 +46,9 @@ const groupPermissions = {
   "界面自动化": "menu.ui_automation.read",
   "接口自动化": "menu.api_automation.read",
   "数据工厂": "menu.data_factory.read",
-  "AI 智能": "menu.ai.read",
   "测试配置": "menu.test_config.read",
   "执行中心": "menu.execution.read",
+  "AI 智能": "menu.ui_automation.read",
   "系统管理": "menu.system.read"
 };
 

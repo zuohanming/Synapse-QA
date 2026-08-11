@@ -33,11 +33,11 @@ export const routes = [
     Component: DataFactoryPage
   },
   {
-    match: (path) => path[0] === "AI 智能",
-    Component: AIPage
-  },
-  {
     match: (path) => path[0] === "执行中心",
     Component: ExecutionPage
+  },
+  {
+    match: (path) => path[0] === "AI 智能",
+    Component: AIPage
   }
 ];

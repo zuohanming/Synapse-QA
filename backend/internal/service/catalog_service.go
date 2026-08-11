@@ -143,9 +143,25 @@ func (s *CatalogService) DeleteProduct(ctx context.Context, actor string, id int
 		return errors.New("删除产品失败")
 	}
 	if rows == 0 {
-		return errors.New("产品不存在")
+		return errors.New("产品不存在或仍有关联资产，不能删除")
 	}
 	_ = s.systemRepo.LogOperation(ctx, actor, "删除产品", strconv.FormatInt(id, 10))
+	return nil
+}
+
+func (s *CatalogService) ProductStats(ctx context.Context, id int64) (model.ProductStats, error) {
+	return s.catalogRepo.ProductStats(ctx, id)
+}
+
+func (s *CatalogService) CopyProduct(ctx context.Context, actor string, id int64, req model.ProductCopyRequest) error {
+	req.Code, req.Name = strings.ToUpper(strings.TrimSpace(req.Code)), strings.TrimSpace(req.Name)
+	if req.Code == "" || req.Name == "" {
+		return errors.New("产品编码和名称不能为空")
+	}
+	if err := s.catalogRepo.CopyProduct(ctx, id, req); err != nil {
+		return errors.New("复制产品失败，产品编码或名称可能已存在")
+	}
+	_ = s.systemRepo.LogOperation(ctx, actor, "复制产品", fmt.Sprintf("%d:%s", id, req.Name))
 	return nil
 }
 
@@ -226,7 +242,10 @@ func maskToken(value string) string {
 }
 
 func normalizeProduct(req model.ProductRequest) (model.ProductRequest, error) {
+	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
 	req.Name = strings.TrimSpace(req.Name)
+	req.Owner = strings.TrimSpace(req.Owner)
+	req.Status = strings.TrimSpace(req.Status)
 	req.UIType = strings.ToUpper(strings.TrimSpace(req.UIType))
 	req.APIType = strings.ToUpper(strings.TrimSpace(req.APIType))
 	if req.UIType == "" {
@@ -240,6 +259,15 @@ func normalizeProduct(req model.ProductRequest) (model.ProductRequest, error) {
 	}
 	if req.Name == "" {
 		return req, errors.New("产品名称不能为空")
+	}
+	if req.Code == "" {
+		req.Code = fmt.Sprintf("P%d-%s", req.ProjectID, strings.ToUpper(strings.ReplaceAll(req.Name, " ", "-")))
+	}
+	if req.Status == "" {
+		req.Status = "active"
+	}
+	if req.Status != "active" && req.Status != "disabled" {
+		return req, errors.New("产品状态无效")
 	}
 	if !validEndpointType(req.UIType) || !validEndpointType(req.APIType) {
 		return req, errors.New("产品端类型无效")

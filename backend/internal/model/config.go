@@ -19,7 +19,10 @@ type Product struct {
 	ID          int64     `json:"id"`
 	ProjectID   int64     `json:"projectId"`
 	ProjectName string    `json:"projectName"`
+	Code        string    `json:"code"`
 	Name        string    `json:"name"`
+	Owner       string    `json:"owner"`
+	Status      string    `json:"status"`
 	UIType      string    `json:"uiType"`
 	APIType     string    `json:"apiType"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -28,9 +31,26 @@ type Product struct {
 
 type ProductRequest struct {
 	ProjectID int64  `json:"projectId"`
+	Code      string `json:"code"`
 	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	Status    string `json:"status"`
 	UIType    string `json:"uiType"`
 	APIType   string `json:"apiType"`
+}
+
+type ProductStats struct {
+	Modules      int64 `json:"modules"`
+	Environments int64 `json:"environments"`
+	Pages        int64 `json:"pages"`
+	Interfaces   int64 `json:"interfaces"`
+	UICases      int64 `json:"uiCases"`
+	APICases     int64 `json:"apiCases"`
+}
+
+type ProductCopyRequest struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
 }
 
 type ProductModule struct {

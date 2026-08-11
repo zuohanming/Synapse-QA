@@ -1,34 +1,60 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 
 from app.core.config import settings
 from app.models.task import TaskCreate, TaskView
+from app.services.capture_platform_client import CaptureCommandPoller, CapturePlatformClient
+from app.services.capture_session_manager import CaptureSessionManager
 from app.services.heartbeat_client import HeartbeatClient
 from app.services.task_manager import TaskManager
 
 
 task_manager = TaskManager()
 heartbeat_client = HeartbeatClient(task_manager.stats)
+capture_session_manager = CaptureSessionManager()
+capture_platform_client = CapturePlatformClient()
+capture_command_poller = CaptureCommandPoller(
+    capture_platform_client,
+    capture_session_manager,
+    poll_interval=settings.capture_command_poll_interval_seconds,
+    on_auth_failure=heartbeat_client.notify_auth_failure,
+)
+
+
+def configure_gui_callbacks(capture_status_handler, auth_failure_handler) -> None:
+    """注册由 GUI 自行切回 Tk 主线程的状态和认证回调。"""
+    capture_session_manager.set_state_callback(capture_status_handler)
+
+    def terminate_capture_then_notify() -> None:
+        capture_command_poller.request_stop()
+        auth_failure_handler()
+
+    heartbeat_client.set_auth_failure_handler(terminate_capture_then_notify)
 
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用并注册执行器对外接口。"""
 
-    app = FastAPI(title=settings.app_name, version="1.0.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            heartbeat_client.start()
+            capture_command_poller.start()
+            yield
+        finally:
+            capture_command_poller.stop()
+            heartbeat_client.stop()
+            await capture_session_manager.close()
 
-    @app.on_event("startup")
-    def start_heartbeat() -> None:
-        heartbeat_client.start()
-
-    @app.on_event("shutdown")
-    def stop_heartbeat() -> None:
-        heartbeat_client.stop()
-
+    app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
     @app.get("/health")
     def health() -> dict:
         return {
             "status": "ok",
             "executorId": settings.executor_id,
             "maxWorkers": settings.max_workers,
+            "capture": capture_session_manager.health_state(),
         }
 
     @app.post("/tasks", response_model=TaskView, status_code=202)

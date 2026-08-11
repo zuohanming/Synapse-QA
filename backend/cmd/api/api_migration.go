@@ -18,34 +18,7 @@ func (a *app) migrateLegacyAPIData(ctx context.Context) error {
 }
 
 func (a *app) seedAPIPermissions(ctx context.Context) error {
-	permissions := [][]string{
-		{"menu.home.read", "访问首页"},
-		{"menu.ui_automation.read", "访问界面自动化"},
-		{"menu.api_automation.read", "访问接口自动化"},
-		{"menu.data_factory.read", "访问数据工厂"},
-		{"menu.ai.read", "访问AI智能"},
-		{"menu.test_config.read", "访问测试配置"},
-		{"menu.execution.read", "访问执行中心"},
-		{"menu.system.read", "访问系统管理"},
-		{"system.overview.read", "查看系统概览"},
-		{"system.user.read", "查看用户"},
-		{"system.user.manage", "维护用户"},
-		{"system.role.read", "查看角色权限"},
-		{"system.role.manage", "维护角色权限"},
-		{"system.settings.read", "查看系统参数"},
-		{"system.settings.manage", "维护系统参数"},
-		{"system.notification.manage", "维护通知配置"},
-		{"system.audit.read", "查看操作日志"},
-		{"system.audit.export", "导出操作日志"},
-		{"system.appearance.read", "查看个人外观"},
-		{"system.appearance.manage", "维护个人外观"},
-		{"api.interface.read", "查看接口"},
-		{"api.interface.write", "维护接口"},
-		{"api.interface.debug", "调试接口"},
-		{"api.interface.delete", "删除接口"},
-		{"api.project_header.manage", "维护项目请求头"},
-	}
-	for _, permission := range permissions {
+	for _, permission := range permissionSeeds() {
 		if _, err := a.db.ExecContext(ctx, `insert into permissions(code,name) values($1,$2) on conflict(code) do update set name=excluded.name`, permission[0], permission[1]); err != nil {
 			return err
 		}
@@ -86,6 +59,46 @@ func (a *app) seedAPIPermissions(ctx context.Context) error {
 		on conflict(user_id,project_id) do update set role_id=excluded.role_id
 	`)
 	return err
+}
+
+func permissionSeeds() [][]string {
+	return [][]string{
+		{"menu.home.read", "访问首页"},
+		{"menu.ui_automation.read", "访问界面自动化"},
+		{"menu.api_automation.read", "访问接口自动化"},
+		{"menu.test_config.read", "访问测试配置"},
+		{"menu.execution.read", "访问执行中心"},
+		{"menu.system.read", "访问系统管理"},
+		{"system.overview.read", "查看系统概览"},
+		{"system.user.read", "查看用户"},
+		{"system.user.manage", "维护用户"},
+		{"system.role.read", "查看角色权限"},
+		{"system.role.manage", "维护角色权限"},
+		{"system.settings.read", "查看系统参数"},
+		{"system.settings.manage", "维护系统参数"},
+		{"system.notification.manage", "维护通知配置"},
+		{"system.audit.read", "查看操作日志"},
+		{"system.audit.export", "导出操作日志"},
+		{"system.appearance.read", "查看个人外观"},
+		{"system.appearance.manage", "维护个人外观"},
+		{"api.interface.read", "查看接口"},
+		{"api.interface.write", "维护接口"},
+		{"api.interface.debug", "调试接口"},
+		{"api.interface.delete", "删除接口"},
+		{"api.project_header.manage", "维护项目请求头"},
+		{"ui.element.read", "查看页面元素"},
+		{"ui.element.capture", "采集页面元素"},
+		{"ui.element.manage", "管理页面元素"},
+		{"ui.element.rollback", "回滚页面元素版本"},
+	}
+}
+
+func permissionSeedCodes() map[string]bool {
+	codes := make(map[string]bool, len(permissionSeeds()))
+	for _, permission := range permissionSeeds() {
+		codes[permission[0]] = true
+	}
+	return codes
 }
 
 func (a *app) migrateLegacyInterfaces(ctx context.Context) error {
