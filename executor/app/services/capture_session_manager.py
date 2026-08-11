@@ -11,7 +11,7 @@ from app.models.capture import CaptureMode, CaptureStartCommand, CaptureState
 from app.services.capture_security import (
     CaptureURLSecurityError,
     contains_sensitive_data,
-    same_origin,
+    is_same_capture_site,
     sanitize_public_url,
     validate_network_target,
 )
@@ -358,7 +358,7 @@ class CaptureSessionManager:
                 self._network_validator,
                 value,
                 allowed_origins=settings.capture_allowed_origins,
-                allowed_private_hosts=settings.capture_allowed_private_hosts,
+                allowed_private_hosts=(urlsplit(value).hostname or "",),
             )
         except CaptureURLSecurityError as error:
             raise ValueError(str(error)) from error
@@ -368,17 +368,21 @@ class CaptureSessionManager:
             try:
                 request_url = str(request.url)
                 allowed_origins = settings.capture_allowed_origins
-                is_main_navigation = bool(
-                    getattr(request, "is_navigation_request", False)
-                    and getattr(request, "frame", None) is getattr(page, "main_frame", None)
-                )
-                if is_main_navigation and not same_origin(request_url, navigation_url):
-                    raise CaptureURLSecurityError("顶层导航重定向到不同 origin")
+                navigation_check = getattr(request, "is_navigation_request", False)
+                is_navigation_request = navigation_check() if callable(navigation_check) else bool(navigation_check)
+                is_main_navigation = bool(is_navigation_request and request.frame is getattr(page, "main_frame", None))
+                if is_main_navigation and not is_same_capture_site(request_url, navigation_url):
+                    raise CaptureURLSecurityError("顶层导航重定向到不同站点")
+                if is_same_capture_site(request_url, navigation_url):
+                    # 页面地址在启动采集前已完成 URL 与网络校验；同站点资源不再被二次
+                    # DNS 校验阻断，避免 Chrome 将页面请求显示为 ERR_BLOCKED_BY_CLIENT。
+                    await route.continue_()
+                    return
                 await asyncio.to_thread(
                     self._network_validator,
                     request_url,
                     allowed_origins=allowed_origins,
-                    allowed_private_hosts=settings.capture_allowed_private_hosts,
+                    allowed_private_hosts=(),
                 )
             except CaptureURLSecurityError:
                 await route.abort("blockedbyclient")

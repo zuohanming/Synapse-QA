@@ -32,7 +32,7 @@ def test_generates_priority_order_for_role_label_css_text_and_xpath():
         )
     )
 
-    assert [locator.type for locator in candidate.locators] == ["role", "label", "css"]
+    assert [locator.type for locator in candidate.locators] == ["role", "label", "xpath"]
 
 
 def test_generates_unique_form_context_locator_for_inputs_sharing_component_class():
@@ -51,6 +51,126 @@ def test_generates_unique_form_context_locator_for_inputs_sharing_component_clas
     assert form_locator.unique
     assert form_locator.score >= 70
     assert candidate.name == "账号"
+
+
+def test_unique_placeholder_is_a_reliable_framework_input_locator():
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="input",
+            attributes={"class": "el-input__inner", "placeholder": "请输入用户名称/手机号/工号"},
+            depth=11,
+            locator_matches={'css:[placeholder="请输入用户名称/手机号/工号"]': 1, "css:input.el-input__inner": 18},
+        )
+    )
+
+    placeholder = next(locator for locator in candidate.locators if locator.value == '[placeholder="请输入用户名称/手机号/工号"]')
+    assert placeholder.unique
+    assert placeholder.score >= 70
+
+
+def test_generated_xpath_is_kept_after_unique_count_validation():
+    xpath = '//input[@placeholder="请输入用户名称"]'
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="input",
+            attributes={"placeholder": "请输入用户名称"},
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(locator for locator in candidate.locators if locator.type == "xpath")
+    assert locator.value == xpath
+    assert locator.unique
+
+
+def test_unique_stable_attribute_xpath_is_usable_for_low_quality_markup():
+    xpath = '//input[@placeholder="请输入用户名称/手机号/工号"]'
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="input",
+            xpath=xpath,
+            depth=16,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(locator for locator in candidate.locators if locator.type == "xpath")
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_unique_visible_element_ui_option_xpath_is_usable():
+    xpath = "//div[not(contains(@style, 'display: none'))]//li[normalize-space(.)='禁用']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="li",
+            visible_text="禁用",
+            xpath=xpath,
+            depth=14,
+            locator_matches={f"xpath:{xpath}": 1, "text:禁用": 4},
+        )
+    )
+
+    locator = next(locator for locator in candidate.locators if locator.type == "xpath")
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_unique_row_context_xpath_makes_repeated_table_action_usable():
+    xpath = "//tr[.//*[normalize-space(.)='朱小峰']]//button[normalize-space(.)='编辑']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="button",
+            visible_text="编辑",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1, "text:编辑": 20},
+        )
+    )
+
+    locator = next(locator for locator in candidate.locators if locator.type == "xpath")
+    assert locator.value == xpath
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_unique_custom_table_row_context_xpath_is_usable():
+    xpath = "//*[contains(concat(' ', normalize-space(@class), ' '), ' yv-table-row ')][.//*[normalize-space(.)='001']]//button[normalize-space(.)='编辑']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="button",
+            visible_text="编辑",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(locator for locator in candidate.locators if locator.type == "xpath")
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_unique_xpath_is_retained_when_more_than_three_locators_are_generated():
+    xpath = "//button[normalize-space(.)='新增用户']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="button",
+            attributes={"class": "yy-button yy-is-small yy-primary", "role": "button"},
+            accessible_name="新增用户",
+            visible_text="新增用户",
+            xpath=xpath,
+            depth=14,
+            locator_matches={
+                'role:button[name="新增用户"]': 1,
+                "css:button.yy-button.yy-is-small.yy-primary": 2,
+                "text:新增用户": 4,
+                f"xpath:{xpath}": 1,
+            },
+        )
+    )
+
+    assert any(locator.type == "xpath" and locator.unique for locator in candidate.locators)
+    assert candidate.locators[0].score >= 70
 
 
 def test_native_button_text_and_stable_business_class_are_framework_compatible():
@@ -297,7 +417,7 @@ def test_orders_complete_locator_set_by_strategy_before_truncating_to_three():
         )
     )
 
-    assert [locator.type for locator in candidate.locators] == ["id", "role", "label"]
+    assert [locator.type for locator in candidate.locators] == ["id", "role", "xpath"]
 
 
 def test_text_and_xpath_follow_css_when_higher_priority_locators_are_absent():

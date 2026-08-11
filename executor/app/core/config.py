@@ -43,7 +43,6 @@ class Settings:
     heartbeat_interval_seconds = int(os.getenv("EXECUTOR_HEARTBEAT_INTERVAL_SECONDS", "10"))
     capture_command_poll_interval_seconds = 2
     capture_allowed_origins = _csv_values("CAPTURE_ALLOWED_ORIGINS")
-    capture_allowed_private_hosts = _csv_values("CAPTURE_ALLOWED_PRIVATE_HOSTS")
     capture_allowed_browser_channels = frozenset({"chrome", "msedge"})
     capture_pending_max = int(os.getenv("CAPTURE_PENDING_MAX", "100"))
     capture_rate_limit_per_second = int(os.getenv("CAPTURE_RATE_LIMIT_PER_SECOND", "5"))

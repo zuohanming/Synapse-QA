@@ -25,6 +25,7 @@ const statusLabels = {
 const qualitySegments = [
   { key: "all", label: "全部" },
   { key: "ready", label: "可保存" },
+  { key: "needs-review", label: "待回放验证" },
   { key: "unnamed", label: "待命名" },
   { key: "unreliable", label: "定位不可靠" },
   { key: "conflict", label: "冲突" }
@@ -121,6 +122,12 @@ function hasReliableLocator(candidate) {
   ));
 }
 
+function hasUsableLocator(candidate) {
+  return (candidate?.locators || []).some((locator) => (
+    locator?.unique === true && Number(locator?.score) >= 40
+  ));
+}
+
 function hasInvalidUpdateTarget(candidate) {
   if (candidate?.conflictResolution !== "update") return false;
   const targets = safeConflictTargets(candidate).map((item) => item.id);
@@ -133,11 +140,12 @@ function hasInvalidUpdateTarget(candidate) {
 function qualityKey(candidate) {
   if (candidate?.conflictResolution === "ignore") return "ready";
   if (isUnnamed(candidate)) return "unnamed";
-  if (!hasReliableLocator(candidate)) return "unreliable";
+  if (!hasUsableLocator(candidate)) return "unreliable";
   if (
     candidate?.conflictStatus === "duplicate"
     && (!candidate?.conflictResolution || hasInvalidUpdateTarget(candidate))
   ) return "conflict";
+  if (!hasReliableLocator(candidate)) return "needs-review";
   return "ready";
 }
 
@@ -149,13 +157,13 @@ export function getSaveBlockers(candidates, selectedIDs, sessionStatus = "active
   if (selected.length > 200) blockers.push("一次最多保存 200 个候选");
   const qualityChecked = selected.filter((item) => item.conflictResolution !== "ignore");
   const unnamed = qualityChecked.filter(isUnnamed).length;
-  const unreliable = qualityChecked.filter((item) => !hasReliableLocator(item)).length;
+  const unreliable = qualityChecked.filter((item) => !hasUsableLocator(item)).length;
   const unresolved = selected.filter((item) => (
     item.conflictStatus === "duplicate" && !item.conflictResolution
   )).length;
   const invalidTargets = selected.filter(hasInvalidUpdateTarget).length;
   if (unnamed) blockers.push(`${unnamed} 个候选尚未命名`);
-  if (unreliable) blockers.push(`${unreliable} 个候选缺少评分不低于 70 的唯一定位器`);
+  if (unreliable) blockers.push(`${unreliable} 个候选缺少评分不低于 40 的唯一定位器`);
   if (unresolved) blockers.push(`${unresolved} 个候选尚未处理冲突`);
   if (invalidTargets) blockers.push(`${invalidTargets} 个更新候选需要选择目标元素`);
   return blockers;
@@ -392,7 +400,7 @@ export function ElementCaptureDrawer({
   useEffect(() => () => abortAllRequests(), []);
 
   const counts = useMemo(() => {
-    const result = { all: candidates.length, ready: 0, unnamed: 0, unreliable: 0, conflict: 0 };
+    const result = { all: candidates.length, ready: 0, "needs-review": 0, unnamed: 0, unreliable: 0, conflict: 0 };
     candidates.forEach((item) => {
       result[qualityKey(item)] += 1;
     });
@@ -636,11 +644,21 @@ export function ElementCaptureDrawer({
       if (error?.name === "AbortError") return;
       if (error?.status === 409 && Array.isArray(error?.issues)) {
         const mapped = {};
+        const processedIDs = new Set();
         error.issues.forEach((issue) => {
           const id = Number(issue.candidateId || 0);
+          if (issue.field === "status" && issue.message === "候选项已处理" && id > 0) {
+            processedIDs.add(id);
+            return;
+          }
           if (!mapped[id]) mapped[id] = [];
           mapped[id].push(issue);
         });
+        if (processedIDs.size) {
+          setCandidates((current) => current.filter((item) => !processedIDs.has(item.cursorId)));
+          setSelectedIDs((current) => new Set([...current].filter((id) => !processedIDs.has(id))));
+          processedIDs.forEach((id) => dirtyRef.current.delete(id));
+        }
         setCandidateIssues(mapped);
         const generalIssues = error.issues.filter((issue) => !issue.candidateId);
         if (generalIssues.length) {
@@ -907,8 +925,10 @@ export function ElementCaptureDrawer({
 
                   {candidate.conflictResolution === "ignore" ? null : isUnnamed(candidate) ? (
                     <p className="element-capture-guidance">先补充可辨识且页面内唯一的名称。</p>
+                  ) : !hasUsableLocator(candidate) ? (
+                    <p className="element-capture-guidance">请重新拾取，至少需要同一条“唯一且评分 ≥ 40”的定位器。</p>
                   ) : !hasReliableLocator(candidate) ? (
-                    <p className="element-capture-guidance">请重新拾取，至少需要同一条“唯一且评分 ≥ 70”的定位器。</p>
+                    <p className="element-capture-guidance">该候选可保存，但建议在用例执行前进行一次回放验证。</p>
                   ) : null}
 
                   {issues.length ? (

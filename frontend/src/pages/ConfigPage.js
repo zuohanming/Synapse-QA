@@ -248,6 +248,17 @@ function ProjectConfigPage() {
     }
   }
 
+  async function handleCopy(row) {
+    const name = window.prompt("新产品名称", `${row.name} 副本`);
+    if (!name?.trim()) return;
+    const code = window.prompt("新产品编码", `${row.code || `P${row.projectId}`}-COPY`);
+    if (!code?.trim()) return;
+    setBusy(true); setNotice("");
+    try { await configService.products.copy(row.id, { name: name.trim(), code: code.trim() }); await reload(); setNotice("产品及两级模块已复制。"); }
+    catch (err) { setNotice(err.message || "复制失败"); }
+    finally { setBusy(false); }
+  }
+
   async function handleBulkDelete() {
     if (!selectedIds.length) {
       setNotice("请先选择需要删除的项目。");
@@ -478,6 +489,7 @@ function ProductConfigPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [projects, setProjects] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(() => readPageState("config.product.selectedProduct", null));
+	const [viewMode, setViewMode] = useState("cards");
 
   const { data, loading, error, reload } = useAsyncData(
     () => configService.products.list({ ...filters, page, pageSize }),
@@ -488,6 +500,7 @@ function ProductConfigPage() {
   const total = data?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
+	const groupedRows = rows.reduce((groups, row) => { const key = row.projectName || "未归属项目"; (groups[key] ||= []).push(row); return groups; }, {});
 
   async function loadProjects() {
     try {
@@ -609,7 +622,7 @@ function ProductConfigPage() {
         </form>
 
         <div className="list-actions">
-          <div />
+		  <div className="action-row"><button className={`icon-text-button compact-button ${viewMode === "cards" ? "is-active" : ""}`} onClick={() => setViewMode("cards")} type="button">卡片</button><button className={`icon-text-button compact-button ${viewMode === "table" ? "is-active" : ""}`} onClick={() => setViewMode("table")} type="button">列表</button></div>
           <div className="action-row">
             <button className="primary-button compact-button" onClick={() => { loadProjects(); setModal({ mode: "create", row: null }); }} type="button">
               新增
@@ -623,7 +636,7 @@ function ProductConfigPage() {
         {notice ? <div className="inline-notice">{notice}</div> : null}
 
         <StateBlock loading={loading} error={error}>
-          <TablePanel>
+          {viewMode === "cards" ? <div className="product-group-list">{Object.entries(groupedRows).map(([projectName, products]) => <section className="product-project-group" key={projectName}><div className="panel-header"><strong>{projectName}</strong><span>{products.length} 个产品</span></div><div className="product-overview-cards">{products.map((row) => <button className="product-overview-card" key={row.id} onClick={() => { persistPageState("config.product.selectedProduct", row); setSelectedProduct(row); }} type="button"><span>{row.status === "disabled" ? "已停用" : row.code}</span><strong>{row.name}</strong><small>{row.owner || "未分配负责人"}</small></button>)}</div></section>)}</div> : <TablePanel>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -633,7 +646,9 @@ function ProductConfigPage() {
                     </th>
                     <th>ID</th>
                     <th>项目</th>
-                    <th>产品名称</th>
+                    <th>产品</th>
+					<th>负责人</th>
+					<th>状态</th>
                     <th>UI 端</th>
                     <th>API 端</th>
                     <th>更新时间</th>
@@ -649,7 +664,9 @@ function ProductConfigPage() {
                         </td>
                         <td>{row.id}</td>
                         <td>{row.projectName || "-"}</td>
-                        <td>{row.name}</td>
+                        <td><strong>{row.name}</strong><small>{row.code || "-"}</small></td>
+						<td>{row.owner || "未分配"}</td>
+						<td><span className={`status-badge ${row.status === "disabled" ? "status-disabled" : "status-active"}`}>{row.status === "disabled" ? "停用" : "启用"}</span></td>
                         <td>
                           <span className="table-badge">{row.uiType || "WEB"}</span>
                         </td>
@@ -672,6 +689,7 @@ function ProductConfigPage() {
                             <button className="link-button" onClick={() => { loadProjects(); setModal({ mode: "edit", row }); }} type="button">
                               编辑
                             </button>
+							<button className="link-button" disabled={busy} onClick={() => handleCopy(row)} type="button">复制</button>
                             <button className="link-button danger-link" disabled={busy} onClick={() => handleDelete(row)} type="button">
                               删除
                             </button>
@@ -681,7 +699,7 @@ function ProductConfigPage() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="8">暂无产品数据</td>
+                      <td colSpan="10">暂无产品数据</td>
                     </tr>
                   )}
                 </tbody>
@@ -699,7 +717,7 @@ function ProductConfigPage() {
                 setPageSize(value);
               }}
             />
-          </TablePanel>
+          </TablePanel>}
         </StateBlock>
       </section>
 
@@ -738,7 +756,10 @@ function ProductModal({ busy, modal, projects, onClose, onSubmit }) {
   const source = modal.row;
   const [form, setForm] = useState({
     projectId: source?.projectId || "",
+	code: source?.code || "",
     name: source?.name || "",
+	owner: source?.owner || "",
+	status: source?.status || "active",
     uiType: source?.uiType || "WEB",
     apiType: source?.apiType || "WEB"
   });
@@ -754,7 +775,7 @@ function ProductModal({ busy, modal, projects, onClose, onSubmit }) {
     await onSubmit(
       {
         projectId: Number(form.projectId),
-        name: form.name.trim(),
+	code: form.code.trim(), name: form.name.trim(), owner: form.owner.trim(), status: form.status,
         uiType: form.uiType,
         apiType: form.apiType
       },
@@ -792,6 +813,9 @@ function ProductModal({ busy, modal, projects, onClose, onSubmit }) {
             <span>产品名称</span>
             <input className="text-input" placeholder="请输入产品名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           </label>
+		  <label className="form-field form-field-inline required-field"><span>产品编码</span><input className="text-input" disabled={modal.mode === "edit"} placeholder="如 MALL-WEB" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /></label>
+		  <label className="form-field form-field-inline"><span>负责人</span><input className="text-input" placeholder="请输入负责人" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} /></label>
+		  <label className="form-field form-field-inline"><span>状态</span><select className="text-input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="active">启用</option><option value="disabled">停用</option></select></label>
           <label className="form-field form-field-inline">
             <span>UI 端</span>
             <select className="text-input" value={form.uiType} onChange={(event) => setForm({ ...form, uiType: event.target.value })}>
@@ -824,17 +848,18 @@ function ProductModal({ busy, modal, projects, onClose, onSubmit }) {
 }
 
 function ProductModulePage({ product, onBack }) {
-  const [form, setForm] = useState({ level1: "", level2: "", name: "" });
-  const [filters, setFilters] = useState({ level1: "", level2: "", name: "" });
+  const [form, setForm] = useState({ level1: "", name: "" });
+  const [filters, setFilters] = useState({ level1: "", name: "" });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+	const { data: stats } = useAsyncData(() => configService.products.stats(product.id), [product.id]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [modal, setModal] = useState(null);
 
   const { data, loading, error, reload } = useAsyncData(
     () => configService.productModules.list({ productId: product.id, ...filters, page, pageSize }),
-    [product.id, filters.level1, filters.level2, filters.name, page, pageSize]
+    [product.id, filters.level1, filters.name, page, pageSize]
   );
 
   const rows = pageItems(data);
@@ -842,7 +867,6 @@ function ProductModulePage({ product, onBack }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allRows = pageItems(data);
   const level1Options = uniqueValues(allRows, "level1");
-  const level2Options = uniqueValues(allRows, "level2");
 
   function handleSearch(event) {
     event.preventDefault();
@@ -851,8 +875,8 @@ function ProductModulePage({ product, onBack }) {
   }
 
   function handleReset() {
-    setForm({ level1: "", level2: "", name: "" });
-    setFilters({ level1: "", level2: "", name: "" });
+    setForm({ level1: "", name: "" });
+    setFilters({ level1: "", name: "" });
     setPage(1);
     setPageSize(20);
     setNotice("");
@@ -891,6 +915,9 @@ function ProductModulePage({ product, onBack }) {
             </button>
           </div>
         </div>
+		<div className="product-asset-stats">
+		  {[['模块', stats?.modules], ['环境', stats?.environments], ['页面', stats?.pages], ['接口', stats?.interfaces], ['UI 用例', stats?.uiCases], ['API 用例', stats?.apiCases]].map(([label, value]) => <div className="summary-card" key={label}><span>{label}</span><strong>{value ?? '-'}</strong></div>)}
+		</div>
 
         <div className="module-config-layout">
           <aside className="module-nav-panel">
@@ -900,16 +927,16 @@ function ProductModulePage({ product, onBack }) {
             </div>
             <input className="text-input" placeholder="搜索模块" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
             <div className="module-chip-row">
-              <span>一级 {level1Options.length}</span>
-              <span>二级 {level2Options.length}</span>
+              <span>上级模块 {level1Options.length}</span>
               <span>模块 {total}</span>
             </div>
             <div className="module-tree">
-              <button className="module-tree-item active" onClick={() => { setForm({ level1: "", level2: "", name: "" }); setFilters({ level1: "", level2: "", name: "" }); }} type="button">
+              <button className="module-tree-item active" onClick={() => { setForm({ level1: "", name: "" }); setFilters({ level1: "", name: "" }); }} type="button">
                 全部模块 ({total})
               </button>
+			  {level1Options.map((level1) => <button aria-pressed={filters.level1 === level1} className={`module-tree-item ${filters.level1 === level1 ? "active" : ""}`} key={level1} onClick={() => { setForm({ ...form, level1 }); setFilters({ ...filters, level1 }); setPage(1); }} type="button">{level1} <span>{rows.filter((row) => row.level1 === level1).length}</span></button>)}
               <button className="module-tree-item" type="button">
-                未分组 ({rows.filter((row) => !row.level1 && !row.level2).length})
+                顶级模块 ({rows.filter((row) => !row.level1).length})
               </button>
             </div>
           </aside>
@@ -927,21 +954,10 @@ function ProductModulePage({ product, onBack }) {
 
             <form className="module-filter-grid" onSubmit={handleSearch}>
               <label className="form-field">
-                <span>一级模块</span>
+                <span>上级模块</span>
                 <select className="text-input" value={form.level1} onChange={(event) => setForm({ ...form, level1: event.target.value })}>
-                  <option value="">全部一级模块</option>
+                  <option value="">全部上级模块</option>
                   {level1Options.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="form-field">
-                <span>二级模块</span>
-                <select className="text-input" value={form.level2} onChange={(event) => setForm({ ...form, level2: event.target.value })}>
-                  <option value="">全部二级模块</option>
-                  {level2Options.map((item) => (
                     <option key={item} value={item}>
                       {item}
                     </option>
@@ -968,9 +984,8 @@ function ProductModulePage({ product, onBack }) {
                     <thead>
                       <tr>
                         <th>序号</th>
-                        <th>三级模块（模块名称）</th>
-                        <th>一级模块</th>
-                        <th>二级模块</th>
+                        <th>模块名称</th>
+                        <th>上级模块</th>
                         <th>创建时间</th>
                         <th>更新时间</th>
                         <th>操作</th>
@@ -983,7 +998,6 @@ function ProductModulePage({ product, onBack }) {
                             <td>{row.id}</td>
                             <td>{row.name}</td>
                             <td>{row.level1 || "-"}</td>
-                            <td>{row.level2 || "-"}</td>
                             <td>{formatTime(row.createdAt)}</td>
                             <td>{formatTime(row.updatedAt)}</td>
                             <td>
@@ -1000,7 +1014,7 @@ function ProductModulePage({ product, onBack }) {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="7">暂无模块数据</td>
+                      <td colSpan="6">暂无模块数据</td>
                         </tr>
                       )}
                     </tbody>
@@ -1027,6 +1041,7 @@ function ProductModulePage({ product, onBack }) {
         <ProductModuleModal
           busy={busy}
           modal={modal}
+		  level1Options={level1Options}
           onClose={() => setModal(null)}
           onSubmit={async (payload, mode) => {
             setBusy(true);
@@ -1053,12 +1068,11 @@ function ProductModulePage({ product, onBack }) {
   );
 }
 
-function ProductModuleModal({ busy, modal, onClose, onSubmit }) {
+function ProductModuleModal({ busy, modal, level1Options, onClose, onSubmit }) {
   const source = modal.row;
   const [form, setForm] = useState({
     name: source?.name || "",
-    level1: source?.level1 || "",
-    level2: source?.level2 || ""
+    level1: source?.level1 || ""
   });
   const [error, setError] = useState("");
 
@@ -1069,14 +1083,9 @@ function ProductModuleModal({ busy, modal, onClose, onSubmit }) {
       setError("模块名称不能为空。");
       return;
     }
-    await onSubmit(
-      {
-        name: form.name.trim(),
-        level1: form.level1.trim(),
-        level2: form.level2.trim()
-      },
-      modal.mode
-    );
+    const name = form.name.trim();
+    const level1 = form.level1.trim();
+    await onSubmit({ name, level1, level2: "" }, modal.mode);
   }
 
   return (
@@ -1090,12 +1099,10 @@ function ProductModuleModal({ busy, modal, onClose, onSubmit }) {
         </div>
         <div className="modal-form">
           <label className="form-field form-field-inline">
-            <span>一级模块</span>
-            <input className="text-input" placeholder="请输入一级模块" value={form.level1} onChange={(event) => setForm({ ...form, level1: event.target.value })} />
-          </label>
-          <label className="form-field form-field-inline">
-            <span>二级模块</span>
-            <input className="text-input" placeholder="请输入二级模块" value={form.level2} onChange={(event) => setForm({ ...form, level2: event.target.value })} />
+            <span>上级模块</span>
+            <select className="text-input" value={form.level1} onChange={(event) => setForm({ ...form, level1: event.target.value })}>
+			  <option value="">无（顶级模块）</option>{level1Options.map((item) => <option key={item} value={item}>{item}</option>)}
+			</select>
           </label>
           <label className="form-field form-field-inline required-field">
             <span>模块名称</span>

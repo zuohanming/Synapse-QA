@@ -50,6 +50,7 @@ const (
 	warningCaptureCandidates = 400
 	maxBatchSaveCandidates   = 200
 	reliableLocatorScore     = 70
+	usableLocatorScore       = 40
 )
 
 var captureFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -581,6 +582,7 @@ func validateBatchSave(data model.CaptureBatchData, req model.CandidateBatchSave
 		seenIDs[item.CandidateID] = true
 		if candidate.Status != "pending" {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "status", Message: "候选项已处理"})
+			continue
 		}
 		if !isResolution(item.Resolution) {
 			issues = append(issues, model.CandidateIssue{CandidateID: candidate.CursorID, Field: "resolution", Message: "冲突处理方式无效"})
@@ -660,17 +662,17 @@ func validateCandidateForSave(candidate model.ElementCaptureCandidate, _ model.C
 	if err != nil {
 		issue("locators", "候选项缺少可靠定位器")
 	} else {
-		maxScore, reliableUnique := candidate.QualityScore, false
+		maxScore, usableUnique := candidate.QualityScore, false
 		for _, locator := range locators {
 			if locator.Score > maxScore {
 				maxScore = locator.Score
 			}
-			reliableUnique = reliableUnique || (locator.Unique && locator.Score >= reliableLocatorScore)
+			usableUnique = usableUnique || (locator.Unique && locator.Score >= usableLocatorScore)
 		}
-		if maxScore < reliableLocatorScore {
+		if maxScore < usableLocatorScore {
 			issue("qualityScore", "候选项定位器评分不足")
 		}
-		if !reliableUnique {
+		if !usableUnique {
 			issue("locators", "候选项没有可靠唯一定位器")
 		}
 	}

@@ -4,6 +4,7 @@ from app.models.capture import ElementSnapshot
 from app.services.capture_security import (
     CaptureURLSecurityError,
     contains_sensitive_data,
+    is_same_capture_site,
     sanitize_public_url,
     validate_network_target,
 )
@@ -66,6 +67,15 @@ def test_network_target_allows_explicit_private_host():
         "http://127.0.0.1:8090/resource",
         allowed_private_hosts={"127.0.0.1"},
     ) == "http://127.0.0.1:8090"
+
+
+def test_capture_site_scope_allows_only_sibling_subdomains_of_the_page_site():
+    page = "https://signinunifly-qa1.oojoyoo.com/#/login"
+
+    assert is_same_capture_site("https://dragon-gateway-qa1.oojoyoo.com/sso/doLogin", page)
+    assert is_same_capture_site("https://signinunifly-qa1.oojoyoo.com/assets/app.js", page)
+    assert not is_same_capture_site("https://metadata.oojoyoo.net/latest", page)
+    assert not is_same_capture_site("http://127.0.0.1:8090/admin", page)
 
 
 def test_network_target_resolves_on_every_request_and_rejects_dns_rebinding():

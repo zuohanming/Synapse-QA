@@ -54,6 +54,7 @@ func main() {
 	elementCaptureRepo := repository.NewElementCaptureRepository(db)
 	notificationRepo := repository.NewNotificationRepository(db)
 	apiAutomationRepo := repository.NewAPIAutomationRepository(db)
+	aiRepo := repository.NewAIRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -65,6 +66,8 @@ func main() {
 	notificationService := service.NewNotificationService(notificationRepo)
 	apiAutomationService := service.NewAPIAutomationService(apiAutomationRepo, systemRepo, bootstrapApp.jwtSecret)
 	apiAutomationService.ConfigureDebug(executorRepo, env("EXECUTOR_CALLBACK_BASE", "http://127.0.0.1:8080"))
+	aiToolExecutor := service.NewAIToolExecutor(apiAutomationService, catalogService, testCaseService, executionService, automationService)
+	aiService := service.NewAIService(aiRepo, aiToolExecutor)
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(appCtx)
@@ -83,6 +86,7 @@ func main() {
 		ElementCaptureController: controller.NewElementCaptureController(elementCaptureService),
 		NotificationController:   controller.NewNotificationController(notificationService),
 		APIAutomationController:  controller.NewAPIAutomationController(apiAutomationService),
+		AIController:             controller.NewAIController(aiService),
 		AuthMiddleware:           controller.AuthMiddleware(systemService),
 	})
 

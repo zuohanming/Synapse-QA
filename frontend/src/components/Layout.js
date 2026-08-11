@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Braces, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3 } from "lucide-react";
+import { Bell, Braces, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3, Sparkles } from "lucide-react";
 import { menuData } from "../config/appConfig.js";
 import { useAuth } from "../hooks/useAuth.js";
 import { NotificationCenter } from "./NotificationCenter.js";
@@ -23,6 +23,12 @@ const menuIcons = {
   "测试对象": <Database size={16} />,
   "执行器配置": <Play size={16} />,
   "执行中心": <ClipboardCheck size={18} />,
+  "AI 智能": <Sparkles size={18} />,
+  "AI 助手": <Sparkles size={16} />,
+  "智能断言": <Sparkles size={16} />,
+  "用例生成": <Sparkles size={16} />,
+  "失败分析": <Sparkles size={16} />,
+  "AI 设置": <Settings size={16} />,
   "执行记录": <Play size={16} />,
   "测试报告": <BarChart3 size={16} />,
   "系统概览": <Gauge size={16} />,
@@ -40,6 +46,7 @@ const groupPermissions = {
   "接口自动化": "menu.api_automation.read",
   "测试配置": "menu.test_config.read",
   "执行中心": "menu.execution.read",
+  "AI 智能": "menu.ui_automation.read",
   "系统管理": "menu.system.read"
 };
 

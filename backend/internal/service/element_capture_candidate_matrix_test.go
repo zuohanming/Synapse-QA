@@ -391,10 +391,10 @@ func TestBatchSaveQualityGateMatrix(t *testing.T) {
 			c.Locators = nil
 			return c
 		}(), item: model.CandidateSaveItem{CandidateID: 1, Resolution: "create"}, wantField: "locators"},
-		{name: "locator score below threshold", candidate: func() model.ElementCaptureCandidate {
+		{name: "locator score below usable threshold", candidate: func() model.ElementCaptureCandidate {
 			c := validCaptureCandidate(1, "save", testFingerprintA)
-			c.Locators = []byte(`[{"type":"css","value":"button","score":69,"unique":true}]`)
-			c.QualityScore = 69
+			c.Locators = []byte(`[{"type":"css","value":"button","score":39,"unique":true}]`)
+			c.QualityScore = 39
 			return c
 		}(), item: model.CandidateSaveItem{CandidateID: 1, Resolution: "create"}, wantField: "qualityScore"},
 		{name: "all locators non unique", candidate: func() model.ElementCaptureCandidate {

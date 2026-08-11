@@ -133,6 +133,28 @@ class FakePicker:
         self.removed = capture
 
 
+class FakeGuardRoute:
+    def __init__(self) -> None:
+        self.aborted = []
+        self.continued = False
+
+    async def abort(self, reason: str) -> None:
+        self.aborted.append(reason)
+
+    async def continue_(self) -> None:
+        self.continued = True
+
+
+class FakeGuardRequest:
+    def __init__(self, url: str, frame, *, navigation: bool) -> None:
+        self.url = url
+        self.frame = frame
+        self._navigation = navigation
+
+    def is_navigation_request(self) -> bool:
+        return self._navigation
+
+
 def capture_manager(browser_factory, **kwargs) -> CaptureSessionManager:
     return CaptureSessionManager(
         browser_factory=browser_factory,
@@ -140,6 +162,59 @@ def capture_manager(browser_factory, **kwargs) -> CaptureSessionManager:
         network_validator=lambda value, **_options: value,
         **kwargs,
     )
+
+
+@pytest.mark.asyncio
+async def test_request_guard_does_not_mistake_xhr_method_for_top_navigation():
+    validated = []
+    page = type("Page", (), {"main_frame": object()})()
+    manager = CaptureSessionManager(
+        browser_factory=FakeBrowserFactory(),
+        picker=FakePicker(),
+        network_validator=lambda value, **options: validated.append((value, options)) or value,
+    )
+    route = FakeGuardRoute()
+    request = FakeGuardRequest(
+        "https://dragon-gateway-qa1.oojoyoo.com/sso/doLogin",
+        page.main_frame,
+        navigation=False,
+    )
+
+    await manager._request_guard("https://signinunifly-qa1.oojoyoo.com/", page)(route, request)
+
+    assert route.continued is True
+    assert route.aborted == []
+    assert validated == []
+
+
+@pytest.mark.asyncio
+async def test_request_guard_allows_same_site_main_navigation_redirect():
+    page = type("Page", (), {"main_frame": object()})()
+    manager = capture_manager(FakeBrowserFactory())
+    route = FakeGuardRoute()
+    request = FakeGuardRequest(
+        "https://signinunifly-qa1.oojoyoo.com/#/login",
+        page.main_frame,
+        navigation=True,
+    )
+
+    await manager._request_guard("https://upms-ui-qa1.oojoyoo.com/", page)(route, request)
+
+    assert route.continued is True
+    assert route.aborted == []
+
+
+@pytest.mark.asyncio
+async def test_request_guard_blocks_cross_site_main_navigation_redirect():
+    page = type("Page", (), {"main_frame": object()})()
+    manager = capture_manager(FakeBrowserFactory())
+    route = FakeGuardRoute()
+    request = FakeGuardRequest("https://example.test/login", page.main_frame, navigation=True)
+
+    await manager._request_guard("https://upms-ui-qa1.oojoyoo.com/", page)(route, request)
+
+    assert route.continued is False
+    assert route.aborted == ["blockedbyclient"]
 
 
 def start_command(
@@ -704,7 +779,7 @@ def test_gui_registration_connects_thread_safe_capture_status_and_shared_auth_fa
 
 
 @pytest.mark.asyncio
-async def test_headed_manager_uses_explicit_local_allowlist_and_blocks_metadata(tmp_path, monkeypatch):
+async def test_headed_manager_uses_page_scoped_allowlist_and_blocks_metadata(tmp_path, monkeypatch):
     if os.getenv("RUN_HEADED_PICKER_INTEGRATION") != "1":
         pytest.skip("需设置 RUN_HEADED_PICKER_INTEGRATION=1 才会打开本机有头 Edge")
     pytest.importorskip("playwright.async_api", reason="未安装 Playwright Python 包")
@@ -725,7 +800,6 @@ async def test_headed_manager_uses_explicit_local_allowlist_and_blocks_metadata(
     thread.start()
     origin = f"http://127.0.0.1:{server.server_address[1]}"
     monkeypatch.setattr(settings, "capture_allowed_origins", (origin,))
-    monkeypatch.setattr(settings, "capture_allowed_private_hosts", ("127.0.0.1",))
     manager = CaptureSessionManager()
     try:
         command = start_command().model_copy(

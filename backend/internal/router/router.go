@@ -19,6 +19,7 @@ type Dependencies struct {
 	ElementCaptureController *controller.ElementCaptureController
 	NotificationController   *controller.NotificationController
 	APIAutomationController  *controller.APIAutomationController
+	AIController             *controller.AIController
 	AuthMiddleware           gin.HandlerFunc
 }
 
@@ -61,6 +62,17 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerExecutionRoutes(authed, deps)
 	registerNotificationRoutes(authed, deps)
 	registerAPIAutomationRoutes(authed, deps)
+	registerAIRoutes(authed, deps)
+}
+
+func registerAIRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	group := authed.Group("/ai")
+	group.GET("/config", deps.AIController.GetConfig)
+	group.POST("/models", deps.AIController.SaveModel)
+	group.DELETE("/models/:id", deps.AIController.DeleteModel)
+	group.POST("/test-connection", deps.AIController.TestConnection)
+	group.POST("/preferences", deps.AIController.SavePreferences)
+	group.POST("/chat", deps.AIController.Chat)
 }
 
 func registerAPIAutomationRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -169,6 +181,8 @@ func registerConfigRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.POST("/config/products", deps.CatalogController.CreateProduct)
 	authed.PATCH("/config/products/:id", deps.CatalogController.UpdateProduct)
 	authed.DELETE("/config/products/:id", deps.CatalogController.DeleteProduct)
+	authed.GET("/config/products/:id/stats", deps.CatalogController.ProductStats)
+	authed.POST("/config/products/:id/copy", deps.CatalogController.CopyProduct)
 	authed.GET("/config/product-modules", deps.CatalogController.ListProductModules)
 	authed.POST("/config/product-modules", deps.CatalogController.CreateProductModule)
 	authed.PATCH("/config/product-modules/:id", deps.CatalogController.UpdateProductModule)

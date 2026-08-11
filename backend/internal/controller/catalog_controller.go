@@ -195,6 +195,40 @@ func (ctl *CatalogController) DeleteProduct(c *gin.Context) {
 	ok(c, map[string]string{"message": "产品已删除"})
 }
 
+func (ctl *CatalogController) ProductStats(c *gin.Context) {
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	item, err := ctl.catalogService.ProductStats(c.Request.Context(), id)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "查询产品统计失败")
+		return
+	}
+	ok(c, item)
+}
+
+func (ctl *CatalogController) CopyProduct(c *gin.Context) {
+	claims, exists := claimsFromContext(c)
+	if !exists {
+		return
+	}
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	var req model.ProductCopyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "请求体格式错误")
+		return
+	}
+	if err := ctl.catalogService.CopyProduct(c.Request.Context(), claims.Username, id, req); err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	created(c, map[string]string{"message": "产品已复制"})
+}
+
 func (ctl *CatalogController) ListProductModules(c *gin.Context) {
 	productID, err := strconv.ParseInt(c.Query("productId"), 10, 64)
 	if err != nil {

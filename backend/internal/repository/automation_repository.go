@@ -70,7 +70,7 @@ func (r *AutomationRepository) ListTestObjects(ctx context.Context, idFilter, en
 }
 
 func (r *AutomationRepository) CreateTestObject(ctx context.Context, req model.TestObjectRequest) error {
-	_, err := r.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) values($1, $2, $3, $4, $5, $6, $7, $8)`, req.ProductID, req.EnvName, req.Target, req.DeployEnv, req.AutoType, req.Owner, req.QueryEnabled, req.WriteEnabled)
+	_, err := r.db.ExecContext(ctx, `insert into test_objects(product_id, env_name, target, deploy_env, auto_type, owner, query_enabled, write_enabled) select id,$2,$3,$4,$5,$6,$7,$8 from products where id=$1 and deleted_at is null and status='active'`, req.ProductID, req.EnvName, req.Target, req.DeployEnv, req.AutoType, req.Owner, req.QueryEnabled, req.WriteEnabled)
 	return err
 }
 

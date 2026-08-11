@@ -16,8 +16,9 @@ from uuid import uuid4
 from app.models.capture import CaptureCandidate, CaptureLocator, CaptureMode, ElementSnapshot
 from app.services.capture_security import (
     contains_sensitive_data,
+    contains_secret_text,
+    is_same_capture_site,
     normalize_key,
-    same_origin,
     sanitize_public_url,
     url_origin,
 )
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _BINDING_NAME = "__synapseCapturePick"
 _ALLOWED_FIELDS = {
-    "tag", "attributes", "accessibleName", "label", "formLabel", "visibleText", "role", "depth", "path", "locatorMatches",
+    "tag", "attributes", "accessibleName", "label", "formLabel", "visibleText", "role", "xpath", "depth", "path", "locatorMatches",
 }
 _ALLOWED_ATTRIBUTES = {
     "id", "class", "role", "name", "type", "placeholder", "autocomplete", "aria-label", "aria-labelledby",
@@ -73,9 +74,16 @@ options => {
     return safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512);
   };
   const formLabelText = element => {
-    const formItem = element.closest(".el-form-item, fieldset, [role='group']");
+    const formItem = element.closest(".el-form-item, .ant-form-item, .n-form-item, fieldset, [role='group']");
     if (!formItem) return "";
-    return safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend, .name")), 512);
+    return safeText(visibleText(formItem.querySelector(".el-form-item__label, .ant-form-item-label label, .n-form-item-label, label, legend, .name")), 512);
+  };
+  const pickTarget = element => {
+    const option = element.closest(".el-select-dropdown__item, .ant-select-item-option, .n-base-select-option");
+    if (option) return option;
+    const component = element.closest(".el-select, .el-cascader, .ant-select, .n-base-selection");
+    if (component) return component.querySelector("input, textarea, select, button, [role='combobox']") || component;
+    return element.closest("input, textarea, select, button, a[href], [role='button'], [role='checkbox'], [role='radio'], [role='combobox'], .el-checkbox, .el-radio, .el-switch") || element;
   };
   const structuredPath = element => {
     const path = [];
@@ -92,6 +100,59 @@ options => {
     }
     return path;
   };
+  const xpathLiteral = value => {
+    if (!value.includes("'")) return `'${value}'`;
+    if (!value.includes('"')) return `"${value}"`;
+    return `concat(${value.split("'").map(part => `'${part}'`).join(', "\'", ')})`;
+  };
+  const rowScopedXPath = (element, text) => {
+    if (!(element.tagName === "BUTTON" || element.tagName === "A") || !text) return "";
+    let row = element.closest("tr, [role='row'], .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row']");
+    if (!row) {
+      let current = element.parentElement;
+      while (current && current !== document.body) {
+        const siblings = current.parentElement ? Array.from(current.parentElement.children).filter(item => item.tagName === current.tagName) : [];
+        if (siblings.length > 1 && current.querySelector("button, a")) {
+          row = current;
+          break;
+        }
+        current = current.parentElement;
+      }
+    }
+    if (!row) return "";
+    const rowClass = Array.from(row.classList).find(item => /(?:row|item)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
+    const rowSelector = row.tagName === "TR" ? "tr" : row.getAttribute("role") === "row"
+      ? "*[@role='row']" : rowClass
+        ? `*[contains(concat(' ', normalize-space(@class), ' '), ' ${rowClass} ')]` : "";
+    if (!rowSelector) return "";
+    const rows = row.parentElement ? Array.from(row.parentElement.children).filter(item => item.tagName === row.tagName) : [];
+    const cells = Array.from(row.querySelectorAll("td, [role='gridcell'], .el-table__cell, .ant-table-cell"));
+    if (!cells.length) cells.push(...Array.from(row.children));
+    for (const cell of cells) {
+      const anchor = safeText(cell.innerText, 96);
+      if (anchor.length < 2 || anchor === text) continue;
+      const matches = rows.filter(item => safeText(item.innerText, 2048).includes(anchor));
+      if (matches.length === 1) {
+        return `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+      }
+    }
+    return "";
+  };
+  const stableXPath = (element, attributes) => {
+    const tag = element.tagName.toLowerCase();
+    for (const name of ["data-testid", "id", "name", "aria-label", "placeholder"]) {
+      const value = attributes[name];
+      if (value) return `//${tag}[@${name}=${xpathLiteral(value)}]`;
+    }
+    const text = visibleText(element);
+    if (tag === "li" && element.classList.contains("el-select-dropdown__item") && text) {
+      return `//div[not(contains(@style, 'display: none'))]//li[normalize-space(.)=${xpathLiteral(text)}]`;
+    }
+    const rowXPath = rowScopedXPath(element, text);
+    if (rowXPath) return rowXPath;
+    if ((tag === "button" || tag === "a") && text) return `//${tag}[normalize-space(.)=${xpathLiteral(text)}]`;
+    return "";
+  };
   const extract = element => {
     const attributes = safeAttributes(element);
     const text = visibleText(element);
@@ -106,6 +167,7 @@ options => {
       formLabel,
       visibleText: text,
       role: safeText(attributes.role, 64),
+      xpath: stableXPath(element, attributes),
       depth: path.length,
       path,
       locatorMatches: {}
@@ -177,14 +239,16 @@ options => {
     setMode(state.mode);
 
     const mouseover = event => {
-      const element = eventElement(event);
+      const rawElement = eventElement(event);
+      const element = rawElement && pickTarget(rawElement);
       if (element && effectiveMode(Boolean(event.altKey)) === "pick") {
         state.target = element;
         showHighlight(element);
       }
     };
     const click = event => {
-      const element = eventElement(event);
+      const rawElement = eventElement(event);
+      const element = rawElement && pickTarget(rawElement);
       if (!element || effectiveMode(Boolean(event.altKey)) !== "pick") return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -254,9 +318,9 @@ element => {
   const label = element.labels
     ? safeText(Array.from(element.labels).map(item => visibleText(item)).join(" "), 512)
     : "";
-  const formItem = element.closest(".el-form-item, fieldset, [role='group']");
+  const formItem = element.closest(".el-form-item, .ant-form-item, .n-form-item, fieldset, [role='group']");
   const formLabel = formItem
-    ? safeText(visibleText(formItem.querySelector(".el-form-item__label, label, legend, .name")), 512)
+    ? safeText(visibleText(formItem.querySelector(".el-form-item__label, .ant-form-item-label label, .n-form-item-label, label, legend, .name")), 512)
     : "";
   const path = [];
   let current = element;
@@ -271,6 +335,58 @@ element => {
     current = parent?.nodeType === 11 && parent.host ? parent.host : current.parentElement;
   }
   const text = visibleText(element);
+  const xpathLiteral = value => {
+    if (!value.includes("'")) return `'${value}'`;
+    if (!value.includes('"')) return `"${value}"`;
+    return `concat(${value.split("'").map(part => `'${part}'`).join(', "\'", ')})`;
+  };
+  const rowScopedXPath = (element, text) => {
+    if (!(element.tagName === "BUTTON" || element.tagName === "A") || !text) return "";
+    let row = element.closest("tr, [role='row'], .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row']");
+    if (!row) {
+      let current = element.parentElement;
+      while (current && current !== document.body) {
+        const siblings = current.parentElement ? Array.from(current.parentElement.children).filter(item => item.tagName === current.tagName) : [];
+        if (siblings.length > 1 && current.querySelector("button, a")) {
+          row = current;
+          break;
+        }
+        current = current.parentElement;
+      }
+    }
+    if (!row) return "";
+    const rowClass = Array.from(row.classList).find(item => /(?:row|item)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
+    const rowSelector = row.tagName === "TR" ? "tr" : row.getAttribute("role") === "row"
+      ? "*[@role='row']" : rowClass
+        ? `*[contains(concat(' ', normalize-space(@class), ' '), ' ${rowClass} ')]` : "";
+    if (!rowSelector) return "";
+    const rows = row.parentElement ? Array.from(row.parentElement.children).filter(item => item.tagName === row.tagName) : [];
+    const cells = Array.from(row.querySelectorAll("td, [role='gridcell'], .el-table__cell, .ant-table-cell"));
+    if (!cells.length) cells.push(...Array.from(row.children));
+    for (const cell of cells) {
+      const anchor = safeText(cell.innerText, 96);
+      if (anchor.length < 2 || anchor === text) continue;
+      const matches = rows.filter(item => safeText(item.innerText, 2048).includes(anchor));
+      if (matches.length === 1) {
+        return `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+      }
+    }
+    return "";
+  };
+  const stableXPath = () => {
+    const tag = element.tagName.toLowerCase();
+    for (const name of ["data-testid", "id", "name", "aria-label", "placeholder"]) {
+      if (attributes[name]) return `//${tag}[@${name}=${xpathLiteral(attributes[name])}]`;
+    }
+    const text = visibleText(element);
+    if (tag === "li" && element.classList.contains("el-select-dropdown__item") && text) {
+      return `//div[not(contains(@style, 'display: none'))]//li[normalize-space(.)=${xpathLiteral(text)}]`;
+    }
+    const rowXPath = rowScopedXPath(element, text);
+    if (rowXPath) return rowXPath;
+    if ((tag === "button" || tag === "a") && text) return `//${tag}[normalize-space(.)=${xpathLiteral(text)}]`;
+    return "";
+  };
   return {
     tag: element.tagName.toLowerCase(),
     attributes,
@@ -279,6 +395,7 @@ element => {
     formLabel,
     visibleText: text,
     role: safeText(attributes.role, 64),
+    xpath: stableXPath(),
     depth: path.length,
     path,
     locatorMatches: {}
@@ -353,7 +470,7 @@ class ElementPicker:
         await self.install_on_page(page)
 
     def _on_frame_navigated(self, frame: Any) -> None:
-        task = asyncio.create_task(self._install_frame(frame))
+        task = asyncio.create_task(self._install_frame(frame, force=True))
         self._event_tasks.add(task)
         task.add_done_callback(self._event_tasks.discard)
 
@@ -364,15 +481,17 @@ class ElementPicker:
         for frame in frames:
             await self._install_frame(frame)
 
-    async def _install_frame(self, frame: Any) -> None:
+    async def _install_frame(self, frame: Any, *, force: bool = False) -> None:
         if not self._trusted_frame(frame):
             return
         frame_url = str(getattr(frame, "url", ""))
         key = id(frame)
         existing = self._controllers.get(key)
-        if existing and existing[0] is frame and existing[1] == frame_url:
+        if not force and existing and existing[0] is frame and existing[1] == frame_url:
             return
         if existing:
+            with contextlib.suppress(Exception):
+                await existing[2].evaluate("(control, value) => control(value)", {"action": "dispose"})
             await _safe_handle_dispose(existing[2])
         controller = await frame.evaluate_handle(
             self.script,
@@ -472,11 +591,11 @@ class ElementPicker:
 
     def _trusted_frame(self, frame: Any) -> bool:
         frame_url = str(getattr(frame, "url", ""))
-        if not frame_url or not same_origin(frame_url, self._capture_origin):
+        if not frame_url or not is_same_capture_site(frame_url, self._capture_origin):
             return False
         current = frame
         while current is not None:
-            if not same_origin(str(getattr(current, "url", "")), self._capture_origin):
+            if not is_same_capture_site(str(getattr(current, "url", "")), self._capture_origin):
                 return False
             current = getattr(current, "parent_frame", None)
             if callable(current):
@@ -510,6 +629,7 @@ class ElementPicker:
                 label=payload["label"],
                 form_label=payload["formLabel"],
                 visible_text=payload["visibleText"],
+                xpath=payload["xpath"],
                 depth=payload["depth"],
                 capture_url=sanitize_public_url(capture_url),
             )
@@ -670,6 +790,8 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
             raise PickerSecurityError("候选属性值无效")
         value = " ".join(raw_value.split())[:256]
         if value:
+            if key == "class" and contains_secret_text(value):
+                continue
             attributes[key] = value
     role = _safe_scalar(raw.get("role", ""), 64)
     if role and "role" not in attributes:
@@ -689,6 +811,7 @@ def _sanitize_binding_payload(raw: Any) -> dict[str, Any]:
         "formLabel": _safe_scalar(raw.get("formLabel", ""), 512),
         "visibleText": _safe_scalar(raw.get("visibleText", ""), 512),
         "role": role,
+        "xpath": _safe_scalar(raw.get("xpath", ""), 240),
         "depth": depth,
         "path": path,
         "locatorMatches": {},

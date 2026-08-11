@@ -244,6 +244,39 @@ async def test_picker_installs_once_per_same_origin_document_and_never_cross_ori
 
 
 @pytest.mark.asyncio
+async def test_picker_disposes_previous_controller_before_reinstalling_after_navigation():
+    picker = ElementPicker()
+    context = FakePickerContext()
+    page = FakePickerPage()
+
+    await picker.install(context, page, lambda *_args: None, page.url)
+    first = page.main_frame.controllers[0]
+    await picker._install_frame(page.main_frame, force=True)
+
+    assert first.commands == [{"action": "dispose"}]
+    assert first.disposed is True
+    assert len(page.main_frame.controllers) == 2
+
+
+@pytest.mark.asyncio
+async def test_picker_reinstalls_after_same_site_cross_subdomain_navigation():
+    picker = ElementPicker()
+    context = FakePickerContext()
+    page = FakePickerPage()
+    page.url = "https://upms-ui-qa1.oojoyoo.com/"
+    page.main_frame.url = page.url
+
+    await picker.install(context, page, lambda *_args: None, page.url)
+    first = page.main_frame.controllers[0]
+    page.main_frame.url = "https://signinunifly-qa1.oojoyoo.com/#/login"
+    await picker._install_frame(page.main_frame, force=True)
+
+    assert first.commands == [{"action": "dispose"}]
+    assert first.disposed is True
+    assert len(page.main_frame.controllers) == 2
+
+
+@pytest.mark.asyncio
 async def test_binding_requires_nonce_current_page_frame_handle_and_matching_dom():
     picker = ElementPicker(rate_limit_per_second=5)
     context = FakePickerContext()
@@ -305,7 +338,7 @@ async def test_binding_rate_limit_discards_before_candidate_callback():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field",
-    ["value", "cookie", "localStorage", "sessionStorage", "outerHTML", "authorization", "selector", "cssSelector", "xpath"],
+    ["value", "cookie", "localStorage", "sessionStorage", "outerHTML", "authorization", "selector", "cssSelector"],
 )
 async def test_dom_binding_rejects_every_non_allowlisted_or_sensitive_field(field, tmp_path):
     picker = ElementPicker(temp_root=tmp_path)

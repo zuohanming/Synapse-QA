@@ -117,6 +117,33 @@ def same_origin(left: str, right: str) -> bool:
         return False
 
 
+def is_same_capture_site(request_url: str, page_url: str) -> bool:
+    """判断请求是否属于采集页面所在站点，用于会话内临时私网授权。"""
+
+    try:
+        request_host = (_parse_http_url(request_url).hostname or "").rstrip(".").lower()
+        page_host = (_parse_http_url(page_url).hostname or "").rstrip(".").lower()
+    except CaptureURLSecurityError:
+        return False
+    if request_host == page_host:
+        return True
+    try:
+        ipaddress.ip_address(request_host)
+        return False
+    except ValueError:
+        pass
+    try:
+        ipaddress.ip_address(page_host)
+        return False
+    except ValueError:
+        pass
+    request_parts = request_host.split(".")
+    page_parts = page_host.split(".")
+    if len(request_parts) < 3 or len(page_parts) < 3:
+        return False
+    return request_parts[-2:] == page_parts[-2:]
+
+
 def validate_network_target(
     value: str,
     *,

@@ -254,7 +254,10 @@ describe("ElementCaptureDrawer", () => {
     expect(getSaveBlockers([candidate(1, { name: "未命名元素" })], new Set([1]), "active")).toContain("1 个候选尚未命名");
     expect(getSaveBlockers([
       candidate(1, { locators: [{ type: "css", value: ".item", score: 95, unique: false }] })
-    ], new Set([1]), "active")).toContain("1 个候选缺少评分不低于 70 的唯一定位器");
+    ], new Set([1]), "active")).toContain("1 个候选缺少评分不低于 40 的唯一定位器");
+    expect(getSaveBlockers([
+      candidate(1, { locators: [{ type: "xpath", value: "//input[@placeholder='用户名']", score: 45, unique: true }] })
+    ], new Set([1]), "active")).toEqual([]);
     expect(getSaveBlockers([
       candidate(1, { conflictStatus: "duplicate", duplicateElementId: 42 })
     ], new Set([1]), "active")).toContain("1 个候选尚未处理冲突");
