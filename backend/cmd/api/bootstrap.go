@@ -641,6 +641,47 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			unique(debug_run_id, assertion_index)
 		)`,
+		`create table if not exists perf_test_plans (
+			id bigserial primary key,
+			product_id bigint not null references products(id),
+			name text not null,
+			target_url text not null default '',
+			method text not null default 'GET',
+			headers jsonb not null default '{}'::jsonb,
+			body text not null default '',
+			load_mode text not null default 'constant',
+			vus int not null default 0,
+			duration text not null default '',
+			stages jsonb not null default '[]'::jsonb,
+			thresholds jsonb not null default '{}'::jsonb,
+			status text not null default 'draft',
+			priority text not null default 'P2',
+			owner text not null default '',
+			tags text not null default '',
+			description text not null default '',
+			created_by text not null default '',
+			updated_at timestamptz not null default now(),
+			created_at timestamptz not null default now(),
+			deleted_at timestamptz,
+			unique(product_id, name)
+		)`,
+		`create table if not exists perf_test_runs (
+			id bigserial primary key,
+			plan_id bigint not null references perf_test_plans(id),
+			status text not null default 'pending',
+			triggered_by text not null default '',
+			exit_code int,
+			total_requests int not null default 0,
+			avg_duration_ms numeric,
+			p95_duration_ms numeric,
+			error_rate numeric,
+			rps numeric,
+			summary jsonb not null default '{}'::jsonb,
+			started_at timestamptz,
+			finished_at timestamptz,
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
 	}
 	statements = append(statements, elementCaptureMigrationStatements()...)
 	for _, statement := range statements {

@@ -90,6 +90,7 @@ func permissionSeeds() [][]string {
 		{"ui.element.capture", "采集页面元素"},
 		{"ui.element.manage", "管理页面元素"},
 		{"ui.element.rollback", "回滚页面元素版本"},
+		{"menu.perf_test.read", "性能测试"},
 	}
 }
 

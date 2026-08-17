@@ -16,6 +16,10 @@ export const menuData = [
     children: ["接口管理", "测试用例", "全局变量", "请求头管理"]
   },
   {
+    title: "性能测试",
+    children: ["压测方案", "测试报告"]
+  },
+  {
     title: "数据工厂",
     children: ["Mock 生成器"]
   },

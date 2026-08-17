@@ -3,6 +3,7 @@
 
 ## Unreleased
 
+- 新增性能测试业务模块：新增「性能测试」一级菜单（压测方案、测试报告），压测方案支持 K6 风格负载配置（固定并发 vus+duration / 爬坡 stages）与阈值断言 thresholds 的 CRUD 及触发执行占位，测试报告承载 K6 指标（总请求数、平均耗时、P95、错误率、RPS）展示；底层压测引擎选定 Grafana k6，真实执行由执行器后续接入。
 - 修复打包版执行器「调试页面步骤」报 `playwright install`：PyInstaller 打包后 Playwright 会把浏览器路径指向驱动目录下的 `.local-browsers` 导致找不到浏览器，现已自动指向用户级 `ms-playwright` 缓存。
 - 修复执行器连接异常后无法自愈的问题：执行器心跳因 Token 鉴权失败（401）停止后，即便 Token 被修正也无法恢复；现在 `authenticate()` 连接成功后会写回新 Token 并重启心跳循环，无需手动重启执行器进程即可恢复在线。
 - 修复左侧菜单重复的「AI 智能」入口：删除 `menuData` 中重复声明的「AI 智能」菜单组，仅保留一个入口，子菜单不变。

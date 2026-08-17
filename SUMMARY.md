@@ -1,44 +1,28 @@
-# 界面自动化测试用例模块实现摘要
+# 性能测试模块实现摘要
 
 ## 已完成
 
-- 在根目录 `F:\Synapse QA` 内完成开发，未继续使用独立 worktree。
-- 生成 `SPEC.md`，覆盖后端 API、数据库 schema、前端页面设计、组件结构和状态流。
-- 新增测试用例后端分层：
-  - `backend/internal/model/test_case.go`
-  - `backend/internal/repository/test_case_repository.go`
-  - `backend/internal/service/test_case_service.go`
-  - `backend/internal/controller/test_case_controller.go`
-- 接入 `backend/cmd/api/main.go`、`backend/cmd/api/bootstrap.go` 和 `backend/internal/router/router.go`。
+- 在根目录 `F:\Synapse QA` 内完成开发，未使用独立 worktree。
+- 新增性能测试后端分层：
+  - `backend/internal/model/performance.go`
+  - `backend/internal/repository/performance_repository.go`
+  - `backend/internal/service/performance_service.go`
+  - `backend/internal/controller/performance_controller.go`
+- 接入 `backend/cmd/api/main.go`、`backend/cmd/api/bootstrap.go`、`backend/internal/router/router.go`、`backend/cmd/api/api_migration.go`（新增权限码 `menu.perf_test.read`）。
 - 新增数据库表：
-  - `test_cases`
-  - `test_case_steps`
-  - `test_case_datasets`
+  - `perf_test_plans`（压测方案，软删除，unique(product_id,name)）
+  - `perf_test_runs`（执行记录/指标报告）
 - 新增 REST API：
-  - CRUD
-  - 参数化数据集 CRUD
-  - JSON 导入
-  - JSON 导出
-- 前端“界面自动化 / 测试用例”已切换到 `/api/test-cases` 专用 API。
-- 前端已实现：
-  - 列表
-  - 搜索筛选
-  - 分页
-  - 新增/编辑/删除
-  - 批量删除
-  - 导入/导出 UI
-  - 详情面板
-  - 参数化数据新增/删除
-  - 项目/产品、模块、页面、步骤联动
-- 新增/更新文档：
-  - `tasks/test-case-module.md`
-  - `docs/api-test-case.md`
-  - `CHANGELOG.md`
-  - `PR_DESCRIPTION.md`
-- 新增前端测试能力：
-  - Vitest + React Testing Library 组件测试
-  - Playwright 关键 E2E
-  - V8 覆盖率统计
+  - 压测方案 CRUD（分页、详情、创建、更新、软删除）
+  - 触发执行（占位，创建待执行记录）
+  - 执行记录列表与详情
+- 前端新增「性能测试」一级菜单（二级：压测方案、测试报告）：
+  - `frontend/src/pages/PerformancePage.js`（二级菜单分发器）
+  - `frontend/src/pages/PerfPlansPage.js`（压测方案：列表/筛选/表单弹窗/详情/触发执行）
+  - `frontend/src/pages/PerfRunsPage.js`（测试报告：执行记录列表/指标详情抽屉）
+  - `frontend/src/services/performanceService.js`
+- 接入菜单/路由/样式：`appConfig.js`、`Layout.js`、`routes/index.js`、`global.css`
+- 新增后端测试：`performance_service_test.go`、`performance_controller_test.go`
 
 ## 当前验证
 
@@ -46,40 +30,28 @@
 
 ```bash
 cd backend
-go test ./...
+go build ./...
 go vet ./...
-go build ./cmd/api
+go test ./...
 
 cd frontend
 npm run build
-npm test
-npm run test:coverage
-npm run e2e
-```
-
-后端覆盖率审计：
-
-```bash
-cd backend
-go test ./internal/repository ./internal/service ./internal/controller -coverprofile testcase-cover.out
-go tool cover -func testcase-cover.out
+npm run test
 ```
 
 结果：
 
-- test-case 新增函数级覆盖率全部不低于 85%。
-- Go 包级总覆盖率为 25.3%。原因是 Go 覆盖率按包统计，`controller`、`service`、`repository` 包中包含大量既有非 test-case 代码。
-- 前端覆盖率：
-  - Statements：99.09%
-  - Branches：91.9%
-  - Functions：97.89%
-  - Lines：99.02%
-- Playwright 关键 E2E：1 passed。
+- 后端全部包测试通过，新增 service 12 个、controller 8 个测试函数通过。
+- 前端 build 通过（仅既有 chunk size 提示），`npm run test` 85 个用例全部通过。
 
-## 剩余说明
+## 压测引擎选型
 
-- 后端包级总覆盖率受既有非 test-case 代码影响为 25.3%，但 test-case 新增函数均已达到 85% 以上。
+- 底层压测引擎选定 Grafana k6，集成方式为「独立 k6 二进制 + 子进程 + handleSummary 写 JSON」（不使用 Go 库内嵌，官方未提供稳定 runner API）。
+- 方案字段对齐 k6 选项（vus/duration/stages/thresholds），报告指标对齐 k6 summary metrics（http_reqs count、http_req_duration avg/p95、http_req_failed rate、rps）。
+- 真实压测执行闭环（执行器接入 k6）为后续独立项。
 
 ## 后续建议
 
-- 如要求 Go 包级覆盖率达到 85%，需要扩大测试范围，补测同包内既有 controller/service/repository 代码。
+- 执行器新增 `perf` 任务类型与 k6 runner（subprocess 调 k6，解析 handleSummary JSON 回填指标与 summary）。
+- 后端扩展压测调度与类型校验（`normalizeExecutionRunRequest` 放行 perf、`buildTaskPayload` 生成压测 payload）。
+- 如需实时压测曲线，可复用 API 调试的事件回调 + SSE 推送链路。

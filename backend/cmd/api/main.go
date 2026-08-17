@@ -55,6 +55,7 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(db)
 	apiAutomationRepo := repository.NewAPIAutomationRepository(db)
 	aiRepo := repository.NewAIRepository(db)
+	performanceRepo := repository.NewPerformanceRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -69,6 +70,7 @@ func main() {
 	dataFactoryService := service.NewDataFactoryService()
 	aiToolExecutor := service.NewAIToolExecutor(apiAutomationService, catalogService, testCaseService, executionService, automationService)
 	aiService := service.NewAIService(aiRepo, aiToolExecutor)
+	performanceService := service.NewPerformanceService(performanceRepo, systemRepo)
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(appCtx)
@@ -89,6 +91,7 @@ func main() {
 		APIAutomationController:  controller.NewAPIAutomationController(apiAutomationService),
 		DataFactoryController:    controller.NewDataFactoryController(dataFactoryService),
 		AIController:             controller.NewAIController(aiService),
+		PerformanceController:    controller.NewPerformanceController(performanceService),
 		AuthMiddleware:           controller.AuthMiddleware(systemService),
 	})
 

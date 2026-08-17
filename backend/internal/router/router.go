@@ -21,6 +21,7 @@ type Dependencies struct {
 	APIAutomationController  *controller.APIAutomationController
 	DataFactoryController    *controller.DataFactoryController
 	AIController             *controller.AIController
+	PerformanceController    *controller.PerformanceController
 	AuthMiddleware           gin.HandlerFunc
 }
 
@@ -65,12 +66,24 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerAPIAutomationRoutes(authed, deps)
 	registerDataFactoryRoutes(authed, deps)
 	registerAIRoutes(authed, deps)
+	registerPerformanceRoutes(authed, deps)
 }
 
 func registerDataFactoryRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	group := authed.Group("/data-factory")
 	group.GET("/generators", deps.DataFactoryController.ListGenerators)
 	group.POST("/generators/preview", deps.DataFactoryController.Preview)
+}
+
+func registerPerformanceRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/perf/plans", deps.PerformanceController.ListPlans)
+	authed.GET("/perf/plans/:id", deps.PerformanceController.GetPlan)
+	authed.POST("/perf/plans", deps.PerformanceController.CreatePlan)
+	authed.PATCH("/perf/plans/:id", deps.PerformanceController.UpdatePlan)
+	authed.DELETE("/perf/plans/:id", deps.PerformanceController.DeletePlan)
+	authed.POST("/perf/plans/:id/run", deps.PerformanceController.RunPlan)
+	authed.GET("/perf/runs", deps.PerformanceController.ListRuns)
+	authed.GET("/perf/runs/:id", deps.PerformanceController.GetRun)
 }
 
 func registerAIRoutes(authed *gin.RouterGroup, deps Dependencies) {
