@@ -467,7 +467,8 @@ function AppearanceSettings() {
       <div className="appearance-section-heading"><LayoutTemplate size={18} /><div><strong>界面主题</strong><span>选择工作台的整体视觉风格</span></div></div>
       <div className="theme-choice-grid">
         {[
-          ["blueprint", "蓝图网格", "专业蓝白、高信息密度的默认工作台"],
+          ["deepseek", "DeepSeek 极简", "蓝灰极简、圆润留白，致敬 DeepSeek 官网"],
+          ["blueprint", "蓝图网格", "专业蓝白、高信息密度的经典工作台"],
           ["midnight", "午夜作战", "深色低眩光，适合长时间执行与监控"],
           ["precision", "精密实验室", "冷静青绿，强调验证、质量与状态"],
           ["executive", "管理驾驶舱", "沉稳靛蓝，强化指标与决策层级"],

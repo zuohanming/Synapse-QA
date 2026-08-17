@@ -1,4 +1,4 @@
-﻿﻿﻿﻿import { useMemo, useRef, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { useEffect } from "react";
 import { TestCasesPage } from "./TestCasesPage.js";
 import { DataTable, PaginationBar, TablePanel } from "../components/DataTable.js";
@@ -374,6 +374,152 @@ function orderFlowNodes(nodes, connections) {
     if (!visited.has(node.id)) ordered.push(node);
   });
   return ordered;
+}
+
+// 只计算位置，不修改输入节点或连线；异常图结构也必须完整返回所有节点。
+export function beautifyFlowNodes(nodes = [], connections = [], options = {}) {
+  const width = options.width || 1200;
+  const height = options.height || 720;
+  const nodeWidth = 156;
+  const nodeHeight = 64;
+  const gapX = 72;
+  const gapY = 80;
+  const margin = 24;
+  if (!nodes.length) return { nodes: [], direction: "horizontal" };
+
+  const ids = new Set(nodes.map((node) => node.id));
+  const validConnections = connections.filter((connection) => ids.has(connection.from) && ids.has(connection.to));
+  const connected = new Set(validConnections.flatMap((connection) => [connection.from, connection.to]));
+  const incoming = new Map(nodes.map((node) => [node.id, 0]));
+  validConnections.forEach((connection) => incoming.set(connection.to, incoming.get(connection.to) + 1));
+  const roots = nodes.filter((node) => connected.has(node.id) && incoming.get(node.id) === 0);
+  const rank = new Map(roots.map((node) => [node.id, 0]));
+  const queue = roots.map((node) => node.id);
+  const remainingIncoming = new Map(incoming);
+  while (queue.length) {
+    const from = queue.shift();
+    validConnections.filter((connection) => connection.from === from).forEach((connection) => {
+      rank.set(connection.to, Math.max(rank.get(connection.to) ?? 0, (rank.get(from) ?? 0) + 1));
+      remainingIncoming.set(connection.to, remainingIncoming.get(connection.to) - 1);
+      if (remainingIncoming.get(connection.to) === 0) queue.push(connection.to);
+    });
+  }
+  // 有环图没有自然根：按原顺序补入未分配节点，确保布局仍然稳定。
+  nodes.filter((node) => connected.has(node.id) && !rank.has(node.id)).forEach((node) => rank.set(node.id, 0));
+  const connectedNodes = nodes.filter((node) => connected.has(node.id));
+  const maxLevel = Math.max(0, ...rank.values());
+  const maxLevelCount = Math.max(1, ...Array.from(rank.values()).map((level) => level || 0));
+  // 方向只比较流程主轴的真实需求，不能把分支总高度误当成横向宽度。
+  // 拓扑只负责稳定顺序，不能再把每个依赖层当成一列；线性流程也要行优先换行。
+  const connectedColumns = Math.max(2, Math.min(5, connectedNodes.length, Math.floor((width - margin * 2 + gapX) / (nodeWidth + gapX))));
+  const connectedRows = Math.ceil(connectedNodes.length / connectedColumns);
+  const connectedGridWidth = connectedColumns * nodeWidth + Math.max(0, connectedColumns - 1) * gapX;
+  const connectedGridHeight = connectedRows * nodeHeight + Math.max(0, connectedRows - 1) * gapY;
+  const horizontal = connectedGridWidth <= width * 0.94 && connectedGridHeight <= height * 0.78;
+  const direction = horizontal ? "horizontal" : "vertical";
+  const positions = new Map();
+  connectedNodes.forEach((node, index) => {
+    const row = Math.floor(index / connectedColumns);
+    const rowColumn = index % connectedColumns;
+    const column = row % 2 === 0 ? rowColumn : connectedColumns - 1 - rowColumn;
+    positions.set(node.id, { x: margin + column * (nodeWidth + gapX), y: margin + row * (nodeHeight + gapY) });
+  });
+  const connectedPositions = nodes.filter((node) => connected.has(node.id)).map((node) => positions.get(node.id));
+  const connectedBottom = connectedPositions.length ? Math.max(...connectedPositions.map((position) => position.y + nodeHeight)) : 0;
+  const connectedRight = connectedPositions.length ? Math.max(...connectedPositions.map((position) => position.x + nodeWidth)) : 0;
+  const looseNodes = nodes.filter((node) => !connected.has(node.id));
+  const looseCount = looseNodes.length;
+  const availableWidth = Math.max(nodeWidth, width - margin * 2);
+  const looseColumns = looseCount > 1
+    ? Math.max(2, Math.min(looseCount, Math.floor((availableWidth + gapX) / (nodeWidth + gapX))))
+    : 1;
+  const looseRows = Math.max(1, Math.ceil(looseCount / looseColumns));
+  const looseTop = Math.max(connectedBottom, connectedGridHeight) + gapY;
+  const looseLeft = connectedRight + gapX;
+  looseNodes.forEach((node, index) => {
+    if (horizontal) {
+      const row = Math.floor(index / looseColumns);
+      const column = index % looseColumns;
+      const rowCount = Math.min(looseColumns, looseCount - row * looseColumns);
+      const rowWidth = rowCount * nodeWidth + Math.max(0, rowCount - 1) * gapX;
+      const x = margin + column * (nodeWidth + gapX);
+      const regionHeight = Math.max(nodeHeight, height - looseTop);
+      const y = looseTop + row * (nodeHeight + gapY);
+      positions.set(node.id, { x, y });
+    } else {
+      const rows = Math.max(1, Math.floor((height - margin * 2 + gapY) / (nodeHeight + gapY)));
+      const columns = Math.ceil(looseCount / rows);
+      const column = Math.floor(index / rows);
+      const row = index % rows;
+      const columnCount = Math.min(rows, looseCount - column * rows);
+      const columnHeight = columnCount * nodeHeight + Math.max(0, columnCount - 1) * gapY;
+      const x = looseLeft + column * (nodeWidth + gapX);
+      const y = margin + row * (nodeHeight + gapY);
+      positions.set(node.id, { x, y });
+    }
+  });
+  const positionedNodes = nodes.map((node) => ({ node, position: positions.get(node.id) || { x: 0, y: 0 } }));
+  // 同一主轴层内按交叉轴排序，逐个推开，保证任意节点卡片不相交。
+  const groups = new Map();
+  positionedNodes.forEach((item) => {
+    const axis = horizontal ? Math.round(item.position.x / (nodeWidth + gapX)) : Math.round(item.position.y / (nodeHeight + gapY));
+    if (!groups.has(axis)) groups.set(axis, []);
+    groups.get(axis).push(item);
+  });
+  groups.forEach((group) => {
+    group.sort((a, b) => (horizontal ? a.position.y - b.position.y : a.position.x - b.position.x));
+    group.forEach((item, index) => {
+      const key = horizontal ? "y" : "x";
+      if (index && item.position[key] < group[index - 1].position[key] + (horizontal ? nodeHeight + gapY : nodeWidth + gapX)) {
+        item.position[key] = group[index - 1].position[key] + (horizontal ? nodeHeight + gapY : nodeWidth + gapX);
+      }
+    });
+  });
+  return {
+    nodes: nodes.map((node) => {
+      const position = positions.get(node.id) || { x: 0, y: 0 };
+      return { ...node, x: Math.round(position.x), y: Math.round(position.y) };
+    }),
+    direction
+  };
+}
+
+export function buildFlowConnectionPath(node, nextNode, connection = {}, options = {}) {
+  if (!node || !nextNode) return "";
+  const nodeWidth = options.nodeWidth || 156;
+  const nodeHeight = options.nodeHeight || 64;
+  const gapX = options.gapX || 72;
+  const gapY = options.gapY || 80;
+  const startX = node.x + nodeWidth;
+  const startY = node.y + (connection.branch === "true" ? 20 : connection.branch === "false" ? 46 : nodeHeight / 2);
+  const endX = nextNode.x;
+  const endY = nextNode.y + nodeHeight / 2;
+  if (Math.abs(startY - endY) < 1) return `M ${startX} ${startY} H ${endX}`;
+  const outerX = Math.max(startX, nextNode.x + nodeWidth) + gapX / 2;
+  const radius = Math.min(12, gapY / 3, gapX / 3);
+  return `M ${startX} ${startY} H ${outerX - radius} Q ${outerX} ${startY} ${outerX} ${startY + (endY > startY ? radius : -radius)} V ${endY + (endY > startY ? -radius : radius)} Q ${outerX} ${endY} ${outerX - radius} ${endY} H ${endX}`;
+}
+
+export function buildDraftFlowNode(item, id, x, y) {
+  return {
+    id,
+    type: item.label,
+    color: item.color,
+    title: item.label,
+    tag: "",
+    operationName: "",
+    operationGroup: "",
+    params: [],
+    values: {},
+    locator: "未配置",
+    saved: false,
+    x: Math.max(24, x),
+    y: Math.max(24, y)
+  };
+}
+
+export function canConnectToTarget(connectingFrom, targetNode) {
+  return Boolean(connectingFrom && targetNode && connectingFrom.nodeId !== targetNode.id);
 }
 
 export function buildDebugActions(nodes, connections, pageElements = []) {
@@ -1146,7 +1292,7 @@ function StepModal({ busy, modal, onClose, onSubmit }) {
   );
 }
 
-function StepWorkbench({ step, onBack }) {
+export function StepWorkbench({ step, onBack }) {
   const [nodes, setNodes] = useState(() => parseStepFlow(step.description).nodes);
   const [connections, setConnections] = useState(() => parseStepFlow(step.description).connections);
   const [nodeSeq, setNodeSeq] = useState(() => Math.max(0, ...parseStepFlow(step.description).nodes.map((node) => Number(node.id) || 0)) + 1);
@@ -1158,20 +1304,26 @@ function StepWorkbench({ step, onBack }) {
   const [configError, setConfigError] = useState("");
   const [operationMenuOpen, setOperationMenuOpen] = useState(false);
   const [activeOperationGroup, setActiveOperationGroup] = useState(elementOperationGroups[0].title);
+  const [activeItemTag, setActiveItemTag] = useState("");
   const [pageElementOptions, setPageElementOptions] = useState([]);
   const [pageElementsLoading, setPageElementsLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [connectingFrom, setConnectingFrom] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [layoutPreview, setLayoutPreview] = useState(null);
+  const [branchPickerNode, setBranchPickerNode] = useState(null);
   const [debugging, setDebugging] = useState(false);
   const [debugHeadless, setDebugHeadless] = useState(true);
   const [debugResult, setDebugResult] = useState(null);
   const [detailTab, setDetailTab] = useState("config");
   const [debugBaseURL, setDebugBaseURL] = useState("");
   const canvasRef = useRef(null);
-  const operationPickerRef = useRef(null);
+  const operationDropdownRef = useRef(null);
+  const operationItemPanelRef = useRef(null);
   const zoomRef = useRef(1);
   const lastDropAt = useRef(0);
+  const connectingRef = useRef(null);
+  const nodeGestureRef = useRef(null);
   const selected = selectedNode ? nodes.find((node) => node.id === selectedNode.id) || selectedNode : null;
   const canvasSize = { width: 1200, height: 720 };
   const availableOperationGroups = operationGroupsForType(selected?.type);
@@ -1183,13 +1335,25 @@ function StepWorkbench({ step, onBack }) {
   const connectionCount = connections.length;
   const connectedNodeIds = new Set(connections.flatMap((connection) => [connection.from, connection.to]));
   const unconnectedCount = nodes.filter((node) => !connectedNodeIds.has(node.id)).length;
+  const displayNodes = layoutPreview?.nodes || nodes;
+  const connectionModeMessage = connectingFrom
+    ? `已选择「${nodes.find((node) => node.id === connectingFrom.nodeId)?.title || "节点"}」，请直接点击目标节点`
+    : "";
 
   useEffect(() => {
-    const closeOperationMenu = (event) => {
-      if (!operationPickerRef.current?.contains(event.target)) setOperationMenuOpen(false);
+    if (operationMenuOpen) {
+      const focusTimer = window.setTimeout(() => operationItemPanelRef.current?.focus(), 0);
+      return () => window.clearTimeout(focusTimer);
+    }
+    return undefined;
+  }, [operationMenuOpen]);
+
+  useEffect(() => {
+    const closeDropdown = (event) => {
+      if (!operationDropdownRef.current?.contains(event.target)) setOperationMenuOpen(false);
     };
-    document.addEventListener("mousedown", closeOperationMenu);
-    return () => document.removeEventListener("mousedown", closeOperationMenu);
+    document.addEventListener("mousedown", closeDropdown);
+    return () => document.removeEventListener("mousedown", closeDropdown);
   }, []);
 
   useEffect(() => {
@@ -1231,30 +1395,23 @@ function StepWorkbench({ step, onBack }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const createNode = (item, event) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const nextNode = {
-      id: nodeSeq,
-      type: item.label,
-      color: item.color,
-      title: item.label,
-      tag: "",
-      operationName: "",
-      operationGroup: "",
-      params: [],
-      values: {},
-      locator: "未配置",
-      saved: false,
-      x: Math.max(24, (event.clientX - rect.left + event.currentTarget.scrollLeft) / zoomRef.current - 78),
-      y: Math.max(24, (event.clientY - rect.top + event.currentTarget.scrollTop) / zoomRef.current - 24)
-    };
+  const createNode = (item, event = {}, target = canvasRef.current) => {
+    const rect = target?.getBoundingClientRect?.() || { left: 0, top: 0 };
+    const clientX = Number.isFinite(event.clientX) ? event.clientX : rect.left + 180 + (nodes.length % 4) * 220;
+    const clientY = Number.isFinite(event.clientY) ? event.clientY : rect.top + 120 + Math.floor(nodes.length / 4) * 120;
+    const usedIDs = new Set(nodes.map((node) => String(node.id)));
+    let nextID = nodeSeq;
+    while (usedIDs.has(String(nextID))) nextID += 1;
+    const nextNode = buildDraftFlowNode(
+      item,
+      nextID,
+      (clientX - rect.left + (target?.scrollLeft || 0)) / zoomRef.current - 78,
+      (clientY - rect.top + (target?.scrollTop || 0)) / zoomRef.current - 24
+    );
 
-    const previousNode = nodes[nodes.length - 1];
-    setNodeSeq((value) => value + 1);
+    setNodeSeq(Math.max(nodeSeq + 1, nextID + 1));
+    if (layoutPreview) setLayoutPreview(null);
     setNodes((current) => [...current, nextNode]);
-    if (previousNode && previousNode.type !== "条件判断" && !connections.some((connection) => connection.from === previousNode.id)) {
-      setConnections((current) => [...current, { from: previousNode.id, to: nextNode.id }]);
-    }
     setSelectedNode(nextNode);
   };
 
@@ -1314,7 +1471,16 @@ function StepWorkbench({ step, onBack }) {
       return;
     }
     if (draggingNode) {
+      const gesture = nodeGestureRef.current;
       setDraggingNode(null);
+      nodeGestureRef.current = null;
+      if (gesture && !gesture.moved && !connectingRef.current && !layoutPreview) {
+        const node = nodes.find((item) => item.id === gesture.id);
+        if (node) {
+          if (node.type === "条件判断") setBranchPickerNode(node.id);
+          else startConnection(event, node);
+        }
+      }
       return;
     }
     if (!draggingItem || Date.now() - lastDropAt.current < 100) return;
@@ -1323,9 +1489,11 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const handleNodeMouseDown = (event, node) => {
+    if (layoutPreview) return;
     event.preventDefault();
     event.stopPropagation();
     setSelectedNode(node);
+    nodeGestureRef.current = { id: node.id, moved: false };
     setDraggingNode({
       id: node.id,
       startClientX: event.clientX,
@@ -1344,6 +1512,9 @@ function StepWorkbench({ step, onBack }) {
       return;
     }
     if (!draggingNode) return;
+    if (Math.abs(event.clientX - draggingNode.startClientX) > 6 || Math.abs(event.clientY - draggingNode.startClientY) > 6) {
+      if (nodeGestureRef.current) nodeGestureRef.current.moved = true;
+    }
     const nextX = draggingNode.startX + (event.clientX - draggingNode.startClientX) / zoomRef.current;
     const nextY = draggingNode.startY + (event.clientY - draggingNode.startClientY) / zoomRef.current;
     setNodes((current) =>
@@ -1360,6 +1531,10 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const handleCanvasMouseDown = (event) => {
+    if (connectingRef.current || connectingFrom) {
+      if (!event.target.closest(".flow-node") && !event.target.closest(".zoom-indicator")) cancelConnection();
+      return;
+    }
     if (event.button !== 0 || draggingItem || event.target.closest(".flow-node") || event.target.closest(".zoom-indicator")) {
       return;
     }
@@ -1374,50 +1549,57 @@ function StepWorkbench({ step, onBack }) {
   };
 
   const startConnection = (event, node, branch = "") => {
+    if (layoutPreview) return;
     event.preventDefault();
     event.stopPropagation();
-    setConnectingFrom({ nodeId: node.id, branch });
+    const nextConnection = { nodeId: node.id, branch };
+    connectingRef.current = nextConnection;
+    setConnectingFrom(nextConnection);
+    setBranchPickerNode(null);
     setSelectedNode(node);
-    setToast("请选择目标节点");
+    setToast(`已选择「${node.title || "节点"}」，请点击目标节点`);
   };
 
   const completeConnection = (event, node) => {
+    if (layoutPreview) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!connectingFrom) return;
-    if (connectingFrom.nodeId === node.id) {
-      setToast("不能连接当前节点");
+    const activeConnection = connectingRef.current || connectingFrom;
+    if (!activeConnection) return;
+    if (!canConnectToTarget(activeConnection, node)) {
+      setToast(`不能连接当前节点「${node.title || node.id}」`);
       return;
     }
-    const remainingConnections = connections.filter((connection) => !(connection.from === connectingFrom.nodeId && (connection.branch || "") === connectingFrom.branch) && connection.to !== node.id);
+    const remainingConnections = connections.filter((connection) => !(connection.from === activeConnection.nodeId && (connection.branch || "") === activeConnection.branch) && connection.to !== node.id);
     const pending = [node.id];
     const visited = new Set();
     while (pending.length) {
       const cursor = pending.pop();
-      if (cursor === connectingFrom.nodeId) {
-        setToast("不能形成循环连接");
+      if (cursor === activeConnection.nodeId) {
+        setToast(`无法连接「${nodes.find((item) => item.id === activeConnection.nodeId)?.title || "起点"}」与「${node.title || "目标"}」：会形成循环`);
         return;
       }
       if (visited.has(cursor)) continue;
       visited.add(cursor);
       remainingConnections.filter((connection) => connection.from === cursor).forEach((connection) => pending.push(connection.to));
     }
-    setConnections([...remainingConnections, { from: connectingFrom.nodeId, to: node.id, ...(connectingFrom.branch ? { branch: connectingFrom.branch } : {}) }]);
+    setConnections([...remainingConnections, { from: activeConnection.nodeId, to: node.id, ...(activeConnection.branch ? { branch: activeConnection.branch } : {}) }]);
+    connectingRef.current = null;
     setConnectingFrom(null);
     setSelectedNode(node);
     setToast("连接成功");
   };
 
-  const deleteSelectedNode = async () => {
+  const deleteSelectedNode = () => {
     if (!selected) return;
     const nextNodes = nodes.filter((node) => node.id !== selected.id);
     const nextConnections = connections.filter((connection) => connection.from !== selected.id && connection.to !== selected.id);
-    if (await persistFlow(nextNodes, nextConnections, "节点已删除")) {
-      setNodes(nextNodes);
-      setConnections(nextConnections);
-      if (connectingFrom?.nodeId === selected.id) setConnectingFrom(null);
-      setSelectedNode(null);
-    }
+    setNodes(nextNodes);
+    setConnections(nextConnections);
+    if (connectingFrom?.nodeId === selected.id) setConnectingFrom(null);
+    if (branchPickerNode === selected.id) setBranchPickerNode(null);
+    setSelectedNode(null);
+    setToast("节点已从画布移除，点击「保存画布」后才会真正删除");
   };
 
   const updateSelectedNode = (patch) => {
@@ -1459,12 +1641,58 @@ function StepWorkbench({ step, onBack }) {
     });
   };
 
+  const activateOperationCategory = (title) => {
+    setActiveOperationGroup(title);
+    const group = availableOperationGroups.find((item) => item.title === title);
+    setActiveItemTag(group?.items[0]?.tag || "");
+  };
+
   const toggleOperationMenu = () => {
-    if (!operationMenuOpen) {
-      const selectedGroupVisible = availableOperationGroups.some((group) => group.title === selected?.operationGroup);
-      setActiveOperationGroup(selectedGroupVisible ? selected.operationGroup : availableOperationGroups[0].title);
+    if (operationMenuOpen) {
+      setOperationMenuOpen(false);
+      return;
     }
-    setOperationMenuOpen((open) => !open);
+    const selectedGroupVisible = availableOperationGroups.some((group) => group.title === selected?.operationGroup);
+    const initialGroup = selectedGroupVisible ? selected.operationGroup : availableOperationGroups[0]?.title;
+    setActiveOperationGroup(initialGroup);
+    const initialItems = availableOperationGroups.find((group) => group.title === initialGroup)?.items || [];
+    setActiveItemTag(initialItems.some((item) => item.tag === selected?.tag) ? selected.tag : initialItems[0]?.tag || "");
+    setOperationMenuOpen(true);
+  };
+
+  const handleOperationItemKeyDown = (event) => {
+    const items = activeGroup.items;
+    if (!items.length) return;
+    const index = items.findIndex((item) => item.tag === activeItemTag);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveItemTag(items[(index + 1) % items.length].tag);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveItemTag(items[(index - 1 + items.length) % items.length].tag);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (activeItemTag) selectOperation(activeItemTag);
+    }
+  };
+
+  const handleOperationCategoryKeyDown = (event) => {
+    const groups = availableOperationGroups;
+    if (!groups.length) return;
+    const index = groups.findIndex((group) => group.title === activeGroup.title);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      activateOperationCategory(groups[(index + 1) % groups.length].title);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      activateOperationCategory(groups[(index - 1 + groups.length) % groups.length].title);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  };
+
+  const handleOperationModalKeyDown = (event) => {
+    if (event.key === "Escape") setOperationMenuOpen(false);
   };
 
   const updateOperationParam = (param, value) => {
@@ -1495,6 +1723,52 @@ function StepWorkbench({ step, onBack }) {
       return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openConnectionMenu = (event, node) => {
+    if (layoutPreview) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (node.type === "条件判断") setBranchPickerNode((current) => (current === node.id ? null : node.id));
+    else startConnection(event, node);
+  };
+
+  const cancelConnection = () => {
+    if (!connectingRef.current && !connectingFrom) return;
+    connectingRef.current = null;
+    setConnectingFrom(null);
+    setBranchPickerNode(null);
+    setToast("已取消连线");
+  };
+
+  const handlePaletteClick = (item) => {
+    if (layoutPreview) setLayoutPreview(null);
+    createNode(item);
+    setDraggingItem(null);
+  };
+
+  const previewBeautifiedLayout = () => {
+    setConfigError("");
+    setLayoutPreview({ ...beautifyFlowNodes(nodes, connections, canvasSize), originalNodes: nodes });
+    setToast("已生成美化预览，尚未保存");
+  };
+
+  const cancelBeautifiedLayout = () => {
+    setDraggingNode(null);
+    setPanningCanvas(null);
+    setLayoutPreview(null);
+    setConfigError("");
+    setToast("已取消美化预览");
+  };
+
+  const applyBeautifiedLayout = async () => {
+    if (!layoutPreview) return;
+    if (await persistFlow(layoutPreview.nodes, connections, "画布美化已应用")) {
+      setDraggingNode(null);
+      setPanningCanvas(null);
+      setNodes(layoutPreview.nodes);
+      setLayoutPreview(null);
     }
   };
 
@@ -1606,10 +1880,12 @@ function StepWorkbench({ step, onBack }) {
           <strong>页面步骤工作台 / {step.id} / {step.name || "-"}</strong>
         </div>
         <div className="action-row">
-          <button className="icon-text-button compact-button" type="button">
+          {layoutPreview ? <button className="icon-text-button compact-button" disabled={saving} onClick={cancelBeautifiedLayout} type="button">取消预览</button> : null}
+          <button className="icon-text-button compact-button" disabled={saving || Boolean(layoutPreview)} onClick={previewBeautifiedLayout} type="button">
             美化画布
           </button>
-          <button className="primary-button compact-button" disabled={saving} onClick={() => persistFlow(nodes, connections, "画布保存成功")} type="button">
+          {layoutPreview ? <button className="primary-button compact-button" disabled={saving} onClick={applyBeautifiedLayout} type="button">{saving ? "应用中" : "应用美化"}</button> : null}
+          <button className="primary-button compact-button" disabled={saving || Boolean(layoutPreview)} onClick={() => persistFlow(nodes, connections, "画布保存成功")} type="button">
             {saving ? "保存中" : "保存画布"}
           </button>
           <div className="debug-mode-switch" aria-label="调试浏览器模式">
@@ -1638,6 +1914,7 @@ function StepWorkbench({ step, onBack }) {
                 key={item.label}
                 onDragEnd={() => setDraggingItem(null)}
                 onDragStart={(event) => handleDragStart(event, item)}
+                onClick={() => handlePaletteClick(item)}
                 onMouseDown={() => setDraggingItem(item)}
                 type="button"
               >
@@ -1649,10 +1926,12 @@ function StepWorkbench({ step, onBack }) {
         </aside>
 
         <main className="flow-panel">
+          {connectingFrom ? <div className="connection-mode-banner" role="alert" aria-live="assertive"><strong>连线模式</strong><span>{connectionModeMessage}</span><button onClick={cancelConnection} title="取消当前连线" type="button">取消</button></div> : null}
+          {layoutPreview ? <div className="layout-preview-banner" role="status"><strong>美化预览</strong><span>位置已重新排列，尚未写入画布。确认后点击“应用美化”。</span><em>{layoutPreview.direction === "horizontal" ? "横向流程" : "纵向流程"}</em></div> : null}
           <div className="flow-panel-header">
             <div className="toolbar-title">
               <strong>流程画布</strong>
-              {connectingFrom ? <small className="connection-mode-tip">请选择目标节点左侧连接点</small> : null}
+              {connectingFrom ? <small className="connection-mode-tip">{connectionModeMessage}</small> : null}
             </div>
             <div className="flow-stats">
               <span className="warning-stat">未保存 {nodes.filter((node) => !node.saved).length}</span>
@@ -1663,10 +1942,13 @@ function StepWorkbench({ step, onBack }) {
             </div>
           </div>
           <div
-            className={`${nodes.length ? "flow-canvas" : "flow-canvas empty"}${panningCanvas ? " is-panning" : ""}`}
+            className={`${nodes.length ? "flow-canvas" : "flow-canvas empty"}${panningCanvas ? " is-panning" : ""}${layoutPreview ? " is-layout-preview" : ""}`}
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDrop}
             onMouseDown={handleCanvasMouseDown}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") cancelConnection();
+            }}
             onMouseLeave={() => {
               setDraggingNode(null);
               setPanningCanvas(null);
@@ -1675,6 +1957,7 @@ function StepWorkbench({ step, onBack }) {
             onMouseUp={handleCanvasMouseUp}
             onWheel={handleWheel}
             ref={canvasRef}
+            tabIndex="0"
           >
             <div className="zoom-indicator">
               <button aria-label="缩小画布" onClick={() => changeZoom(-1)} type="button">
@@ -1699,29 +1982,36 @@ function StepWorkbench({ step, onBack }) {
                         </marker>
                       </defs>
                       {connections.map((connection) => {
-                        const node = nodes.find((item) => item.id === connection.from);
-                        const nextNode = nodes.find((item) => item.id === connection.to);
+                        const node = displayNodes.find((item) => item.id === connection.from);
+                        const nextNode = displayNodes.find((item) => item.id === connection.to);
                         if (!node || !nextNode) return null;
-                        const startX = node.x + 156;
-                        const startY = node.y + (connection.branch === "true" ? 20 : connection.branch === "false" ? 46 : 32);
-                        const endX = nextNode.x;
-                        const endY = nextNode.y + 32;
-                        const curve = Math.max(55, Math.abs(endX - startX) / 2);
+                        const path = buildFlowConnectionPath(node, nextNode, connection);
+                        const labelX = (node.x + nextNode.x + 156) / 2;
+                        const labelY = (node.y + nextNode.y + 64) / 2 - 6;
                         return (
+                          <g key={`${connection.from}-${connection.to}-${connection.branch || "next"}`}>
                           <path
-                            className="flow-connection-path"
-                            d={`M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`}
-                            key={`${connection.from}-${connection.to}-${connection.branch || "next"}`}
+                            className={`flow-connection-path${connection.branch ? ` branch-${connection.branch}` : ""}`}
+                            d={path}
                             markerEnd="url(#flow-arrow)"
                           />
+                          {connection.branch ? <text className="flow-connection-label" x={labelX} y={labelY}>{connection.branch === "true" ? "真" : "假"}</text> : null}</g>
                         );
                       })}
                     </svg>
-                    {nodes.map((node) => (
+                    {displayNodes.map((node) => (
                       <div
                         className={`${selected?.id === node.id ? "flow-node active" : "flow-node"}${connectingFrom?.nodeId === node.id ? " is-connecting" : ""}`}
                         key={node.id}
-                        onMouseDown={(event) => handleNodeMouseDown(event, node)}
+                        onMouseDown={(event) => {
+                          if (connectingFrom) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          } else if (!layoutPreview) handleNodeMouseDown(event, node);
+                        }}
+                        onClick={(event) => {
+                          if ((connectingRef.current || connectingFrom) && !event.target.closest(".branch-picker")) completeConnection(event, node);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") setSelectedNode(node);
                         }}
@@ -1729,25 +2019,25 @@ function StepWorkbench({ step, onBack }) {
                         style={{ borderLeftColor: node.color, left: node.x, top: node.y }}
                         tabIndex="0"
                       >
-                        <button aria-label={`连接到${node.title}`} className="node-port input-port" onClick={(event) => completeConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
                         <span>{node.type}</span>
                         <strong>{node.title}</strong>
                         <small>{node.tag || "未配置"}</small>
                         <em>{node.saved ? "已配置" : "未保存"}</em>
                         {node.type === "条件判断" ? (
                           <>
-                            <button aria-label={`从${node.title}真分支开始连接`} className="node-port output-port condition-true-port" onClick={(event) => startConnection(event, node, "true")} onMouseDown={(event) => event.stopPropagation()} type="button">真</button>
-                            <button aria-label={`从${node.title}假分支开始连接`} className="node-port output-port condition-false-port" onClick={(event) => startConnection(event, node, "false")} onMouseDown={(event) => event.stopPropagation()} type="button">假</button>
+                            {branchPickerNode === node.id ? <div className="branch-picker" role="group" aria-label="选择条件分支">
+                              <strong>选择分支</strong>
+                              <button className="branch-picker-true" onClick={(event) => startConnection(event, node, "true")} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }} type="button">真分支</button>
+                              <button className="branch-picker-false" onClick={(event) => startConnection(event, node, "false")} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }} type="button">假分支</button>
+                            </div> : null}
                           </>
-                        ) : (
-                          <button aria-label={`从${node.title}开始连接`} className="node-port output-port" onClick={(event) => startConnection(event, node)} onMouseDown={(event) => event.stopPropagation()} type="button" />
-                        )}
+                        ) : null}
                       </div>
                     ))}
                   </div>
                 </div>
                 <div className="minimap" aria-hidden="true">
-                  {nodes.map((node) => (
+                  {displayNodes.map((node) => (
                     <span key={node.id} />
                   ))}
                 </div>
@@ -1784,11 +2074,11 @@ function StepWorkbench({ step, onBack }) {
               <div className="node-section-title">节点详情</div>
               <div className="form-field required-field">
                 <span>节点操作</span>
-                <div className="operation-cascader" ref={operationPickerRef}>
+                <div className="operation-dropdown" ref={operationDropdownRef}>
                   <button
-                    aria-expanded={operationMenuOpen}
                     aria-haspopup="listbox"
-                    className={operationMenuOpen ? "operation-cascader-trigger is-open" : "operation-cascader-trigger"}
+                    aria-expanded={operationMenuOpen}
+                    className={operationMenuOpen ? "operation-picker-trigger is-open" : "operation-picker-trigger"}
                     onClick={toggleOperationMenu}
                     type="button"
                   >
@@ -1796,33 +2086,52 @@ function StepWorkbench({ step, onBack }) {
                     <i>⌄</i>
                   </button>
                   {operationMenuOpen ? (
-                    <div className="operation-cascader-menu">
-                      <div className="operation-group-list" role="listbox" aria-label="操作分类">
-                        {availableOperationGroups.map((group) => (
-                          <button
-                            aria-selected={activeGroup.title === group.title}
-                            className={activeGroup.title === group.title ? "active" : ""}
-                            key={group.title}
-                            onClick={() => setActiveOperationGroup(group.title)}
-                            onMouseEnter={() => setActiveOperationGroup(group.title)}
-                            type="button"
-                          >
-                            <span>{operationGroupLabel(group.title)}</span><i>›</i>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="operation-item-list" role="listbox" aria-label={operationGroupLabel(activeGroup.title)}>
-                        {activeGroup.items.map((item) => (
-                          <button
-                            aria-selected={selected.tag === item.tag}
-                            className={selected.tag === item.tag ? "active" : ""}
-                            key={item.tag}
-                            onClick={() => selectOperation(item.tag)}
-                            type="button"
-                          >
-                            {item.name}
-                          </button>
-                        ))}
+                    <div className="operation-dropdown-panel" onKeyDown={handleOperationModalKeyDown}>
+                      <div className="operation-dropdown-body">
+                        <div className="operation-category-tree" role="tree" aria-label="操作分类" tabIndex="0" onKeyDown={handleOperationCategoryKeyDown}>
+                          <div className="operation-category-tree-title">分类</div>
+                          {availableOperationGroups.map((group) => (
+                            <button
+                              aria-selected={activeGroup.title === group.title}
+                              className={`operation-category-item${activeGroup.title === group.title ? " active" : ""}`}
+                              key={group.title}
+                              onClick={() => activateOperationCategory(group.title)}
+                              onMouseEnter={() => setActiveOperationGroup(group.title)}
+                              role="treeitem"
+                              type="button"
+                            >
+                              <span className="operation-category-dot" style={{ background: group.color }} />
+                              <span className="operation-category-label">{operationGroupLabel(group.title)}</span>
+                              <i>›</i>
+                            </button>
+                          ))}
+                        </div>
+                        <div
+                          className="operation-item-panel"
+                          ref={operationItemPanelRef}
+                          role="listbox"
+                          aria-label={`${operationGroupLabel(activeGroup.title)}操作列表`}
+                          tabIndex="0"
+                          onKeyDown={handleOperationItemKeyDown}
+                        >
+                          <div className="operation-item-panel-title">{operationGroupLabel(activeGroup.title)}</div>
+                          <div className="operation-item-scroll">
+                            {activeGroup.items.map((item) => (
+                              <button
+                                aria-selected={selected.tag === item.tag}
+                                className={`operation-item${selected.tag === item.tag ? " selected" : ""}${activeItemTag === item.tag ? " highlighted" : ""}`}
+                                key={item.tag}
+                                onClick={() => selectOperation(item.tag)}
+                                onMouseEnter={() => setActiveItemTag(item.tag)}
+                                role="option"
+                                type="button"
+                              >
+                                <span className="operation-item-name">{item.name}</span>
+                                {selected.tag === item.tag ? <span className="operation-item-current">当前</span> : null}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ) : null}

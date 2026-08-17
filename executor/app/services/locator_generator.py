@@ -9,7 +9,7 @@ from app.models.capture import CaptureCandidate, CaptureLocator, ElementSnapshot
 from app.services.capture_security import contains_secret_text, is_sensitive_key, sanitize_public_url
 
 
-_SCORES = {"testid": 95, "id": 90, "framework": 90, "row-context": 90, "role": 85, "form-label": 95, "label": 82, "attribute": 82, "stable-xpath": 80, "css": 70, "text": 60, "xpath": 40}
+_SCORES = {"testid": 95, "id": 90, "framework": 90, "row-context": 90, "role": 85, "form-label": 95, "label": 82, "attribute": 82, "stable-xpath": 80, "row-index": 55, "css": 70, "text": 60, "xpath": 40}
 _PRIORITY = {strategy: index for index, strategy in enumerate(_SCORES)}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 _CSS_HASH = re.compile(r"^(?:css|sc|emotion|jss|mui)-[a-z0-9_-]{5,}$", re.IGNORECASE)
@@ -18,7 +18,8 @@ _REACT_ID = re.compile(r"^:r[0-9a-z]+:$", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _XPATH_SENSITIVE_ATTRIBUTE = re.compile(r"@\s*(?:value|password|passwd|token|access_token|refresh_token|api[-_]?key|apikey|session|cookie|authorization|secret|client_secret)\b", re.IGNORECASE)
 _STABLE_XPATH = re.compile(r"^//[a-z][a-z0-9-]*\[@(?:data-testid|id|name|aria-label|placeholder)=.+\]$|^//(?:button|a)\[normalize-space\(\.\)=.+\]$|^//div\[not\(contains\(@style, 'display: none'\)\)\]//li\[normalize-space\(\.\)=.+\]$", re.IGNORECASE)
-_ROW_CONTEXT_XPATH = re.compile(r"^//(?:tr|\*\[@role='row'\]|\*\[contains\(concat\(' ', normalize-space\(@class\), ' '\), ' [^']+ '\)\])\[\.//\*\[normalize-space\(\.\)=.+\]\]//(?:button|a)\[normalize-space\(\.\)=.+\]$", re.IGNORECASE)
+_ROW_CONTEXT_XPATH = re.compile(r"^//(?:tr|li|\*\[@role='row'\]|\*\[@role='listitem'\]|\*\[contains\(concat\(' ', normalize-space\(@class\), ' '\), ' [^']+ '\)\])\[\.//\*\[normalize-space\(\.\)=.+\]\]//[a-z][a-z0-9-]*\[normalize-space\(\.\)=.+\]$", re.IGNORECASE)
+_ROW_INDEX_XPATH = re.compile(r"^(?:\((//(?:tr|li|\*\[@role='row'\]|\*\[@role='listitem'\]|\*\[contains\(concat\(' ', normalize-space\(@class\), ' '\), ' [^']+ '\)\]))\)\[[0-9]+\]//[a-z][a-z0-9-]*\[normalize-space\(\.\)=.+\]|\((//(?:tr|li|\*\[@role='row'\]|\*\[@role='listitem'\]|\*\[contains\(concat\(' ', normalize-space\(@class\), ' '\), ' [^']+ '\)\])\[\.//\*\[normalize-space\(\.\)=.+\]\]//[a-z][a-z0-9-]*\[normalize-space\(\.\)=.+\])\)\[[0-9]+\]|\(//[a-z][a-z0-9-]*\[normalize-space\(\.\)=.+\]\)\[[0-9]+\])$", re.IGNORECASE)
 _CSS_SENSITIVE_ATTRIBUTE = re.compile(r"\[\s*(?:value|password|passwd|token|access_token|refresh_token|api[-_]?key|apikey|session|cookie|authorization|secret|client_secret)\b", re.IGNORECASE)
 
 
@@ -49,7 +50,7 @@ def is_dynamic_token(value: str) -> bool:
 
 def score_locator(strategy: str, unique: bool, depth: int) -> int:
     """基线评分减去非唯一性和过深 DOM 的惩罚，结果受限于 0..100。"""
-    semantic_strategy = strategy in {"testid", "id", "framework", "row-context", "role", "form-label", "label", "attribute", "stable-xpath"}
+    semantic_strategy = strategy in {"testid", "id", "framework", "row-context", "role", "form-label", "label", "attribute", "stable-xpath", "row-index"}
     depth_penalty = 0 if unique and semantic_strategy else max(depth - 5, 0) * 2
     score = _SCORES.get(strategy, 0) - (0 if unique else 50) - depth_penalty
     return max(0, min(100, score))
@@ -130,8 +131,9 @@ def _locator_seeds(
     if xpath:
         stable_xpath = bool(_STABLE_XPATH.fullmatch(xpath))
         row_context_xpath = bool(_ROW_CONTEXT_XPATH.fullmatch(xpath))
-        if stable_xpath or row_context_xpath or _is_safe_xpath(xpath):
-            strategy = "row-context" if row_context_xpath else "stable-xpath" if stable_xpath else "xpath"
+        row_index_xpath = bool(_ROW_INDEX_XPATH.fullmatch(xpath))
+        if row_context_xpath or row_index_xpath or stable_xpath or _is_safe_xpath(xpath):
+            strategy = "row-context" if row_context_xpath else "row-index" if row_index_xpath else "stable-xpath" if stable_xpath else "xpath"
             seeds.append(_LocatorSeed(strategy, "xpath", xpath))
         else:
             rejected.append("已过滤不安全定位器")
@@ -163,7 +165,7 @@ def _build_locators(seeds: list[_LocatorSeed], snapshot: ElementSnapshot) -> lis
 
 
 def _match_count(snapshot: ElementSnapshot, strategy: str, value: str) -> int | None:
-    match_key = {"form-label": "xpath", "stable-xpath": "xpath", "row-context": "xpath", "framework": "css", "attribute": "css"}.get(strategy, strategy)
+    match_key = {"form-label": "xpath", "stable-xpath": "xpath", "row-context": "xpath", "row-index": "xpath", "framework": "css", "attribute": "css"}.get(strategy, strategy)
     raw = snapshot.locator_matches.get(
         f"{strategy}:{value}",
         snapshot.locator_matches.get(f"{match_key}:{value}", snapshot.locator_matches.get(value)),

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TestCasesPage } from "./TestCasesPage.js";
-import { UIAutomationPage } from "./UIAutomationPage.js";
+import { beautifyFlowNodes, buildDraftFlowNode, buildFlowConnectionPath, canConnectToTarget, StepWorkbench, UIAutomationPage } from "./UIAutomationPage.js";
 
 function apiResponse(data) {
   return Promise.resolve({
@@ -532,5 +532,163 @@ describe("UIAutomationPage 测试用例页", () => {
     const invalidFile = new File([JSON.stringify({ item: [] })], "invalid.json", { type: "application/json" });
     fireEvent.change(screen.getByLabelText("导入"), { target: { files: [invalidFile] } });
     expect(await screen.findByText("导入文件必须是数组或包含 items 数组")).toBeInTheDocument();
+  });
+});
+
+describe("画布自动布局", () => {
+  const nodesDoNotOverlap = (nodes) => nodes.every((node, index) => nodes.slice(index + 1).every((other) => (
+    node.x + 156 <= other.x || other.x + 156 <= node.x || node.y + 64 <= other.y || other.y + 64 <= node.y
+  )));
+
+  it("将多个未连接节点放入自适应矩阵，单个节点保持区域居中", () => {
+    const looseNodes = Array.from({ length: 5 }, (_, index) => ({ id: index + 1, type: "元素操作" }));
+    const matrix = beautifyFlowNodes(looseNodes, [], { width: 1200, height: 720 });
+    const xs = new Set(matrix.nodes.map((node) => node.x));
+    expect(xs.size).toBeGreaterThan(1);
+    expect(nodesDoNotOverlap(matrix.nodes)).toBe(true);
+
+    const single = beautifyFlowNodes([{ id: 1, type: "元素操作" }], [], { width: 1200, height: 720 });
+    expect(single.nodes[0].x).toBe(24);
+    expect(single.nodes[0].y).toBe(80);
+  });
+
+  it("将连续线性流程按稳定顺序填充为多列矩阵", () => {
+    const nodes = Array.from({ length: 9 }, (_, index) => ({ id: index + 1, type: "元素操作" }));
+    const connections = nodes.slice(1).map((node, index) => ({ from: index + 1, to: node.id }));
+    const result = beautifyFlowNodes(nodes, connections, { width: 1200, height: 720 });
+    expect(new Set(result.nodes.map((node) => node.x)).size).toBeGreaterThanOrEqual(2);
+    expect(new Set(result.nodes.map((node) => node.y)).size).toBeGreaterThanOrEqual(2);
+    expect(nodesDoNotOverlap(result.nodes)).toBe(true);
+    expect(result.nodes.map((node) => node.id)).toEqual(nodes.map((node) => node.id));
+    expect(result.nodes[0].x).toBe(24);
+    expect(result.nodes[0].y).toBe(24);
+    expect(result.nodes[5].y - result.nodes[0].y).toBeGreaterThanOrEqual(64 + 80);
+    const wider = beautifyFlowNodes(nodes, connections, { width: 1800, height: 1000 });
+    expect(wider.nodes[0].x).toBe(24);
+    expect(wider.nodes[0].y).toBe(24);
+    const secondRow = result.nodes.filter((node) => node.y === result.nodes[5].y);
+    expect(secondRow.map((node) => node.x)).toEqual([...secondRow.map((node) => node.x)].sort((a, b) => b - a));
+    const crossRowPath = buildFlowConnectionPath(result.nodes[4], result.nodes[5], { from: 5, to: 6 });
+    expect(crossRowPath).toContain("Q");
+    expect(crossRowPath).toContain("V");
+  });
+
+  it("按空间选择方向，整理条件分支和未连接节点且不改变输入", () => {
+    const nodes = [
+      { id: 1, type: "条件判断", x: 400, y: 400 },
+      { id: 2, type: "元素操作", x: 500, y: 400 },
+      { id: 3, type: "元素操作", x: 600, y: 400 },
+      { id: 4, type: "元素操作", x: 700, y: 400 }
+    ];
+    const connections = [{ from: 1, to: 2, branch: "true" }, { from: 1, to: 3, branch: "false" }];
+    const original = JSON.parse(JSON.stringify(nodes));
+    const horizontal = beautifyFlowNodes(nodes, connections, { width: 1200, height: 720 });
+    const vertical = beautifyFlowNodes(nodes, connections, { width: 350, height: 300 });
+    expect(horizontal.direction).toBe("horizontal");
+    expect(vertical.direction).toBe("vertical");
+    expect(horizontal.nodes).toHaveLength(nodes.length);
+    const horizontalPositions = horizontal.nodes.map((node) => ({ x: node.x, y: node.y }));
+    const verticalPositions = vertical.nodes.map((node) => ({ x: node.x, y: node.y }));
+    expect(horizontal.nodes.find((node) => node.id === 4).y).toBeGreaterThan(horizontal.nodes.find((node) => node.id === 2).y);
+    expect(Math.min(...horizontalPositions.map((position) => position.x))).toBeGreaterThan(0);
+    expect(Math.min(...horizontalPositions.map((position) => position.y))).toBeGreaterThan(0);
+    [horizontalPositions, verticalPositions].forEach((positions) => {
+      positions.forEach((position, index) => positions.slice(index + 1).forEach((other) => {
+        expect(position.x + 156 <= other.x || other.x + 156 <= position.x || position.y + 64 <= other.y || other.y + 64 <= position.y).toBe(true);
+      }));
+    });
+    expect(nodesDoNotOverlap(horizontal.nodes)).toBe(true);
+    expect(nodes).toEqual(original);
+    expect(connections).toEqual([{ from: 1, to: 2, branch: "true" }, { from: 1, to: 3, branch: "false" }]);
+  });
+});
+
+describe("未保存画布节点", () => {
+  it("创建后立即具有稳定 ID、位置并保持未保存状态", () => {
+    const node = buildDraftFlowNode({ label: "元素操作", color: "#123456" }, "draft-7", 180, 120);
+    expect(node).toMatchObject({ id: "draft-7", x: 180, y: 120, saved: false, type: "元素操作" });
+  });
+
+  it("新建草稿节点不自动改变既有连线", () => {
+    const connections = [{ from: 1, to: 2 }];
+    const draft = buildDraftFlowNode({ label: "元素操作", color: "#123456" }, 3, 180, 120);
+    expect(connections).toEqual([{ from: 1, to: 2 }]);
+    expect(draft.saved).toBe(false);
+  });
+});
+
+describe("直接点击节点连线", () => {
+  it("允许点击目标卡片完成连接并拒绝源节点", () => {
+    expect(canConnectToTarget({ nodeId: 1, branch: "" }, { id: 2 })).toBe(true);
+    expect(canConnectToTarget({ nodeId: 1, branch: "" }, { id: 1 })).toBe(false);
+    expect(canConnectToTarget(null, { id: 2 })).toBe(false);
+  });
+
+  it("真实渲染中点击连线进入模式并点击目标节点完成连接", async () => {
+    const step = {
+      id: 40,
+      name: "演示步骤",
+      description: JSON.stringify({ schema: "synapse-flow-v1", nodes: [
+        { id: 1, type: "元素操作", title: "起点", x: 60, y: 80, saved: true, values: {}, params: [] },
+        { id: 2, type: "元素操作", title: "目标", x: 320, y: 80, saved: true, values: {}, params: [] }
+      ], connections: [] })
+    };
+    render(<StepWorkbench step={step} onBack={vi.fn()} />);
+    fireEvent.mouseDown(screen.getAllByRole("button", { name: /元素操作起点/ })[0]);
+    fireEvent.mouseUp(screen.getAllByRole("button", { name: /元素操作起点/ })[0]);
+    expect((await screen.findAllByText("已选择「起点」，请直接点击目标节点")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole("button", { name: /元素操作目标/ })[0]);
+    expect(screen.getByText("连线 1")).toBeInTheDocument();
+    expect(document.querySelectorAll(".flow-connection-path")).toHaveLength(1);
+    fireEvent.click(document.querySelector(".flow-canvas"));
+    expect(screen.queryByText("已选择「起点」，请直接点击目标节点")).not.toBeInTheDocument();
+  });
+});
+
+describe("节点操作选择器", () => {
+  const step = {
+    id: 41,
+    name: "操作选择步骤",
+    description: JSON.stringify({ schema: "synapse-flow-v1", nodes: [
+      { id: 1, type: "元素操作", title: "起点", x: 60, y: 80, saved: true, values: {}, params: [] }
+    ], connections: [] })
+  };
+
+  beforeEach(() => cleanup());
+  afterEach(() => cleanup());
+
+  function selectNode() {
+    const nodeEl = screen.getAllByText("起点").map((el) => el.closest(".flow-node")).find(Boolean);
+    fireEvent.mouseDown(nodeEl);
+    fireEvent.mouseUp(nodeEl);
+  }
+
+  it("点击触发弹出下拉面板，切换分类并选择操作回填", async () => {
+    render(<StepWorkbench step={step} onBack={vi.fn()} />);
+    selectNode();
+    fireEvent.click(screen.getByRole("button", { name: /请选择节点操作/ }));
+    const listbox = screen.getByRole("listbox", { name: /操作列表/ });
+    expect(listbox).toBeInTheDocument();
+    expect(within(listbox).getByText("强制等待")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("treeitem", { name: /元素操作/ }));
+    expect(within(listbox).getByText("元素单击")).toBeInTheDocument();
+
+    fireEvent.click(within(listbox).getByRole("option", { name: /元素单击/ }));
+    expect(screen.getByRole("button", { name: /元素操作 \/ 元素单击/ })).toBeInTheDocument();
+  });
+
+  it("Enter 确认选中高亮项，ESC 关闭面板", async () => {
+    render(<StepWorkbench step={step} onBack={vi.fn()} />);
+    selectNode();
+    fireEvent.click(screen.getByRole("button", { name: /请选择节点操作/ }));
+    const listbox = screen.getByRole("listbox", { name: /操作列表/ });
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(screen.getByRole("button", { name: /浏览器操作 \/ 强制等待/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /浏览器操作 \/ 强制等待/ }));
+    const panel = document.querySelector(".operation-dropdown-panel");
+    fireEvent.keyDown(panel, { key: "Escape" });
+    expect(document.querySelector(".operation-dropdown-panel")).toBeNull();
   });
 });

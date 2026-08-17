@@ -46,6 +46,11 @@ class HeartbeatClient:
         status = self._post("/api/executors/register", payload, token, notify_auth_failure=False)
         if status == 200:
             self._auth_failure_notified.clear()
+            if token:
+                settings.executor_shared_token = token
+            # 连接成功后确保心跳循环重新运行：既覆盖「之前 401 已停止循环」的情况，
+            # 也覆盖「首次连接」的情况；若循环仍在运行，start() 会自动跳过重复启动。
+            self.start()
             return True, "连接成功"
         if status == 401:
             return False, "Token 无效或已失效"

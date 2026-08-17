@@ -2907,6 +2907,45 @@ html[data-code-font-size] .execution-log-output {
   --line: #ded9ce;
 }
 
+/* DeepSeek 极简：蓝灰基调、圆润留白、柔和阴影分层（默认主题） */
+:root[data-theme="deepseek"] {
+  color-scheme: light;
+  --primary: #3964fe;
+  --primary-strong: #4d6bfe;
+  --primary-hover: #5686fe;
+  --primary-soft: #edf3fe;
+  --primary-soft-hover: #e4edfd;
+  --primary-border: #b7c8fe;
+  --brand-logo: #4d6bfe;
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --panel-muted: #f7f8fa;
+  --panel-soft: #f7f8fa;
+  --card-bg: #ffffff;
+  --text: #0f1115;
+  --muted: #61666b;
+  --line: rgba(0, 0, 0, .08);
+  --line-strong: rgba(0, 0, 0, .16);
+  --border-color: rgba(0, 0, 0, .08);
+  --danger: #e5484d;
+  --success: #2f9e68;
+  --warning: #d98a2b;
+  --radius: 10px;
+  --radius-btn: 9999px;
+  --radius-card: 16px;
+  --radius-input: 10px;
+  --radius-menu: 12px;
+  --bg-hover: rgba(38, 49, 72, .06);
+  --text-secondary: #61666b;
+  --text-tertiary: #81858c;
+  --text-caption: #adb2b8;
+  --focus-ring: 0 0 0 2px #4d6bfe;
+  --shadow-card: 0 4px 12px 0 rgba(0, 0, 0, .02), 0 2px 8px 0 rgba(0, 0, 0, .04);
+  --shadow-pop: 0 0 1px 0 rgba(0, 0, 0, .2), 0 12px 32px 0 rgba(0, 0, 0, .08);
+  --shadow-float: 0 0 1px 0 rgba(0, 0, 0, .2), 0 12px 32px 0 rgba(0, 0, 0, .08);
+  --shadow-panel: 0 4px 12px 0 rgba(0, 0, 0, .02), 0 2px 8px 0 rgba(0, 0, 0, .04);
+}
+
 .page-header {
   align-items: flex-end;
   display: flex;
@@ -3030,7 +3069,7 @@ textarea:focus-visible {
 .api-case-inspector .text-input { font-size: 13px; }
 .api-case-overrides { font-size: max(12px, var(--code-font-size)); line-height: 1.6; }
 
-.theme-choice-grid { grid-template-columns: repeat(5, minmax(150px, 1fr)); }
+.theme-choice-grid { grid-template-columns: repeat(6, minmax(150px, 1fr)); }
 .theme-preview-blueprint { background: #f4f7fb; }
 .theme-preview-blueprint i { background: #14213d; }
 .theme-preview-blueprint b { background: #155eef; }
@@ -3051,6 +3090,10 @@ textarea:focus-visible {
 .theme-preview-industrial i { background: #2b2925; }
 .theme-preview-industrial b { background: #b45309; }
 .theme-preview-industrial em { background: #ded9ce; }
+.theme-preview-deepseek { background: #ffffff; }
+.theme-preview-deepseek i { background: #0f1115; }
+.theme-preview-deepseek b { background: #3964fe; }
+.theme-preview-deepseek em { background: rgba(0, 0, 0, .08); }
 
 @media (max-width: 1180px) {
   .theme-choice-grid { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
@@ -3671,3 +3714,1001 @@ body,
 @media (max-width: 900px) { .product-asset-stats { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .product-overview-cards, .product-asset-stats { grid-template-columns: 1fr 1fr; } .product-overview-card { min-height: 126px; padding: 14px; } }
 @media (max-width: 640px) { .page-element-capture-meta { grid-template-columns: 1fr; } .page-element-version-list article { grid-template-columns: 1fr; } }
+
+/* ============================================================
+   DeepSeek 极简主题 —— 组件级样式落地
+   蓝灰基调文字、胶囊实心主按钮、幽灵次按钮、纯白 + 细边框
+   + 柔和阴影分层、hover 6% 蓝灰、2px 品牌蓝焦点环。
+   在「DeepSeek 识别度」与「后台高信息密度」之间取平衡。
+   ============================================================ */
+
+/* 主体背景：极浅蓝灰，去除非品牌径向渐变 */
+[data-theme="deepseek"] body,
+[data-theme="deepseek"] .app-shell,
+[data-theme="deepseek"] .workspace,
+[data-theme="deepseek"] .main { background: var(--bg); }
+[data-theme="deepseek"] .workspace { background-image: none; }
+
+/* 侧边栏与导航 */
+[data-theme="deepseek"] .sidebar { background: #ffffff; border-color: var(--line); }
+[data-theme="deepseek"] .brand-mark { background: var(--brand-logo); border-radius: 9px; }
+[data-theme="deepseek"] .brand-copy strong { color: var(--text); }
+[data-theme="deepseek"] .brand-copy small,
+[data-theme="deepseek"] .sidebar-footer { color: var(--muted); }
+[data-theme="deepseek"] .menu-button,
+[data-theme="deepseek"] .menu-child {
+  color: var(--text-secondary);
+  border-radius: var(--radius-menu);
+}
+[data-theme="deepseek"] .menu-button:hover,
+[data-theme="deepseek"] .menu-child:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  transform: none;
+}
+[data-theme="deepseek"] .menu-button.active { color: var(--primary); background: transparent; }
+[data-theme="deepseek"] .menu-child.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  box-shadow: none;
+  font-weight: 600;
+}
+[data-theme="deepseek"] .menu-child.active::before { background: var(--primary); }
+
+/* 顶栏：半透明白 + 细边框，去掉高光描边 */
+[data-theme="deepseek"] .topbar {
+  background: rgb(255 255 255 / 82%);
+  border-bottom-color: var(--line);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+}
+[data-theme="deepseek"] .topbar-icon,
+[data-theme="deepseek"] .mobile-menu-button { color: var(--text-secondary); border-radius: 9px; }
+[data-theme="deepseek"] .topbar-icon:hover,
+[data-theme="deepseek"] .mobile-menu-button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+[data-theme="deepseek"] .user-avatar { background: var(--primary); border-radius: 9px; }
+
+/* 卡片与面板：16px 圆角 + 细边框 + 柔和阴影 */
+[data-theme="deepseek"] .resource-panel,
+[data-theme="deepseek"] .table-panel,
+[data-theme="deepseek"] .module-nav-panel,
+[data-theme="deepseek"] .module-table-panel,
+[data-theme="deepseek"] .step-workbench,
+[data-theme="deepseek"] .loop-engineering,
+[data-theme="deepseek"] .state-block,
+[data-theme="deepseek"] .settings-panel,
+[data-theme="deepseek"] .metric-card {
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .metric-card { background: #ffffff; }
+[data-theme="deepseek"] .metric-card:hover {
+  transform: none;
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-pop);
+}
+[data-theme="deepseek"] .metric-icon { border-radius: 10px; }
+
+/* 弹窗 */
+[data-theme="deepseek"] .modal-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+[data-theme="deepseek"] .modal-card .modal-actions { background: #f7f8fa; }
+
+/* 按钮：胶囊圆角；主按钮实心蓝 + hover 变亮；次按钮幽灵型 */
+[data-theme="deepseek"] .primary-button,
+[data-theme="deepseek"] .success-button,
+[data-theme="deepseek"] .danger-button,
+[data-theme="deepseek"] .icon-text-button {
+  border-radius: var(--radius-btn);
+}
+[data-theme="deepseek"] .primary-button {
+  color: #ffffff;
+  background: var(--primary);
+  border-color: var(--primary);
+  box-shadow: none;
+}
+[data-theme="deepseek"] .primary-button:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+  box-shadow: 0 6px 16px rgb(57 100 254 / 22%);
+  transform: none;
+}
+[data-theme="deepseek"] .success-button,
+[data-theme="deepseek"] .danger-button { color: #ffffff; }
+[data-theme="deepseek"] .success-button:hover { background: color-mix(in srgb, var(--success) 88%, white); border-color: color-mix(in srgb, var(--success) 88%, white); }
+[data-theme="deepseek"] .danger-button:hover { background: color-mix(in srgb, var(--danger) 88%, white); border-color: color-mix(in srgb, var(--danger) 88%, white); }
+[data-theme="deepseek"] .icon-text-button {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: transparent;
+}
+[data-theme="deepseek"] .icon-text-button:hover {
+  color: var(--primary);
+  background: var(--primary-soft-hover);
+  border-color: transparent;
+}
+[data-theme="deepseek"] .link-button { color: var(--primary); }
+[data-theme="deepseek"] .link-button:hover { color: var(--primary-hover); text-decoration: none; }
+
+/* 输入框与文本域：10px 圆角，focus 显示 2px 品牌蓝焦点环 */
+[data-theme="deepseek"] .text-input,
+[data-theme="deepseek"] .text-area,
+[data-theme="deepseek"] .login-card input {
+  background: #f7f8fa;
+  border-color: transparent;
+  border-radius: var(--radius-input);
+}
+[data-theme="deepseek"] .text-input:hover,
+[data-theme="deepseek"] .text-area:hover,
+[data-theme="deepseek"] .login-card input:hover {
+  background: #f2f3f5;
+  border-color: transparent;
+}
+[data-theme="deepseek"] .text-input:focus,
+[data-theme="deepseek"] .text-area:focus,
+[data-theme="deepseek"] .login-card input:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+
+/* 表格：轻量表头，行 hover 6% 蓝灰 */
+[data-theme="deepseek"] .table-wrap { border-radius: var(--radius-card); }
+[data-theme="deepseek"] .data-table th {
+  color: var(--text-secondary);
+  background: #f7f8fa;
+  box-shadow: inset 0 -1px var(--line);
+  font-weight: 600;
+}
+[data-theme="deepseek"] .data-table td { color: var(--text); }
+[data-theme="deepseek"] .data-table tbody tr:hover td { background: var(--bg-hover); }
+
+/* 焦点环：全局 2px 品牌蓝（输入框已用 box-shadow 环处理） */
+[data-theme="deepseek"] :focus-visible {
+  outline: 2px solid #4d6bfe;
+  outline-offset: 2px;
+}
+[data-theme="deepseek"] .text-input:focus-visible,
+[data-theme="deepseek"] .text-area:focus-visible { outline: none; }
+
+/* 登录入口：蓝灰极简，主蓝 logo 与胶囊提交按钮 */
+[data-theme="deepseek"] .login-view { background: #f7f8fa !important; }
+[data-theme="deepseek"] .login-grid { opacity: .5; background-image: linear-gradient(rgb(57 100 254 / 7%) 1px, transparent 1px), linear-gradient(90deg, rgb(57 100 254 / 7%) 1px, transparent 1px); }
+[data-theme="deepseek"] .login-view::before { background: radial-gradient(ellipse, rgb(57 100 254 / 10%), transparent 68%); }
+[data-theme="deepseek"] .login-brand { color: var(--text); }
+[data-theme="deepseek"] .login-brand small { color: var(--text-tertiary); }
+[data-theme="deepseek"] .login-logo { background: var(--brand-logo); border-radius: 9px; }
+[data-theme="deepseek"] .login-view .login-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .login-card-heading > span { color: var(--text-tertiary); }
+[data-theme="deepseek"] .login-card-heading h1 { color: var(--text); }
+[data-theme="deepseek"] .login-card-heading p { color: var(--muted); }
+[data-theme="deepseek"] .login-view .login-card label { color: var(--text-secondary); }
+[data-theme="deepseek"] .login-view .login-input {
+  color: var(--text-tertiary);
+  background: #f7f8fa;
+  border: 1px solid transparent;
+  border-radius: var(--radius-input);
+}
+[data-theme="deepseek"] .login-view .login-input:hover { border-color: transparent; background: #f2f3f5; }
+[data-theme="deepseek"] .login-view .login-input:focus-within {
+  color: var(--text);
+  background: #ffffff;
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+[data-theme="deepseek"] .login-view .login-input input { color: var(--text); }
+[data-theme="deepseek"] .login-view .login-input input::placeholder { color: var(--text-caption); }
+[data-theme="deepseek"] .login-view .login-submit {
+  color: #ffffff;
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-btn);
+}
+[data-theme="deepseek"] .login-view .login-submit:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+[data-theme="deepseek"] .login-demo-account { color: var(--text-tertiary); border-top-color: var(--line); }
+[data-theme="deepseek"] .login-demo-account code { color: var(--text-secondary); }
+[data-theme="deepseek"] .login-footer { color: var(--text-caption); }
+[data-theme="deepseek"] .login-footer span { color: var(--text-secondary); }
+
+/* ============================================================
+   第二阶段：DeepSeek 极简骨架精修
+   侧边栏宽度 / 品牌区 / 菜单 / 顶栏 / 内容区 / 页面头部
+   + 统一 hover 查漏（6% 蓝灰）。均限定 deepseek 作用域。
+   ============================================================ */
+
+/* 桌面端侧边栏清爽比例（移动端沿用原有单列布局） */
+@media (min-width: 901px) {
+  [data-theme="deepseek"] .app-shell { grid-template-columns: 250px minmax(0, 1fr); }
+}
+
+/* 品牌区：简洁 logo、细分隔、蓝灰文字层级 */
+[data-theme="deepseek"] .brand {
+  height: 64px;
+  padding-inline: 20px;
+  border-bottom: 1px solid var(--line);
+}
+[data-theme="deepseek"] .brand-mark {
+  transform: none;
+  border-radius: 10px;
+  background: var(--brand-logo);
+}
+[data-theme="deepseek"] .brand-mark::before,
+[data-theme="deepseek"] .brand-mark::after,
+[data-theme="deepseek"] .brand-mark span { display: none; }
+[data-theme="deepseek"] .brand-copy strong {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 680;
+  letter-spacing: -.02em;
+}
+[data-theme="deepseek"] .brand-copy small {
+  color: var(--text-caption);
+  font-size: 8px;
+  letter-spacing: .14em;
+}
+
+/* 菜单：克制尺寸与圆角，层级缩进清晰 */
+[data-theme="deepseek"] .menu-tree { padding: 10px 12px; }
+[data-theme="deepseek"] .menu-button {
+  min-height: 40px;
+  padding-inline: 12px;
+  border-radius: var(--radius-menu);
+  font-size: 14px;
+  font-weight: 600;
+}
+[data-theme="deepseek"] .menu-child {
+  min-height: 36px;
+  border-radius: var(--radius-menu);
+  font-size: 13px;
+}
+[data-theme="deepseek"] .menu-chevron { color: var(--text-tertiary); }
+[data-theme="deepseek"] .menu-button.expanded .menu-chevron { color: var(--text-secondary); }
+
+/* 顶栏：清爽高度、蓝灰面包屑层级 */
+[data-theme="deepseek"] .main { grid-template-rows: 64px minmax(0, 1fr); }
+[data-theme="deepseek"] .topbar { padding-inline: 24px; }
+[data-theme="deepseek"] .breadcrumb { color: var(--text-secondary); font-size: 13px; }
+[data-theme="deepseek"] .breadcrumb svg:first-child { color: var(--text-tertiary); }
+[data-theme="deepseek"] .user-profile { color: var(--text-secondary); }
+
+/* 页面头部：eyebrow 品牌蓝、标题近黑、描述蓝灰 */
+[data-theme="deepseek"] .page-eyebrow {
+  color: var(--brand-logo);
+  font-weight: 700;
+  letter-spacing: .1em;
+}
+[data-theme="deepseek"] .page-header h1,
+[data-theme="deepseek"] .api-case-editor-header h1 {
+  color: #0f1115;
+  font-weight: 680;
+  letter-spacing: -.03em;
+}
+[data-theme="deepseek"] .page-header p { color: var(--text-secondary); }
+
+/* hover 查漏：统一 6% 蓝灰微变（覆盖分页、通知、弹窗关闭等通用控件） */
+[data-theme="deepseek"] .pager-button { color: var(--text-secondary); }
+[data-theme="deepseek"] .pager-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+[data-theme="deepseek"] .notification-header button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+[data-theme="deepseek"] .notification-item:hover { background: var(--bg-hover); }
+[data-theme="deepseek"] .modal-close:hover { color: var(--text); }
+
+/* ============================================================
+   执行器配置页：执行器卡片布局（通用作用域，随主题变量适配）
+   状态修饰类：is-online / is-pending / is-offline
+   ============================================================ */
+.executor-status-panel .panel-header {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-description {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.executor-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 14px;
+}
+.executor-card {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: border-color 160ms ease;
+}
+.executor-card::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--muted);
+  content: "";
+  opacity: .4;
+}
+.executor-card.is-online::before { background: var(--success); opacity: 1; }
+.executor-card.is-pending::before { background: var(--warning); opacity: 1; }
+.executor-card.is-offline::before { background: var(--muted); opacity: 1; }
+.executor-card:hover { border-color: var(--line-strong); }
+
+.executor-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.executor-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.executor-name-cell > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.executor-name-cell strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.executor-name-cell small {
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px/1.4 var(--code-font, Consolas, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.executor-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 9px;
+}
+
+.executor-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.executor-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.executor-state.is-online { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.executor-state.is-pending { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.executor-state.is-offline { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+
+.executor-load-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.executor-load-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--panel-muted, #f8fafc);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.executor-load-grid span { color: var(--muted); font-size: 11px; }
+.executor-load-grid strong { color: var(--text); font: 650 20px/1.1 ui-monospace, "SFMono-Regular", Consolas, monospace; }
+
+.executor-card-detail { display: grid; gap: 8px; }
+.executor-card-detail > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.executor-card-detail span { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+.executor-card-detail strong { color: var(--text); font-size: 12px; }
+.executor-endpoint {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.executor-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.executor-card-footer > span { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+.executor-capabilities { display: flex; flex-wrap: wrap; gap: 6px; }
+.executor-capabilities span {
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  background: var(--panel-muted, #f8fafc);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.executor-token-zone {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel-muted, #f8fafc);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.executor-token-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.executor-token-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.executor-token-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.executor-token-result code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.executor-token-result button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.executor-token-result button:hover {
+  color: var(--text);
+  background: var(--bg-hover, rgba(0, 0, 0, .06));
+  border-color: var(--line-strong);
+}
+.executor-token-zone > small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.executor-empty {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 48px 16px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--bg);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.executor-create-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--primary-soft);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.executor-create-hint svg { flex: 0 0 auto; color: var(--primary); }
+
+.executor-create-modal { width: min(480px, calc(100vw - 32px)); }
+.executor-create-modal .modal-header > div { display: grid; gap: 3px; }
+.executor-create-modal .modal-header p { margin: 0; color: var(--muted); font-size: 12px; }
+.executor-create-modal form { display: grid; gap: 16px; padding: 22px; }
+.executor-create-modal .modal-actions {
+  margin: 0 -22px -22px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--line);
+}
+
+.spin-icon { animation: spin .8s linear infinite; }
+
+/* ============================================================
+   DeepSeek 精修：执行器卡片圆角 / 柔和阴影 / hover 描边
+   ============================================================ */
+[data-theme="deepseek"] .executor-card {
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .executor-card:hover {
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-card);
+}
+
+/* ============================================================
+   第三阶段：AI 工作台 DeepSeek 精修
+   替换紫色/绿色硬编码为品牌蓝 + 蓝灰文字 + 柔和状态色。
+   仅覆盖可样式化类名；服务商标识色（.ai-model-card-provider
+   的内联 color）属第三方品牌标识，予以保留。
+   ============================================================ */
+
+/* 页面头部与标题 */
+[data-theme="deepseek"] .ai-page-title h2 { color: var(--text); }
+[data-theme="deepseek"] .ai-title-icon { color: var(--primary); }
+[data-theme="deepseek"] .ai-page-desc { color: var(--muted); }
+[data-theme="deepseek"] .ai-page-body { background: var(--bg); }
+
+/* 能力卡片（FeatureCard） */
+[data-theme="deepseek"] .ai-card {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-card:hover {
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-card-icon-wrap {
+  background: var(--primary-soft) !important;
+  color: var(--primary) !important;
+}
+[data-theme="deepseek"] .ai-card-title-wrap h3 { color: var(--text); }
+[data-theme="deepseek"] .ai-card-desc { color: var(--muted); }
+[data-theme="deepseek"] .ai-card-feature { color: var(--text-secondary); }
+[data-theme="deepseek"] .ai-card-feature svg { color: var(--primary); }
+
+/* 能力徽章（规划中 / 开发中 / 已完成） */
+[data-theme="deepseek"] .ai-badge-plan { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
+[data-theme="deepseek"] .ai-badge-dev { background: var(--primary-soft); color: var(--primary); }
+[data-theme="deepseek"] .ai-badge-done { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+
+/* Mock 对话/代码预览 */
+[data-theme="deepseek"] .ai-mock-chat,
+[data-theme="deepseek"] .ai-mock-code {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+}
+[data-theme="deepseek"] .ai-mock-code-header { color: var(--muted); }
+[data-theme="deepseek"] .ai-mock-msg.user { background: var(--primary); color: #ffffff; }
+[data-theme="deepseek"] .ai-mock-msg.bot { background: var(--panel-muted); color: var(--text); }
+[data-theme="deepseek"] .ai-mock-code .ai-mock-suggestions {
+  background: color-mix(in srgb, var(--success) 8%, var(--panel));
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--line));
+}
+
+/* 总览统计 */
+[data-theme="deepseek"] .ai-overview-stat {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-overview-stat strong { color: var(--text); }
+[data-theme="deepseek"] .ai-overview-stat span { color: var(--muted); }
+[data-theme="deepseek"] .ai-overview-stat:nth-child(1) .ai-overview-icon { background: var(--primary-soft) !important; color: var(--primary) !important; }
+[data-theme="deepseek"] .ai-overview-stat:nth-child(2) .ai-overview-icon { background: color-mix(in srgb, var(--warning) 14%, transparent) !important; color: var(--warning) !important; }
+[data-theme="deepseek"] .ai-overview-stat:nth-child(3) .ai-overview-icon { background: color-mix(in srgb, var(--success) 14%, transparent) !important; color: var(--success) !important; }
+
+/* 加载与错误 */
+[data-theme="deepseek"] .ai-loading { color: var(--muted); }
+[data-theme="deepseek"] .ai-error { color: var(--danger); }
+[data-theme="deepseek"] .ai-toast-error {
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  color: var(--danger);
+}
+[data-theme="deepseek"] .ai-toast-error button { color: var(--danger); }
+[data-theme="deepseek"] .ai-toast-error button:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+/* 模型管理 */
+[data-theme="deepseek"] .ai-model-empty-state p { color: var(--muted); }
+[data-theme="deepseek"] .ai-model-empty-state span { color: var(--text-tertiary); }
+[data-theme="deepseek"] .ai-model-card {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-model-card:hover { border-color: var(--primary-border); }
+[data-theme="deepseek"] .ai-model-card.enabled {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-model-card-name { color: var(--text); }
+[data-theme="deepseek"] .ai-model-card-id { color: var(--text-tertiary); }
+[data-theme="deepseek"] .ai-model-card-actions .icon-text-button { color: var(--text-tertiary); background: transparent; border-color: transparent; }
+[data-theme="deepseek"] .ai-model-card-actions .icon-text-button:hover { color: var(--text); background: var(--bg-hover); }
+[data-theme="deepseek"] .ai-model-del-btn:hover { color: var(--danger) !important; background: color-mix(in srgb, var(--danger) 8%, transparent); }
+[data-theme="deepseek"] .ai-status-dot.on { background: var(--success); }
+[data-theme="deepseek"] .ai-status-dot.off { background: var(--line-strong); }
+[data-theme="deepseek"] .ai-status-text { color: var(--muted); }
+[data-theme="deepseek"] .ai-pref-empty { color: var(--text-tertiary); }
+
+/* 设置区块（模型管理 / 场景偏好 / 安全策略） */
+[data-theme="deepseek"] .ai-section {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .ai-section-title { color: var(--text); }
+[data-theme="deepseek"] .ai-section-desc { color: var(--muted); }
+[data-theme="deepseek"] .ai-pref-row,
+[data-theme="deepseek"] .ai-security-item {
+  background: var(--panel-muted);
+  border-radius: 10px;
+}
+[data-theme="deepseek"] .ai-pref-label { color: var(--text-secondary); }
+[data-theme="deepseek"] .ai-security-item > span { color: var(--muted); }
+[data-theme="deepseek"] .ai-security-item > strong { color: var(--text); }
+[data-theme="deepseek"] .ai-security-badge.on { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+[data-theme="deepseek"] .ai-security-badge.off { background: var(--panel-muted); color: var(--muted); }
+
+/* 开关与输入组 */
+[data-theme="deepseek"] .ai-toggle { background: var(--line-strong); }
+[data-theme="deepseek"] .ai-toggle.on { background: var(--primary); }
+[data-theme="deepseek"] .ai-key-toggle { background: var(--panel-muted); color: var(--muted); border-color: transparent; }
+[data-theme="deepseek"] .ai-key-toggle:hover { background: var(--bg-hover); color: var(--text); }
+[data-theme="deepseek"] .ai-test-result.success {
+  background: color-mix(in srgb, var(--success) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--line));
+  color: var(--success);
+}
+[data-theme="deepseek"] .ai-test-result.fail {
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  color: var(--danger);
+}
+[data-theme="deepseek"] .ai-latency { color: var(--text-tertiary); }
+
+/* 对话界面（copilot） */
+[data-theme="deepseek"] .ai-copilot {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+}
+[data-theme="deepseek"] .ai-copilot-header { border-bottom-color: var(--line); }
+[data-theme="deepseek"] .ai-copilot-title { color: var(--text); }
+[data-theme="deepseek"] .ai-clear-btn { color: var(--muted); border-color: var(--line); }
+[data-theme="deepseek"] .ai-clear-btn:hover { color: var(--text); border-color: var(--line-strong); background: var(--bg-hover); }
+
+/* 消息气泡与头像：用户实心品牌蓝、助手浅蓝 */
+[data-theme="deepseek"] .ai-msg.user .ai-msg-avatar { background: var(--primary); color: #ffffff; }
+[data-theme="deepseek"] .ai-msg.bot .ai-msg-avatar { background: var(--primary-soft); color: var(--primary); }
+[data-theme="deepseek"] .ai-msg.user .ai-msg-bubble { background: var(--primary); color: #ffffff; }
+[data-theme="deepseek"] .ai-msg.bot .ai-msg-bubble { background: var(--panel-muted); color: var(--text); }
+[data-theme="deepseek"] .ai-msg.bot.error .ai-msg-bubble {
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+}
+
+/* 工具执行消息 */
+[data-theme="deepseek"] .tool-avatar,
+[data-theme="deepseek"] .tool-avatar.running { background: var(--primary-soft); color: var(--primary); }
+[data-theme="deepseek"] .tool-bubble {
+  background: color-mix(in srgb, var(--success) 8%, var(--panel));
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--line));
+}
+[data-theme="deepseek"] .tool-bubble.fail {
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+}
+[data-theme="deepseek"] .tool-bubble.running {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid var(--primary-border);
+}
+
+/* 输入态：光标、打字指示、输入区 */
+[data-theme="deepseek"] .ai-typing span { background: var(--text-tertiary); }
+[data-theme="deepseek"] .ai-cursor { background: var(--primary); }
+[data-theme="deepseek"] .ai-copilot-input { border-top-color: var(--line); }
+[data-theme="deepseek"] .ai-chat-input { border-radius: var(--radius-input) !important; }
+
+/* ============================================================
+   第三阶段（续）：数据工厂 / 执行报告 / 接口调试器 DeepSeek 精修
+   ============================================================ */
+
+/* ---------- 数据工厂（df-*） ---------- */
+[data-theme="deepseek"] .df-cards-header h2 { color: var(--text); }
+[data-theme="deepseek"] .df-cards-search-icon { color: var(--text-tertiary); }
+[data-theme="deepseek"] .df-cards-search {
+  background: var(--panel-muted);
+  border-color: transparent;
+  border-radius: var(--radius-input);
+}
+[data-theme="deepseek"] .df-cards-search:focus {
+  background: var(--panel);
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+[data-theme="deepseek"] .df-cards-search-clear { background: var(--line-strong); color: var(--panel); }
+[data-theme="deepseek"] .df-cards-search-clear:hover { background: var(--muted); }
+[data-theme="deepseek"] .df-cards-section-name { color: var(--text); }
+[data-theme="deepseek"] .df-cards-section-desc { color: var(--muted); }
+[data-theme="deepseek"] .df-card {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .df-card:hover {
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-card);
+  transform: none;
+}
+[data-theme="deepseek"] .df-card-active {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-pop);
+}
+[data-theme="deepseek"] .df-card-name { color: var(--text); }
+[data-theme="deepseek"] .df-card-desc { color: var(--muted); }
+[data-theme="deepseek"] .df-card-syntax {
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary);
+  border-radius: 6px;
+}
+[data-theme="deepseek"] .df-card-label { color: var(--text-tertiary); }
+[data-theme="deepseek"] .df-card-example code {
+  background: var(--panel-muted);
+  border-color: var(--line);
+  color: var(--text-secondary);
+  border-radius: 8px;
+}
+[data-theme="deepseek"] .df-card-preview-item {
+  background: var(--primary-soft);
+  color: var(--text);
+  border-radius: 6px;
+}
+[data-theme="deepseek"] .df-empty { color: var(--text-tertiary); }
+[data-theme="deepseek"] .df-empty p { color: var(--muted); }
+
+/* ---------- 执行报告（report-*）：深蓝 hero 换品牌蓝渐变 ---------- */
+[data-theme="deepseek"] .report-statistics {
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .report-statistics-lead {
+  color: #f8fafc;
+  background: linear-gradient(145deg, #2f4bd6, #3964fe);
+}
+[data-theme="deepseek"] .report-statistics-heading > span { color: #dbe4fe; }
+[data-theme="deepseek"] .report-statistics-heading > strong { color: #ffffff; }
+[data-theme="deepseek"] .report-statistics-heading > strong small { color: #c7d4fe; }
+[data-theme="deepseek"] .report-statistics-heading > p { color: #c7d4fe; }
+[data-theme="deepseek"] .execution-report {
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+[data-theme="deepseek"] .report-hero {
+  color: #f8fafc;
+  background: linear-gradient(130deg, #2f4bd6, #3964fe 55%, #5686fe);
+}
+[data-theme="deepseek"] .report-eyebrow { color: rgb(255 255 255 / 82%); }
+[data-theme="deepseek"] .report-hero h2 { color: #ffffff; }
+[data-theme="deepseek"] .report-hero p { color: rgb(255 255 255 / 82%); }
+[data-theme="deepseek"] .report-icon-button { color: rgb(255 255 255 / 88%); background: rgb(255 255 255 / 14%); }
+[data-theme="deepseek"] .report-icon-button:hover { color: #ffffff; background: rgb(255 255 255 / 24%); }
+[data-theme="deepseek"] .report-status { color: #e8edff; background: rgb(255 255 255 / 12%); border-color: rgb(255 255 255 / 18%); }
+[data-theme="deepseek"] .report-status-completed { color: #d3f8e2; background: rgb(47 158 104 / 20%); border-color: rgb(134 239 172 / 22%); }
+[data-theme="deepseek"] .report-status-failed { color: #ffd7d5; background: rgb(229 72 77 / 22%); border-color: rgb(252 165 165 / 24%); }
+[data-theme="deepseek"] .report-score-card,
+[data-theme="deepseek"] .report-section,
+[data-theme="deepseek"] .report-metric {
+  border-color: var(--line);
+}
+[data-theme="deepseek"] .report-score-card,
+[data-theme="deepseek"] .report-section { border-radius: var(--radius-card); }
+
+/* ---------- 接口调试器（api-*）：PATCH 装饰性紫色换品牌蓝，其余方法色保留语义 ---------- */
+[data-theme="deepseek"] .api-tag.method-patch { color: var(--primary); background: var(--primary-soft); }
+[data-theme="deepseek"] .api-debugger-request-bar { border-bottom-color: var(--line); }
+[data-theme="deepseek"] .api-send-button { border-radius: var(--radius-btn); }
+
+/* ============================================================
+   第三阶段（末批）：页面步骤画布工作台 DeepSeek 精修
+   节点类型色（node.color 内联）、条件真假分支、调试状态色
+   等业务语义色保留；仅替换装饰性硬编码与重阴影。
+   ============================================================ */
+
+/* 工作台外壳与调色板 */
+[data-theme="deepseek"] .step-workbench {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+}
+[data-theme="deepseek"] .palette-group {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 8px;
+}
+[data-theme="deepseek"] .palette-group summary { color: var(--text); }
+[data-theme="deepseek"] .palette-group summary small { color: var(--muted); }
+[data-theme="deepseek"] .palette-item {
+  color: var(--text);
+  background: var(--panel-muted);
+  border-color: var(--line);
+  border-radius: 8px;
+}
+[data-theme="deepseek"] .palette-item.node-type-item { background: var(--panel); }
+[data-theme="deepseek"] .palette-item small { color: var(--muted); }
+
+/* 画布背景：浅灰 + 蓝灰点网格（更克制） */
+[data-theme="deepseek"] .flow-canvas {
+  background-color: var(--bg);
+  background-image: radial-gradient(rgb(38 49 72 / 6%) 1px, transparent 1px);
+}
+
+/* 空画布 */
+[data-theme="deepseek"] .empty-canvas {
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 90%);
+}
+[data-theme="deepseek"] .empty-canvas strong { color: var(--text); }
+
+/* 节点卡片：圆角、柔和阴影、蓝灰文字（保留 node.color 左侧色条） */
+[data-theme="deepseek"] .flow-node {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .flow-node::after { background: var(--line-strong); }
+[data-theme="deepseek"] .flow-node span,
+[data-theme="deepseek"] .flow-node small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+[data-theme="deepseek"] .flow-node strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+[data-theme="deepseek"] .flow-node em {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+[data-theme="deepseek"] .flow-node.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-border);
+}
+
+/* 连线（分支色保留语义） */
+[data-theme="deepseek"] .flow-connection-path { stroke: var(--primary); }
+
+/* 端口与分支选择 */
+[data-theme="deepseek"] .node-port { box-shadow: var(--shadow-card); }
+[data-theme="deepseek"] .branch-picker { box-shadow: var(--shadow-pop); border-radius: 10px; }
+
+/* 流面板统计 */
+[data-theme="deepseek"] .flow-stats span {
+  color: var(--text-secondary);
+  background: var(--panel-muted);
+  border-color: var(--line);
+  border-radius: 6px;
+}
+[data-theme="deepseek"] .flow-stats .warning-stat {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--warning) 26%, var(--line));
+}
+
+/* 缩放指示器与小地图 */
+[data-theme="deepseek"] .zoom-indicator,
+[data-theme="deepseek"] .minimap {
+  background: rgb(255 255 255 / 94%);
+  border-color: var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+}
+[data-theme="deepseek"] .zoom-indicator button {
+  color: var(--text-secondary);
+  background: var(--panel-muted);
+  border-color: var(--line);
+  border-radius: 6px;
+}
+[data-theme="deepseek"] .zoom-indicator button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--line-strong);
+}
+[data-theme="deepseek"] .zoom-indicator strong { color: var(--text); }
+[data-theme="deepseek"] .minimap span {
+  background: var(--primary-soft);
+  border-color: var(--primary-border);
+}
+
+/* 操作选择器触发器与模态框 */
+[data-theme="deepseek"] .operation-picker-trigger {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-input);
+}
+[data-theme="deepseek"] .operation-dropdown-panel {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+[data-theme="deepseek"] .operation-category-item { color: var(--text-secondary); }
+[data-theme="deepseek"] .operation-category-item:hover { background: var(--bg-hover); }
+[data-theme="deepseek"] .operation-category-item.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+[data-theme="deepseek"] .operation-item { color: var(--text-secondary); }
+[data-theme="deepseek"] .operation-item:hover { background: var(--bg-hover); }
+[data-theme="deepseek"] .operation-item.highlighted { background: var(--primary-soft); border-color: var(--primary-border); }
+[data-theme="deepseek"] .operation-item.selected {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: var(--primary-border);
+}
+[data-theme="deepseek"] .operation-item-current { background: var(--panel); }

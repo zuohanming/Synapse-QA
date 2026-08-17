@@ -1,4 +1,28 @@
 import os
+import sys
+
+
+def _ensure_playwright_browsers_path() -> None:
+    """修正 PyInstaller 打包后 Playwright 找不到浏览器的问题。
+
+    Playwright 在 frozen（PyInstaller/Nuitka）环境下会把 PLAYWRIGHT_BROWSERS_PATH
+    默认置为 "0"，从而到驱动目录下的 .local-browsers 查找浏览器；而浏览器实际安装在
+    用户级 ms-playwright 缓存中，导致启动浏览器报
+    「Looks like Playwright was just installed or updated」。
+    这里在 frozen 且未显式指定路径时，提前指向用户级缓存，避免该报错。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(base, "ms-playwright")
+
+
+_ensure_playwright_browsers_path()
 
 
 def _environment_value(name: str, default: str) -> str:

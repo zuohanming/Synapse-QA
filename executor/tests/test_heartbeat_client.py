@@ -40,6 +40,24 @@ def test_authenticate_returns_invalid_token_message():
     assert message == "Token 无效或已失效"
 
 
+def test_authenticate_success_updates_token_and_restarts_heartbeat():
+    from app.core.config import settings
+
+    original_token = settings.executor_shared_token
+    client = HeartbeatClient(lambda: {"queuedTasks": 0, "runningTasks": 0})
+    client._post = Mock(return_value=200)
+    client.start = Mock()
+    try:
+        success, message = client.authenticate("executor_token_new")
+
+        assert success
+        assert message == "连接成功"
+        assert settings.executor_shared_token == "executor_token_new"
+        client.start.assert_called_once()
+    finally:
+        settings.executor_shared_token = original_token
+
+
 def test_login_extracts_token_from_copied_environment_config():
     copied = "EXECUTOR_ID=local-python-executor\nEXECUTOR_SHARED_TOKEN=executor_token_123"
     assert ExecutorGui._extract_token(copied) == "executor_token_123"

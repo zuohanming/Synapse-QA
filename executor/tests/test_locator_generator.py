@@ -538,3 +538,132 @@ def test_escapes_css_identifier_for_digit_and_special_character_class_tokens():
     )
 
     assert any(locator.value == "div.\\39 item.menu\\:item" for locator in candidate.locators)
+
+
+def test_row_context_xpath_supports_li_list_rows():
+    xpath = "//li[.//*[normalize-space(.)='张三']]//span[normalize-space(.)='编辑']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="span",
+            visible_text="编辑",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1, "text:编辑": 5},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_row_context_xpath_supports_span_action_in_custom_table_row():
+    xpath = "//*[contains(concat(' ', normalize-space(@class), ' '), ' yv-table-row ')][.//*[normalize-space(.)='001']]//span[normalize-space(.)='详情']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="span",
+            visible_text="详情",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_row_context_xpath_supports_role_listitem():
+    xpath = "//*[@role='listitem'][.//*[normalize-space(.)='订单-001']]//a[normalize-space(.)='删除']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="a",
+            visible_text="删除",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score >= 70
+
+
+def test_row_index_fallback_is_usable_when_row_context_unavailable():
+    xpath = "(//tr)[2]//button[normalize-space(.)='编辑']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="button",
+            visible_text="编辑",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1, "text:编辑": 20},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score == 55
+    assert candidate.quality_score >= 40
+
+
+def test_row_index_with_custom_row_class_and_span_action():
+    xpath = "(//*[contains(concat(' ', normalize-space(@class), ' '), ' yv-table-row ')])[3]//span[normalize-space(.)='详情']"
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag="span",
+            visible_text="详情",
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score == 55
+
+
+@pytest.mark.parametrize(
+    ("xpath", "tag", "visible_text"),
+    [
+        ("(//tr[.//*[normalize-space(.)='订单-001']]//button[normalize-space(.)='编辑'])[2]", "button", "编辑"),
+        ("(//*[contains(concat(' ', normalize-space(@class), ' '), ' yv-table-row ')][.//*[normalize-space(.)='001']]//span[normalize-space(.)='详情'])[2]", "span", "详情"),
+    ],
+)
+def test_action_index_xpath_is_a_unique_row_index_locator(xpath, tag, visible_text):
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag=tag,
+            visible_text=visible_text,
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score == 55
+    assert candidate.quality_score >= 40
+
+
+@pytest.mark.parametrize(
+    ("xpath", "tag", "visible_text"),
+    [
+        ("(//button[normalize-space(.)='编辑'])[2]", "button", "编辑"),
+        ("(//span[normalize-space(.)='详情'])[2]", "span", "详情"),
+        ("(//a[normalize-space(.)='删除'])[2]", "a", "删除"),
+        ("(//div[normalize-space(.)='打开'])[2]", "div", "打开"),
+    ],
+)
+def test_global_action_index_xpath_is_a_unique_row_index_locator(xpath, tag, visible_text):
+    candidate = build_candidate(
+        ElementSnapshot(
+            tag=tag,
+            visible_text=visible_text,
+            xpath=xpath,
+            locator_matches={f"xpath:{xpath}": 1},
+        )
+    )
+
+    locator = next(item for item in candidate.locators if item.type == "xpath" and item.value == xpath)
+    assert locator.unique
+    assert locator.score == 55
+    assert candidate.quality_score >= 40

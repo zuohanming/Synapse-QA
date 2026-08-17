@@ -106,21 +106,34 @@ options => {
     return `concat(${value.split("'").map(part => `'${part}'`).join(', "\'", ')})`;
   };
   const rowScopedXPath = (element, text) => {
-    if (!(element.tagName === "BUTTON" || element.tagName === "A") || !text) return "";
-    let row = element.closest("tr, [role='row'], .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row']");
+    if (!text) return "";
+    const rowLike = item => {
+      if (!item || item.nodeType !== 1) return false;
+      const tag = item.tagName;
+      if (tag === "TR" || tag === "LI") return true;
+      if (item.getAttribute("role") === "row" || item.getAttribute("role") === "listitem") return true;
+      if (item.matches(".el-table__row, .ant-table-row, .el-data-table__row, .ivu-table-row, .table-row, .grid-row, .data-row, .list-item, .ant-list-item, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row'], [class*='data-row'], [class*='list-item'], [class*='card-item']")) return true;
+      const cls = " " + (Array.from(item.classList || []).join(" ") || "") + " ";
+      return /(?:^| )(?:table-)?(?:row|item)|grid-?row|data-?row|list-?item|card|record(?: |$)/.test(cls);
+    };
+    let row = element.closest("tr, [role='row'], li, .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row'], [class*='data-row'], [class*='list-item'], [class*='card-item']");
+    if (!row || !rowLike(row)) row = null;
     if (!row) {
       let current = element.parentElement;
       while (current && current !== document.body) {
-        const siblings = current.parentElement ? Array.from(current.parentElement.children).filter(item => item.tagName === current.tagName) : [];
-        if (siblings.length > 1 && current.querySelector("button, a")) {
-          row = current;
-          break;
+        if (rowLike(current)) {
+          if (current.querySelector("button, a, input, select, textarea")) {
+            row = current;
+            break;
+          }
+          current = current.parentElement;
+          continue;
         }
         current = current.parentElement;
       }
     }
     if (!row) return "";
-    const rowClass = Array.from(row.classList).find(item => /(?:row|item)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
+    const rowClass = Array.from(row.classList).find(item => /(?:row|item|card|record)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
     const rowSelector = row.tagName === "TR" ? "tr" : row.getAttribute("role") === "row"
       ? "*[@role='row']" : rowClass
         ? `*[contains(concat(' ', normalize-space(@class), ' '), ' ${rowClass} ')]` : "";
@@ -128,15 +141,35 @@ options => {
     const rows = row.parentElement ? Array.from(row.parentElement.children).filter(item => item.tagName === row.tagName) : [];
     const cells = Array.from(row.querySelectorAll("td, [role='gridcell'], .el-table__cell, .ant-table-cell"));
     if (!cells.length) cells.push(...Array.from(row.children));
-    for (const cell of cells) {
+    const interactive = cell => cell.matches("button, a, input, select, textarea, [role='button'], [role='link'], [onclick]") || cell.querySelector("button, a, input, select, textarea, [role='button'], [role='link'], [onclick]");
+    const textCells = cells.filter(cell => !interactive(cell));
+    const anchors = textCells.length ? textCells : cells;
+    const actionXPath = anchor => `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+    const exactActionXPath = xpath => {
+      try {
+        const matches = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        if (matches.snapshotLength === 1) return matches.snapshotItem(0) === element ? xpath : "";
+        for (let index = 0; index < matches.snapshotLength; index += 1) {
+          if (matches.snapshotItem(index) === element) return `(${xpath})[${index + 1}]`;
+        }
+      } catch (_) {
+        return "";
+      }
+      return "";
+    };
+    const globalActionXPath = () => exactActionXPath(`//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`);
+    let fallbackAnchor = "";
+    for (const cell of anchors) {
       const anchor = safeText(cell.innerText, 96);
       if (anchor.length < 2 || anchor === text) continue;
+      if (!fallbackAnchor) fallbackAnchor = anchor;
       const matches = rows.filter(item => safeText(item.innerText, 2048).includes(anchor));
       if (matches.length === 1) {
-        return `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+        return exactActionXPath(actionXPath(anchor)) || globalActionXPath();
       }
     }
-    return "";
+    if (fallbackAnchor) return exactActionXPath(actionXPath(fallbackAnchor)) || globalActionXPath();
+    return globalActionXPath();
   };
   const stableXPath = (element, attributes) => {
     const tag = element.tagName.toLowerCase();
@@ -341,21 +374,34 @@ element => {
     return `concat(${value.split("'").map(part => `'${part}'`).join(', "\'", ')})`;
   };
   const rowScopedXPath = (element, text) => {
-    if (!(element.tagName === "BUTTON" || element.tagName === "A") || !text) return "";
-    let row = element.closest("tr, [role='row'], .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row']");
+    if (!text) return "";
+    const rowLike = item => {
+      if (!item || item.nodeType !== 1) return false;
+      const tag = item.tagName;
+      if (tag === "TR" || tag === "LI") return true;
+      if (item.getAttribute("role") === "row" || item.getAttribute("role") === "listitem") return true;
+      if (item.matches(".el-table__row, .ant-table-row, .el-data-table__row, .ivu-table-row, .table-row, .grid-row, .data-row, .list-item, .ant-list-item, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row'], [class*='data-row'], [class*='list-item'], [class*='card-item']")) return true;
+      const cls = " " + (Array.from(item.classList || []).join(" ") || "") + " ";
+      return /(?:^| )(?:table-)?(?:row|item)|grid-?row|data-?row|list-?item|card|record(?: |$)/.test(cls);
+    };
+    let row = element.closest("tr, [role='row'], li, .el-table__row, .ant-table-row, [class*='table-row'], [class*='table__row'], [class*='tableRow'], [class*='grid-row'], [class*='data-row'], [class*='list-item'], [class*='card-item']");
+    if (!row || !rowLike(row)) row = null;
     if (!row) {
       let current = element.parentElement;
       while (current && current !== document.body) {
-        const siblings = current.parentElement ? Array.from(current.parentElement.children).filter(item => item.tagName === current.tagName) : [];
-        if (siblings.length > 1 && current.querySelector("button, a")) {
-          row = current;
-          break;
+        if (rowLike(current)) {
+          if (current.querySelector("button, a, input, select, textarea")) {
+            row = current;
+            break;
+          }
+          current = current.parentElement;
+          continue;
         }
         current = current.parentElement;
       }
     }
     if (!row) return "";
-    const rowClass = Array.from(row.classList).find(item => /(?:row|item)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
+    const rowClass = Array.from(row.classList).find(item => /(?:row|item|card|record)/i.test(item) && /^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(item));
     const rowSelector = row.tagName === "TR" ? "tr" : row.getAttribute("role") === "row"
       ? "*[@role='row']" : rowClass
         ? `*[contains(concat(' ', normalize-space(@class), ' '), ' ${rowClass} ')]` : "";
@@ -363,15 +409,35 @@ element => {
     const rows = row.parentElement ? Array.from(row.parentElement.children).filter(item => item.tagName === row.tagName) : [];
     const cells = Array.from(row.querySelectorAll("td, [role='gridcell'], .el-table__cell, .ant-table-cell"));
     if (!cells.length) cells.push(...Array.from(row.children));
-    for (const cell of cells) {
+    const interactive = cell => cell.matches("button, a, input, select, textarea, [role='button'], [role='link'], [onclick]") || cell.querySelector("button, a, input, select, textarea, [role='button'], [role='link'], [onclick]");
+    const textCells = cells.filter(cell => !interactive(cell));
+    const anchors = textCells.length ? textCells : cells;
+    const actionXPath = anchor => `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+    const exactActionXPath = xpath => {
+      try {
+        const matches = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        if (matches.snapshotLength === 1) return matches.snapshotItem(0) === element ? xpath : "";
+        for (let index = 0; index < matches.snapshotLength; index += 1) {
+          if (matches.snapshotItem(index) === element) return `(${xpath})[${index + 1}]`;
+        }
+      } catch (_) {
+        return "";
+      }
+      return "";
+    };
+    const globalActionXPath = () => exactActionXPath(`//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`);
+    let fallbackAnchor = "";
+    for (const cell of anchors) {
       const anchor = safeText(cell.innerText, 96);
       if (anchor.length < 2 || anchor === text) continue;
+      if (!fallbackAnchor) fallbackAnchor = anchor;
       const matches = rows.filter(item => safeText(item.innerText, 2048).includes(anchor));
       if (matches.length === 1) {
-        return `//${rowSelector}[.//*[normalize-space(.)=${xpathLiteral(anchor)}]]//${element.tagName.toLowerCase()}[normalize-space(.)=${xpathLiteral(text)}]`;
+        return exactActionXPath(actionXPath(anchor)) || globalActionXPath();
       }
     }
-    return "";
+    if (fallbackAnchor) return exactActionXPath(actionXPath(fallbackAnchor)) || globalActionXPath();
+    return globalActionXPath();
   };
   const stableXPath = () => {
     const tag = element.tagName.toLowerCase();
