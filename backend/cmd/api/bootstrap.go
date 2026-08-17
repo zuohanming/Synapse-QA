@@ -682,6 +682,49 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			updated_at timestamptz not null default now()
 		)`,
+		// §3.1 方案：以 scenario_type 取代 load_mode，负载参数收敛到 load_config。
+		// 旧列 load_mode/vus/duration/stages 本版本保留（避免破坏旧数据），下一版本删除。
+		`alter table perf_test_plans add column if not exists scenario_type text not null default 'baseline'`,
+		`alter table perf_test_plans add column if not exists load_config jsonb not null default '{}'::jsonb`,
+		`alter table perf_test_plans add column if not exists environment text not null default 'test'`,
+		// §3.2 执行记录：执行快照、任务关联、幂等、结果诊断与失效凭据。
+		`alter table perf_test_runs add column if not exists scenario_type text not null default 'baseline'`,
+		`alter table perf_test_runs add column if not exists plan_snapshot jsonb not null default '{}'::jsonb`,
+		`alter table perf_test_runs add column if not exists config_hash text not null default ''`,
+		`alter table perf_test_runs add column if not exists executor_id text references executors(executor_id)`,
+		`alter table perf_test_runs add column if not exists executor_name text not null default ''`,
+		`alter table perf_test_runs add column if not exists k6_version text not null default ''`,
+		`alter table perf_test_runs add column if not exists environment text not null default 'test'`,
+		`alter table perf_test_runs add column if not exists requested_at timestamptz`,
+		`alter table perf_test_runs add column if not exists dispatched_at timestamptz`,
+		`alter table perf_test_runs add column if not exists dispatch_deadline_at timestamptz`,
+		`alter table perf_test_runs add column if not exists start_deadline_at timestamptz`,
+		`alter table perf_test_runs add column if not exists expected_finish_at timestamptz`,
+		`alter table perf_test_runs add column if not exists script_hash text not null default ''`,
+		`alter table perf_test_runs add column if not exists generator_version text not null default ''`,
+		`alter table perf_test_runs add column if not exists task_id text`,
+		`alter table perf_test_runs add column if not exists callback_token_hash text not null default ''`,
+		`alter table perf_test_runs add column if not exists idempotency_key text`,
+		`alter table perf_test_runs add column if not exists duration_ms int`,
+		`alter table perf_test_runs add column if not exists error_message text`,
+		`alter table perf_test_runs add column if not exists failure_stage text not null default ''`,
+		`alter table perf_test_runs add column if not exists diagnostic_output text not null default ''`,
+		`alter table perf_test_runs add column if not exists needs_attention boolean not null default false`,
+		`alter table perf_test_runs add column if not exists series jsonb`,
+		// 唯一约束（§3.2）：任务标识、幂等键、同方案活动任务唯一。
+		`create unique index if not exists uq_perf_runs_task_id on perf_test_runs(task_id)`,
+		`create unique index if not exists uq_perf_runs_idem on perf_test_runs(triggered_by, idempotency_key)`,
+		`create unique index if not exists uq_perf_plan_active on perf_test_runs(plan_id) where status in ('pending','queued','dispatching','dispatched','running','stopping')`,
+		// §3.5 旧数据回填（幂等）：仅当 scenario_type/load_config 仍为默认值且旧列有值时，从旧语义迁移。
+		// 旧列 load_mode/vus/duration/stages 下一版本删除。
+		`update perf_test_plans
+			set scenario_type = 'baseline', load_config = jsonb_build_object('vus', vus, 'duration', duration)
+			where load_mode = 'constant' and scenario_type = 'baseline' and load_config = '{}'::jsonb
+			  and (vus > 0 or duration <> '')`,
+		`update perf_test_plans
+			set scenario_type = 'ramp', load_config = jsonb_build_object('stages', stages)
+			where load_mode = 'ramping' and scenario_type = 'baseline' and load_config = '{}'::jsonb
+			  and jsonb_array_length(stages) > 0`,
 	}
 	statements = append(statements, elementCaptureMigrationStatements()...)
 	for _, statement := range statements {

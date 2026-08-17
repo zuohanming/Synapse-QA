@@ -44,6 +44,8 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/api-automation/debug/:taskId/callback", deps.APIAutomationController.DebugCallback)
 	api.POST("/api-automation/debug/:taskId/events/callback", deps.APIAutomationController.DebugEventCallback)
 	api.POST("/api-automation/test-runs/tasks/:taskId/callback", deps.APIAutomationController.TestRunCallback)
+	// 性能测试回调使用 Bearer callback token 鉴权，task_id 仅定位，不依赖用户登录态。
+	api.POST("/perf/tasks/:taskId/callback", deps.PerformanceController.Callback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 	// 候选项响应始终先设置 no-store，连 JWT 认证失败响应也不例外。
@@ -76,14 +78,17 @@ func registerDataFactoryRoutes(authed *gin.RouterGroup, deps Dependencies) {
 }
 
 func registerPerformanceRoutes(authed *gin.RouterGroup, deps Dependencies) {
-	authed.GET("/perf/plans", deps.PerformanceController.ListPlans)
-	authed.GET("/perf/plans/:id", deps.PerformanceController.GetPlan)
-	authed.POST("/perf/plans", deps.PerformanceController.CreatePlan)
-	authed.PATCH("/perf/plans/:id", deps.PerformanceController.UpdatePlan)
-	authed.DELETE("/perf/plans/:id", deps.PerformanceController.DeletePlan)
-	authed.POST("/perf/plans/:id/run", deps.PerformanceController.RunPlan)
-	authed.GET("/perf/runs", deps.PerformanceController.ListRuns)
-	authed.GET("/perf/runs/:id", deps.PerformanceController.GetRun)
+	authed.GET("/perf/plans", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListPlans)
+	authed.GET("/perf/plans/:id", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetPlan)
+	authed.POST("/perf/plans", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.CreatePlan)
+	authed.PATCH("/perf/plans/:id", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.UpdatePlan)
+	authed.DELETE("/perf/plans/:id", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.DeletePlan)
+	authed.POST("/perf/plans/:id/run", controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.RunPlan)
+	authed.POST("/perf/runs/:id/cancel", controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.CancelRun)
+	authed.GET("/perf/runs", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListRuns)
+	authed.GET("/perf/runs/:id", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetRun)
+	authed.POST("/perf/smoke", controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.StartSmoke)
+	authed.GET("/perf/smoke/:taskId", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetSmoke)
 }
 
 func registerAIRoutes(authed *gin.RouterGroup, deps Dependencies) {

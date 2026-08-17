@@ -1899,7 +1899,9 @@ button:disabled {
   }
 }
 
-/* 性能测试模块 */
+/* ===== 性能测试模块（SPEC v2.5） ===== */
+
+/* 状态 pill 基础（补全既有 .status-pill 修饰符） */
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -1933,69 +1935,9 @@ button:disabled {
   background: #fee2e2;
 }
 
-.perf-toast {
-  position: fixed;
-  top: 72px;
-  right: 20px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 440px;
-  padding: 12px 16px;
-  color: #047857;
-  background: #d1fae5;
-  border: 1px solid #a7f3d0;
-  border-radius: 6px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+.muted-text {
+  color: var(--muted);
   font-size: 13px;
-}
-
-.perf-toast .link-button {
-  flex: 0 0 auto;
-}
-
-.perf-plan-form {
-  padding: 22px 28px;
-  gap: 14px 18px;
-}
-
-.perf-load-config {
-  gap: 10px;
-}
-
-.perf-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  width: max-content;
-  padding: 3px;
-  background: #f1f5f9;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.perf-mode-toggle button {
-  min-height: 30px;
-  padding: 0 14px;
-  color: #475569;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.perf-mode-toggle button.active {
-  color: var(--primary);
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
-  font-weight: 700;
-}
-
-.perf-load-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
 }
 
 .perf-json {
@@ -2011,6 +1953,541 @@ button:disabled {
   word-break: break-word;
 }
 
+.perf-log {
+  max-height: 360px;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.perf-url {
+  color: #0f3a92;
+  word-break: break-all;
+}
+
+.perf-danger {
+  color: var(--danger);
+}
+
+.perf-p1-tag {
+  padding: 1px 6px;
+  color: #6b7280;
+  background: #f1f5f9;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.perf-p1-placeholder {
+  padding: 14px;
+  color: var(--muted);
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* 编辑页 / 详情页头部 */
+.perf-edit-page {
+  gap: 14px;
+}
+
+.perf-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.perf-edit-title {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.perf-edit-title strong {
+  font-size: 16px;
+}
+
+.perf-edit-title span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-section-grid {
+  padding: 18px 20px;
+  gap: 14px 18px;
+}
+
+.perf-edit-error {
+  margin-top: 0;
+}
+
+/* 场景卡片 */
+.perf-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.perf-scenario-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  color: var(--text);
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.perf-scenario-card:hover {
+  border-color: #94bfff;
+  background: #f7fbff;
+}
+
+.perf-scenario-card.active {
+  border-color: var(--primary);
+  background: #eef4ff;
+  box-shadow: 0 0 0 2px rgba(37, 72, 184, 0.12);
+}
+
+.perf-scenario-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perf-scenario-card-head strong {
+  flex: 1;
+  font-size: 14px;
+}
+
+.perf-scenario-card p {
+  margin: 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.perf-scenario-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 请求配置 */
+.perf-smoke-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perf-smoke-executor {
+  width: 180px;
+}
+
+.perf-request-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.perf-final-url {
+  padding: 8px 10px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.perf-final-url code {
+  margin-left: 6px;
+  color: #0f3a92;
+}
+
+.perf-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.perf-tabs button {
+  min-height: 34px;
+  padding: 0 14px;
+  color: #475569;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+}
+
+.perf-tabs button.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 700;
+}
+
+.perf-kv {
+  display: grid;
+  gap: 8px;
+}
+
+.perf-kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+}
+
+.perf-body-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.perf-body-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-code-area {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.perf-advanced {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.perf-advanced summary {
+  color: var(--primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.perf-advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.perf-smoke-result {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f8fafc;
+}
+
+.perf-smoke-result.ok {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+}
+
+.perf-smoke-result.fail {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.perf-smoke-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* 负载配置 */
+.perf-load-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+}
+
+.perf-load-editor {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.perf-load-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.perf-stages {
+  display: grid;
+  gap: 8px;
+}
+
+.perf-stages-head,
+.perf-stages-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 1fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.perf-stages-head {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-load-preview {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.perf-load-preview-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.perf-load-preview-stats {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.perf-load-preview-stats div {
+  display: grid;
+  gap: 2px;
+}
+
+.perf-load-preview-stats dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-load-preview-stats dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.perf-load-preview-stats div.danger dd {
+  color: var(--danger);
+}
+
+.perf-load-preview-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.perf-timeline {
+  display: grid;
+  gap: 4px;
+}
+
+.perf-timeline-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.perf-timeline-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.perf-timeline-bar {
+  min-width: 4px;
+  background: var(--primary);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+
+/* 阈值设置 */
+.perf-threshold-templates {
+  display: flex;
+  gap: 8px;
+}
+
+.perf-threshold-table {
+  display: grid;
+  gap: 8px;
+}
+
+.perf-threshold-head,
+.perf-threshold-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 0.8fr 1.2fr 2fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.perf-threshold-head {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-threshold-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.perf-threshold-value span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-threshold-op {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perf-threshold-op code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f3a92;
+  font-size: 12px;
+}
+
+.perf-threshold-empty {
+  padding: 12px;
+  color: var(--muted);
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.perf-threshold-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-threshold-list {
+  display: grid;
+  gap: 8px;
+}
+
+.perf-threshold-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.perf-threshold-item code {
+  color: #0f3a92;
+}
+
+.perf-threshold-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-threshold-results td code {
+  color: #0f3a92;
+  font-size: 12px;
+}
+
+/* 详情页负载 */
+.perf-detail-load {
+  display: grid;
+  gap: 12px;
+}
+
+.perf-detail-load-stats {
+  border-bottom: 0;
+  padding: 0;
+}
+
+/* 报告详情：结论屏 */
+.perf-conclusion {
+  gap: 14px;
+}
+
+.perf-conclusion-lead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.perf-conclusion-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 10px;
+}
+
+.perf-conclusion-icon.success {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.perf-conclusion-icon.danger {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.perf-conclusion-icon.warning {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.perf-conclusion-icon.neutral {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.perf-conclusion-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.perf-conclusion-lead strong {
+  display: block;
+  font-size: 20px;
+}
+
+.perf-conclusion-lead p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.perf-conclusion-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 12px 14px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* 报告指标卡 */
 .perf-metric-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2036,25 +2513,138 @@ button:disabled {
   font: 600 22px/1 ui-monospace, Consolas, monospace;
 }
 
-.perf-run-body {
+/* 执行确认面板 */
+.perf-confirm-body {
   display: grid;
   gap: 16px;
   padding: 20px;
 }
 
-.perf-run-status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.perf-confirm-plan {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.perf-confirm-kicker {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.perf-confirm-plan strong {
+  font-size: 17px;
+}
+
+.perf-confirm-plan small {
+  color: var(--muted);
+}
+
+.perf-confirm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
+  margin: 0;
+}
+
+.perf-confirm-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.perf-confirm-grid dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-confirm-grid dd {
+  margin: 0;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.perf-confirm-thresholds {
+  display: grid;
+  gap: 6px;
+}
+
+.perf-confirm-thresholds > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.perf-confirm-thresholds ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.perf-confirm-thresholds code {
+  color: #0f3a92;
+  font-size: 12px;
+}
+
+.perf-confirm-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.perf-confirm-danger {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+/* 列表「仅看进行中」高亮 */
+.perf-active-toggle {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: #eef4ff;
 }
 
 @media (max-width: 900px) {
-  .perf-metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .perf-scenario-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .perf-load-layout,
+  .perf-advanced-grid,
+  .perf-request-row {
+    grid-template-columns: 1fr;
   }
 
   .perf-load-fields {
     grid-template-columns: 1fr;
+  }
+
+  .perf-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perf-confirm-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .perf-threshold-head,
+  .perf-threshold-row {
+    grid-template-columns: 1fr;
+  }
+
+  .perf-edit-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .perf-stages-head,
+  .perf-stages-row {
+    grid-template-columns: 40px 1fr 1fr 36px;
   }
 }

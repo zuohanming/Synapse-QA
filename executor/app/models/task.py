@@ -14,6 +14,7 @@ class TaskType(StrEnum):
     api_case = "api_case"
     ui = "ui"
     unit = "unit"
+    perf = "perf"
 
 
 class TaskStatus(StrEnum):
@@ -35,6 +36,8 @@ class TaskCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     callback_url: str | None = Field(default=None, alias="callbackUrl")
     event_url: str | None = Field(default=None, alias="eventUrl")
+    # 终态回调的 Bearer Token，仅用于鉴权，与 task_id 分离（见 SPEC §3.2/§4.2）。
+    callback_token: str | None = Field(default=None, alias="callbackToken")
 
     model_config = {"populate_by_name": True}
 
@@ -59,6 +62,7 @@ class TaskView(BaseModel):
     payload: dict[str, Any]
     callback_url: str | None = Field(default=None, alias="callbackUrl")
     event_url: str | None = Field(default=None, alias="eventUrl")
+    callback_token: str | None = Field(default=None, alias="callbackToken")
     result: TaskResult | None = None
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(default=None, alias="startedAt")

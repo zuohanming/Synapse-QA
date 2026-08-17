@@ -73,7 +73,23 @@ class Settings:
     max_workers = int(os.getenv("EXECUTOR_MAX_WORKERS", "2"))
     default_timeout_seconds = int(os.getenv("EXECUTOR_DEFAULT_TIMEOUT_SECONDS", "300"))
     artifacts_dir = os.getenv("EXECUTOR_ARTIFACTS_DIR", "artifacts")
-    supported_types = ["noop", "script", "api", "api_case", "ui", "unit"]
+    supported_types = ["noop", "script", "api", "api_case", "ui", "unit", "perf"]
+    # 性能测试专用并发槽位：单执行器同时最多 1 个 perf 任务（SPEC §5.2）。
+    perf_max_concurrent = int(os.getenv("EXECUTOR_PERF_MAX_CONCURRENT", "1"))
+    # 性能测试超时 = load_config 总时长 × 系数 + 缓冲（SPEC §5.1），不固定 300s。
+    perf_timeout_coefficient = float(os.getenv("EXECUTOR_PERF_TIMEOUT_COEFFICIENT", "1.5"))
+    perf_timeout_buffer_seconds = int(os.getenv("EXECUTOR_PERF_TIMEOUT_BUFFER_SECONDS", "60"))
+    # 优雅停止宽限期：发中断信号后等待 k6 收尾的时间。
+    perf_grace_period_seconds = int(os.getenv("EXECUTOR_PERF_GRACE_PERIOD_SECONDS", "10"))
+    # 本地 NDJSON 采样聚合快照的写入周期。
+    perf_snapshot_interval_seconds = float(os.getenv("EXECUTOR_PERF_SNAPSHOT_INTERVAL_SECONDS", "5"))
+    # NDJSON 延迟/失败窗口的最大采样点数，避免长任务内存无限增长。
+    perf_ndjson_window_points = int(os.getenv("EXECUTOR_PERF_NDJSON_WINDOW_POINTS", "5000"))
+    # 已取消 task_id 墓碑的存活时间（幂等返回已取消）。
+    perf_cancel_tombstone_ttl_seconds = int(os.getenv("EXECUTOR_PERF_CANCEL_TOMBSTONE_TTL_SECONDS", "3600"))
+    # 终态回调重试策略（SPEC §5.5）。
+    callback_max_attempts = int(os.getenv("EXECUTOR_CALLBACK_MAX_ATTEMPTS", "5"))
+    callback_retry_base_delay_seconds = float(os.getenv("EXECUTOR_CALLBACK_RETRY_BASE_DELAY_SECONDS", "1"))
 
 
 settings = Settings()

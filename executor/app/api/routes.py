@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 
 from app.core.config import settings
 from app.models.task import TaskCreate, TaskView
@@ -58,12 +58,17 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/tasks", response_model=TaskView, status_code=202)
-    def submit_task(task: TaskCreate) -> TaskView:
+    def submit_task(task: TaskCreate, response: Response) -> TaskView:
         # 任务提交后立即返回当前视图，实际执行在线程池中异步完成。
         try:
-            return task_manager.submit(task)
+            already_exists = task.task_id is not None and task_manager.exists_or_canceled(task.task_id)
+            view = task_manager.submit(task)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        # 幂等命中（已存在或已取消墓碑）返回 200，新建返回 202（SPEC §4.3）。
+        if already_exists:
+            response.status_code = 200
+        return view
 
     @app.get("/tasks", response_model=list[TaskView])
     def list_tasks() -> list[TaskView]:
@@ -78,10 +83,7 @@ def create_app() -> FastAPI:
 
     @app.post("/tasks/{task_id}/cancel", response_model=TaskView)
     def cancel_task(task_id: str) -> TaskView:
-        # 当前版本只可靠取消尚未开始的任务，运行中任务由具体 Runner 决定是否支持中断。
-        task = task_manager.cancel(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        return task
+        # 对不存在/已取消的任务也返回已取消视图（200），用于幂等补偿取消（SPEC §3.3）。
+        return task_manager.cancel(task_id)
 
     return app

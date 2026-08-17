@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+- 完成性能测试 P0 真实 k6 闭环联调：安装 k6 v2.2.0，执行器上报 `supportedTypes=perf` 与 `checks.k6=true`；修复 PostgreSQL nullable `error_message` 扫描失败、run 停留 `pending`、后端下发 payload 与 runner 字段不一致、perf 回调仍使用通用 TaskView 导致 HTTP 400 四个运行时缺陷。真实 baseline run 已完成并回填请求数、P95、错误率、RPS、k6 版本与执行耗时。
+- 修复性能测试触发后 run 永久停留 `pending`：创建/幂等命中后条件推进至 `queued`，调度器同时兜底推进遗留 `pending` 记录后再分发。
+- 实施性能测试 P0 后端：性能测试模块从占位升级为真实执行闭环。数据模型升级（scenario_type/load_config/environment 替代 load_mode、平台结构化阈值、执行记录补齐快照/task_id/幂等键/回调凭据哈希/状态机字段等 20+ 列与三个唯一索引）；状态机固化（pending→queued→dispatching→dispatched→running→stopping + completed/threshold_failed/execution_failed/timed_out/canceled，条件更新 + 非法转移 409）；幂等触发（idempotency_key 唯一约束）；独立调度器（复用执行器选择原语 + k6 检测校验）；回调鉴权（task_id 与 Bearer Token 分离、终态失效、410/409）；执行器掉线/重启恢复循环（只查询只补偿取消、绝不自动重投）；expected_finish_at 动态计算；smoke 冒烟接口（/perf/smoke）；权限三档（perf.plan.read/manage/execute）；完成/失败通知。
+- 实施性能测试 P0 前端：性能测试重构为独立路由页面（/performance/plans/:id/edit、/performance/runs/:id），方案编辑页四区块（场景卡片 + Params/Headers/Body 分 Tab + 负载配置与实时预览 + 结构化阈值表格）、执行确认面板（生产环境二次确认）、报告详情三屏（结论/阈值/诊断，区分五种终态失败类型）、冒烟测试请求、权限按钮显隐。
+- 实施性能测试 P0 执行器侧：执行器新增 perf 任务类型与 k6 压测 runner，按场景类型（baseline/ramp/peak/stress/soak）渲染 k6 脚本并调用 k6 子进程执行，动态计算超时、NDJSON 本地采样兜底、阈值判定与取消部分结果回传；回调带 Bearer Token 并指数退避重试，心跳按 k6 可用性上报 perf 能力，任务提交与取消幂等（含取消墓碑）。
 - 新增性能测试业务模块：新增「性能测试」一级菜单（压测方案、测试报告），压测方案支持 K6 风格负载配置（固定并发 vus+duration / 爬坡 stages）与阈值断言 thresholds 的 CRUD 及触发执行占位，测试报告承载 K6 指标（总请求数、平均耗时、P95、错误率、RPS）展示；底层压测引擎选定 Grafana k6，真实执行由执行器后续接入。
 - 修复打包版执行器「调试页面步骤」报 `playwright install`：PyInstaller 打包后 Playwright 会把浏览器路径指向驱动目录下的 `.local-browsers` 导致找不到浏览器，现已自动指向用户级 `ms-playwright` 缓存。
 - 修复执行器连接异常后无法自愈的问题：执行器心跳因 Token 鉴权失败（401）停止后，即便 Token 被修正也无法恢复；现在 `authenticate()` 连接成功后会写回新 Token 并重启心跳循环，无需手动重启执行器进程即可恢复在线。

@@ -1,5 +1,7 @@
 import json
 import logging
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -41,7 +43,7 @@ class HeartbeatClient:
             "endpoint": settings.executor_endpoint,
             "version": settings.executor_version,
             "maxWorkers": settings.max_workers,
-            "supportedTypes": settings.supported_types,
+            "supportedTypes": self._supported_types(),
         }
         status = self._post("/api/executors/register", payload, token, notify_auth_failure=False)
         if status == 200:
@@ -83,7 +85,7 @@ class HeartbeatClient:
             "endpoint": settings.executor_endpoint,
             "version": settings.executor_version,
             "maxWorkers": settings.max_workers,
-            "supportedTypes": settings.supported_types,
+            "supportedTypes": self._supported_types(),
         }
         self._post("/api/executors/register", payload)
 
@@ -96,8 +98,9 @@ class HeartbeatClient:
             "maxWorkers": settings.max_workers,
             "runningTasks": stats["runningTasks"],
             "queuedTasks": stats["queuedTasks"],
-            "supportedTypes": settings.supported_types,
+            "supportedTypes": self._supported_types(),
             "checks": self._checks(),
+            "k6Version": self._k6_version(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._post("/api/executors/heartbeat", payload)
@@ -150,4 +153,24 @@ class HeartbeatClient:
             "pytest": find_spec("pytest") is not None,
             "playwright": find_spec("playwright") is not None,
             "browser": find_spec("playwright") is not None,
+            "k6": shutil.which("k6") is not None,
         }
+
+    def _supported_types(self) -> list[str]:
+        """k6 可用时才上报 perf，避免调度器把压测投到未装 k6 的执行器（SPEC §4.4）。"""
+
+        types = list(settings.supported_types)
+        if "perf" in types and shutil.which("k6") is None:
+            types.remove("perf")
+        return types
+
+    @staticmethod
+    def _k6_version() -> str:
+        path = shutil.which("k6")
+        if not path:
+            return ""
+        try:
+            completed = subprocess.run([path, "version"], capture_output=True, text=True, timeout=5)
+            return completed.stdout.splitlines()[0].strip() if completed.stdout else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""

@@ -6,6 +6,14 @@ const ROUTE_TTL = 24 * 60 * 60 * 1000;
 
 const defaultPath = ["首页", "项目概览"];
 
+// 性能测试模块使用英文 slug 的独立 URL，支持深层子路径（详情/编辑）。
+const PERF_GROUP = "性能测试";
+const PERF_URL_PREFIX = "performance";
+const PERF_SLUGS = {
+  压测方案: "plans",
+  测试报告: "runs"
+};
+
 export function getDefaultPath() {
   return defaultPath;
 }
@@ -13,22 +21,46 @@ export function getDefaultPath() {
 export function isValidPath(path) {
   if (!Array.isArray(path) || path.length < 2) return false;
   const group = menuData.find((item) => item.title === path[0]);
-  return Boolean(group?.children.includes(path[1]));
+  if (!group?.children.includes(path[1])) return false;
+  if (path[0] !== PERF_GROUP) return path.length === 2;
+  // 性能测试：压测方案 [/new | /:id | /:id/edit]，测试报告 [/ | /:id]
+  if (path[1] === "压测方案") {
+    if (path.length === 2) return true;
+    if (path.length === 3) return path[2] === "new" || /^\d+$/.test(path[2]);
+    if (path.length === 4) return /^\d+$/.test(path[2]) && path[3] === "edit";
+    return false;
+  }
+  if (path[1] === "测试报告") {
+    if (path.length === 2) return true;
+    return path.length === 3 && /^\d+$/.test(path[2]);
+  }
+  return false;
 }
 
 export function pathToHash(path) {
   if (!isValidPath(path)) return "#/";
+  if (path[0] === PERF_GROUP) {
+    const slug = PERF_SLUGS[path[1]];
+    const rest = path.slice(2).map((item) => encodeURIComponent(item)).join("/");
+    return rest ? `#/${PERF_URL_PREFIX}/${slug}/${rest}` : `#/${PERF_URL_PREFIX}/${slug}`;
+  }
   return `#/${path.map((item) => encodeURIComponent(item)).join("/")}`;
 }
 
 export function pathFromHash(hash = window.location.hash) {
   const raw = hash.replace(/^#\/?/, "");
   if (!raw) return null;
-  const path = raw
+  const segments = raw
     .split("/")
     .filter(Boolean)
     .map((item) => decodeURIComponent(item));
-  return isValidPath(path) ? path : null;
+  if (segments[0] === PERF_URL_PREFIX) {
+    const child = Object.keys(PERF_SLUGS).find((key) => PERF_SLUGS[key] === segments[1]);
+    if (!child) return null;
+    const path = [PERF_GROUP, child, ...segments.slice(2)];
+    return isValidPath(path) ? path : null;
+  }
+  return isValidPath(segments) ? segments : null;
 }
 
 export function readRouteState() {

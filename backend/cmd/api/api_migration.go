@@ -91,6 +91,9 @@ func permissionSeeds() [][]string {
 		{"ui.element.manage", "管理页面元素"},
 		{"ui.element.rollback", "回滚页面元素版本"},
 		{"menu.perf_test.read", "性能测试"},
+		{"perf.plan.read", "查看性能测试"},
+		{"perf.plan.manage", "管理性能测试方案"},
+		{"perf.plan.execute", "执行性能测试"},
 	}
 }
 
