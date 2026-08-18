@@ -2,6 +2,7 @@ import json
 from collections import deque
 import hashlib
 import logging
+import math
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -24,29 +26,32 @@ logger = logging.getLogger(__name__)
 GENERATOR_VERSION = "perf-1.0.0"
 
 # k6 duration 字符串解析（1m / 30s / 1h / 10m30s 等）。
-_DURATION_PATTERN = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h)")
+_DURATION_PATTERN = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$")
 
 # 阈值运算符白名单，防注入（SPEC §6）。
 _ALLOWED_THRESHOLD_OPERATORS = {"<", ">", "<=", ">=", "==", "!="}
 
 # k6 summaryTrendStats 固定集合（SPEC §4.3）。
 _SUMMARY_TREND_STATS = ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"]
+_MAX_VUS = 500
 
 # 敏感变量引用 {{secret.xxx}}，渲染为 __ENV.XXX 运行时注入（SPEC §3.4）。
 _SECRET_PATTERN = re.compile(r"\{\{\s*secret\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SENSITIVE_KEY_PATTERN = re.compile(r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)")
-_SENSITIVE_TEXT_PATTERN = re.compile(r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)(\s*[=:]\s*)([^\s,;]+)")
+_SENSITIVE_TEXT_PATTERN = re.compile(r"(?i)([\"']?(?:authorization|cookie|password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)[^\"'\s,;}]+")
 _SENSITIVE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:authorization|cookie|password|passwd|token|secret|api[_-]?key)=)[^&#\s]+")
 
 
 def parse_duration(value: str) -> float:
     """把 k6 duration 字符串解析为秒数。"""
     text = str(value or "").strip()
+    if not _DURATION_PATTERN.fullmatch(text):
+        raise ValueError(f"无效的时长：{value}")
     total = 0.0
-    for number, unit in _DURATION_PATTERN.findall(text):
+    for number, unit in re.findall(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)", text):
         amount = float(number)
-        total += amount * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
-    if total <= 0:
+        total += amount * {"ns": 0.000000001, "us": 0.000001, "µs": 0.000001, "ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
+    if total < 0:
         raise ValueError(f"无效的时长：{value}")
     return total
 
@@ -55,6 +60,8 @@ def total_duration_seconds(scenario_type: str, load_config: dict) -> float:
     """按场景类型计算负载总时长（秒），用于超时动态计算（SPEC §5.1）。"""
     scenario_type = str(scenario_type or "baseline").lower()
     load_config = load_config or {}
+    if scenario_type == "smoke":
+        return 1.0
     if scenario_type in ("baseline", "soak"):
         return parse_duration(load_config.get("duration") or "1m")
     if scenario_type == "ramp":
@@ -76,7 +83,7 @@ def total_duration_seconds(scenario_type: str, load_config: dict) -> float:
         steps = 1 + max(0, (max_vus - start_vus + step_vus - 1) // step_vus)
         return steps * step_duration
     if scenario_type == "mixed":
-        raise ValueError("mixed 场景 P0 阶段暂不支持")
+        return parse_duration(load_config.get("duration") or "1m")
     raise ValueError(f"不支持的场景类型：{scenario_type}")
 
 
@@ -92,7 +99,10 @@ def render_options(scenario_type: str, load_config: dict) -> dict:
     """渲染 k6 options（SPEC §2.2）。"""
     scenario_type = str(scenario_type or "baseline").lower()
     load_config = load_config or {}
+    if scenario_type == "smoke":
+        return {"scenarios": {"smoke": {"executor": "shared-iterations", "iterations": 1, "vus": 1}}}
     if scenario_type in ("baseline", "soak"):
+        _validate_vus(load_config.get("vus") or 1)
         return {
             "vus": int(load_config.get("vus") or 1),
             "duration": str(load_config.get("duration") or "1m"),
@@ -101,15 +111,18 @@ def render_options(scenario_type: str, load_config: dict) -> dict:
         stages = load_config.get("stages") or []
         if not stages:
             raise ValueError("ramp 场景必须提供 load_config.stages")
-        return {
+        options = {
             "executor": "ramping-vus",
             "stages": [
                 {"duration": str(stage.get("duration") or "0s"), "target": int(stage.get("target") or 0)}
                 for stage in stages
             ],
         }
+        _validate_stage_targets(options["stages"])
+        return options
     if scenario_type == "peak":
         peak_vus = int(load_config.get("peakVus") or 0)
+        _validate_vus(peak_vus)
         return {
             "executor": "ramping-vus",
             "stages": [
@@ -122,6 +135,8 @@ def render_options(scenario_type: str, load_config: dict) -> dict:
         start_vus = int(load_config.get("startVus") or 1)
         step_vus = max(1, int(load_config.get("stepVus") or 1))
         max_vus = int(load_config.get("maxVus") or start_vus)
+        _validate_vus(start_vus)
+        _validate_vus(max_vus)
         step_duration = str(load_config.get("stepDuration") or "1m")
         stages = []
         current = start_vus
@@ -129,19 +144,76 @@ def render_options(scenario_type: str, load_config: dict) -> dict:
         while current < max_vus:
             current = min(max_vus, current + step_vus)
             stages.append({"duration": step_duration, "target": current})
+        _validate_stage_targets(stages)
         return {"executor": "ramping-vus", "stages": stages}
     if scenario_type == "mixed":
-        raise ValueError("mixed 场景 P0 阶段暂不支持")
+        scenarios = load_config.get("scenarios") or []
+        _validate_vus(load_config.get("vus") or 1)
+        _validate_mixed_scenarios(scenarios)
+        return {"scenarios": {"mixedFlow": {"executor": "constant-vus", "vus": int(load_config.get("vus") or 1), "duration": str(load_config.get("duration") or "1m"), "exec": "mixedFlow"}}}
     raise ValueError(f"不支持的场景类型：{scenario_type}")
 
 
-def render_thresholds(thresholds: list) -> dict[str, list[str]]:
+def _validate_vus(value) -> None:
+    try:
+        vus = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("vus 必须是正整数")
+    if vus <= 0 or vus > _MAX_VUS:
+        raise ValueError(f"vus 不能超过 {_MAX_VUS}")
+
+
+def _validate_stage_targets(stages: list[dict]) -> None:
+    for stage in stages:
+        _validate_vus(stage.get("target") or 0)
+
+
+def _is_absolute_http_url(value: str) -> bool:
+    return bool(re.match(r"^https?://[^\s/]+(?:/[^\s]*)?$", value, re.IGNORECASE))
+
+
+def _downsample_series_points(points: list[dict], limit: int = 3000) -> list[dict]:
+    if not points or limit <= 0:
+        return []
+    if len(points) <= limit:
+        return points
+    required = {0, len(points) - 1}
+    for index in range(1, len(points)):
+        if points[index - 1].get("stage") != points[index].get("stage"):
+            required.update({index - 1, index})
+    if limit == 1:
+        return [points[0]]
+
+    def uniformly_select(candidates: list[int], count: int) -> set[int]:
+        if count <= 0:
+            return set()
+        if count >= len(candidates):
+            return set(candidates)
+        if count == 1:
+            return {candidates[(len(candidates) - 1) // 2]}
+        return {
+            candidates[position * (len(candidates) - 1) // (count - 1)]
+            for position in range(count)
+        }
+
+    if len(required) > limit:
+        # 预算不足时只在完整的边界集合上均匀取样，避免排序后截取前缀丢失尾部阶段。
+        indices = uniformly_select(sorted(required), limit)
+    else:
+        # 预算足够时先保留所有阶段边界，再从其余点的全程均匀采样。
+        candidates = [index for index in range(len(points)) if index not in required]
+        indices = required | uniformly_select(candidates, limit - len(required))
+    indices = sorted(indices)
+    return [points[index] for index in indices]
+
+
+def render_thresholds(thresholds: list) -> dict[str, list[dict]]:
     """把平台结构化阈值数组渲染为 k6 thresholds 映射（SPEC §3.1）。
 
     形如 [{"metric": "http_req_duration", "aggregation": "p(95)", "operator": "<", "value": 500}]
     渲染为 {"http_req_duration": ["p(95)<500"]}。
     """
-    result: dict[str, list[str]] = {}
+    result: dict[str, list[dict]] = {}
     for item in thresholds or []:
         if not isinstance(item, dict):
             continue
@@ -157,8 +229,44 @@ def render_thresholds(thresholds: list) -> dict[str, list[str]]:
         if value is None or value == "":
             logger.warning("忽略缺少 value 的阈值：metric=%s", metric)
             continue
-        result.setdefault(metric, []).append(f"{aggregation}{operator}{value}")
+        threshold = {
+            "threshold": f"{aggregation}{operator}{value}",
+            "abortOnFail": bool(item.get("abortOnFail")),
+        }
+        delay = str(item.get("delayAbortEval") or "").strip()
+        if threshold["abortOnFail"] and delay:
+            parse_duration(delay)
+            threshold["delayAbortEval"] = delay
+        result.setdefault(metric, []).append(threshold)
     return result
+
+
+def _validate_mixed_scenarios(scenarios: list) -> None:
+    if not isinstance(scenarios, list) or not scenarios:
+        raise ValueError("mixed 场景必须提供 scenarios")
+    total = 0.0
+    names: set[str] = set()
+    for item in scenarios:
+        if not isinstance(item, dict):
+            raise ValueError("mixed 场景接口配置无效")
+        name = str(item.get("name") or "").strip()
+        url = str(item.get("url") or "").strip()
+        weight = item.get("weight")
+        try:
+            weight = float(str(weight))
+        except (TypeError, ValueError):
+            weight = 0
+        if not name or name in names or not url or weight <= 0:
+            raise ValueError("mixed 场景名称、权重和 URL 必须有效且名称唯一")
+        headers = item.get("headers", {})
+        if headers is not None and not isinstance(headers, dict):
+            raise ValueError("mixed 场景 headers 必须是对象")
+        if "body" in item and not isinstance(item["body"], (str, int, float, bool, list, dict, type(None))):
+            raise ValueError("mixed 场景 body 类型无效")
+        names.add(name)
+        total += weight
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError("mixed 场景权重总和必须为 1")
 
 
 def _render_js_string(value: str, secret_envs: dict[str, str]) -> str:
@@ -187,25 +295,46 @@ def _render_headers(headers: dict, secret_envs: dict[str, str]) -> str:
     pairs = []
     for key, value in headers.items():
         key_js = json.dumps(str(key), ensure_ascii=False)
-        if isinstance(value, str):
-            value_js = _render_js_string(value, secret_envs)
-        else:
-            value_js = json.dumps(value, ensure_ascii=False)
+        value_js = _render_js_value(value, secret_envs)
         pairs.append(f"{key_js}: {value_js}")
     return "{" + ", ".join(pairs) + "}"
 
 
 def _render_body(body, secret_envs: dict[str, str]) -> str:
-    if body is None:
-        return "null"
-    if isinstance(body, str):
-        return _render_js_string(body, secret_envs)
-    return json.dumps(body, ensure_ascii=False)
+    return _render_js_value(body, secret_envs)
+
+
+def _render_js_value(value, secret_envs: dict[str, str]) -> str:
+    if isinstance(value, str):
+        return _render_js_string(value, secret_envs)
+    if isinstance(value, dict):
+        return "{" + ", ".join(
+            json.dumps(str(key), ensure_ascii=False) + ": " + _render_js_value(item, secret_envs)
+            for key, item in value.items()
+        ) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(_render_js_value(item, secret_envs) for item in value) + "]"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _render_mixed_scenarios(scenarios: list, secret_envs: dict[str, str]) -> str:
+    rendered = []
+    for item in scenarios:
+        fields = [
+            json.dumps("name") + ": " + json.dumps(str(item.get("name") or ""), ensure_ascii=False),
+            json.dumps("weight") + ": " + json.dumps(float(str(item.get("weight")))),
+            json.dumps("method") + ": " + json.dumps(str(item.get("method") or "GET").upper()),
+            json.dumps("url") + ": " + _render_js_string(str(item.get("url") or ""), secret_envs),
+            json.dumps("headers") + ": " + _render_headers(item.get("headers") or {}, secret_envs),
+            json.dumps("body") + ": " + _render_body(item.get("body"), secret_envs),
+        ]
+        rendered.append("{" + ", ".join(fields) + "}")
+    return "[" + ", ".join(rendered) + "]"
 
 
 def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
     """渲染 k6 脚本，返回 (脚本文本, 敏感环境变量映射)。"""
-    scenario_type = str(payload.get("scenario_type") or "baseline").lower()
+    scenario_type = "smoke" if payload.get("mode") == "smoke" else str(payload.get("scenario_type") or "baseline").lower()
     load_config = payload.get("load_config") or {}
 
     options = render_options(scenario_type, load_config)
@@ -215,8 +344,6 @@ def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
         options["thresholds"] = thresholds
 
     target = str(payload.get("target") or payload.get("url") or "").strip()
-    if not target:
-        raise ValueError("perf 任务必须提供 payload.target")
     method = str(payload.get("method") or "GET").upper()
 
     secret_envs: dict[str, str] = {}
@@ -225,26 +352,62 @@ def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
     body_js = _render_body(payload.get("body"), secret_envs)
 
     options_js = json.dumps(options, ensure_ascii=False)
+    if scenario_type == "mixed":
+        scenarios = load_config.get("scenarios") or []
+        _validate_mixed_scenarios(scenarios)
+        if any(not _is_absolute_http_url(str(item.get("url") or "")) for item in scenarios) and not _is_absolute_http_url(target):
+            raise ValueError("mixed 含相对 URL 时必须提供合法 HTTP(S) payload.target")
+        mixed_scenarios = _render_mixed_scenarios(scenarios, secret_envs)
+        think_time = json.dumps(parse_duration(str(load_config.get("thinkTime") or "0s")))
+        flow = (
+            "const mixedScenarios = " + mixed_scenarios + ";\n"
+            "function resolveMixedTarget(path) {\n"
+            "  const value = String(path || '');\n"
+            "  if (value.indexOf('://') > 0) return value;\n"
+            "  const schemeEnd = target.indexOf('://');\n"
+            "  const originEnd = schemeEnd >= 0 ? target.indexOf('/', schemeEnd + 3) : -1;\n"
+            "  const origin = originEnd >= 0 ? target.slice(0, originEnd) : target.replace(/\\/+$/, '');\n"
+            "  if (value.startsWith('/')) return origin + value;\n"
+            "  const slash = target.lastIndexOf('/');\n"
+            "  const base = slash > (schemeEnd + 2) ? target.slice(0, slash + 1) : target + '/';\n"
+            "  return base + value.replace(/^\\.\\//, '');\n"
+            "}\n"
+            "export function mixedFlow() {\n"
+            "  const roll = Math.random();\n"
+            "  let cursor = 0;\n"
+            "  let selected = null;\n"
+            "  for (const item of mixedScenarios) { cursor += Number(item.weight || 0); if (roll < cursor) { selected = item; break; } }\n"
+            "  if (!selected) throw new Error('mixed weight distribution is invalid');\n"
+            "  const requestTarget = resolveMixedTarget(selected.url);\n"
+            "  const requestHeaders = Object.assign({}, headers, selected.headers || {});\n"
+            "  http.request(String(selected.method || method).toUpperCase(), requestTarget, selected.body ?? body, { headers: requestHeaders, tags: { scenario: selected.name } });\n"
+            "  sleep(" + think_time + ");\n"
+            "}\n"
+        )
+        imports = "import http from 'k6/http';\nimport { sleep } from 'k6';\n"
+    else:
+        if not target:
+            raise ValueError("perf 任务必须提供 payload.target")
+        flow = "export default function () {\n  http.request(method, target, body, { headers: headers });\n}\n"
+        imports = "import http from 'k6/http';\n"
     script = (
         "// 由 Synapse QA 执行器生成，generator_version=" + GENERATOR_VERSION + "\n"
-        "import http from 'k6/http';\n"
-        "\n"
-        "export const options = " + options_js + ";\n"
-        "\n"
-        "const target = " + target_js + ";\n"
-        "const method = " + json.dumps(method, ensure_ascii=False) + ";\n"
-        "const headers = " + headers_js + ";\n"
-        "const body = " + body_js + ";\n"
-        "\n"
-        "export default function () {\n"
-        "  http.request(method, target, body, { headers: headers });\n"
-        "}\n"
-        "\n"
-        "export function handleSummary(data) {\n"
-        "  return {\n"
-        "    'report.json': JSON.stringify(data),\n"
-        "  };\n"
-        "}\n"
+        + imports
+        + "\n"
+        + "export const options = " + options_js + ";\n"
+        + "\n"
+        + "const target = " + target_js + ";\n"
+        + "const method = " + json.dumps(method, ensure_ascii=False) + ";\n"
+        + "const headers = " + headers_js + ";\n"
+        + "const body = " + body_js + ";\n"
+        + "\n"
+        + flow
+        + "\n"
+        + "export function handleSummary(data) {\n"
+        + "  return {\n"
+        + "    'report.json': JSON.stringify(data),\n"
+        + "  };\n"
+        + "}\n"
     )
     return script, secret_envs
 
@@ -252,20 +415,61 @@ def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
 class NdjsonSampler:
     """消费 k6 `--out json` 的 NDJSON，聚合为短周期采样并定期原子写快照（SPEC §7.1）。"""
 
-    def __init__(self, ndjson_path: Path, snapshot_path: Path) -> None:
+    def __init__(
+        self,
+        ndjson_path: Path,
+        snapshot_path: Path,
+        task_id: str = "",
+        scenario_type: str = "baseline",
+        load_config: dict | None = None,
+        thresholds: list | None = None,
+        sample_interval_ms: int = 2000,
+        sample_callback: Callable[[dict], None] | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self._ndjson_path = ndjson_path
         self._snapshot_path = snapshot_path
         self._interval = settings.perf_snapshot_interval_seconds
+        self._task_id = task_id
+        self._scenario_type = scenario_type
+        self._load_config = load_config or {}
+        self._thresholds = thresholds or []
+        self._sample_interval_ms = max(1000, min(5000, int(sample_interval_ms or 2000)))
+        self._sample_callback = sample_callback
+        self._clock = clock or time.monotonic
+        self._sequence = 0
+        self._points: list[dict] = []
+        self._last_event_at = self._clock()
+        self._status_codes: dict[str, int] = {}
+        self._error_counts: dict[str, dict[str, object]] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._count = 0
-        self._durations = deque(maxlen=settings.perf_ndjson_window_points)
-        self._recent_requests = deque(maxlen=settings.perf_ndjson_window_points)
-        self._recent_failures = deque(maxlen=settings.perf_ndjson_window_points)
+        self._window_seconds = self._sample_interval_ms / 1000
+        self._hard_window_limit = 10000
+        self._window_limit = max(1, min(self._hard_window_limit, int(settings.perf_ndjson_window_points)))
+        self._durations: deque[tuple[float, float]] = deque(maxlen=self._window_limit)
+        self._recent_requests: deque[tuple[float, int]] = deque(maxlen=self._window_limit)
+        self._recent_failures: deque[tuple[float, bool]] = deque(maxlen=self._window_limit)
+        self._metric_windows: dict[str, deque[tuple[float, float]]] = {}
+        self._bucket_width_seconds = 0.01
+        self._request_buckets: dict[int, int] = {}
+        self._failure_buckets: dict[int, list[int]] = {}
+        self._duration_buckets: dict[int, list[float]] = {}
+        self._duration_bucket_seen: dict[int, int] = {}
+        self._duration_reservoir_limit = 500
         self._fails = 0
         self._total = 0
-        self._started_at = time.monotonic()
+        self._duration_sum = 0.0
+        self._duration_count = 0
+        self._vus = int(self._load_config.get("vus") or self._load_config.get("startVus") or 0)
+        self._vus_max = self._vus
+        self._latest_thresholds: list[dict] = []
+        self._latest_message = ""
+        self._started_at = self._clock()
+        self._series_started_at = datetime.now(timezone.utc)
+        self._series_ended_at: datetime | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="perf-ndjson-sampler", daemon=True)
@@ -275,14 +479,21 @@ class NdjsonSampler:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
+        self._series_ended_at = datetime.now(timezone.utc)
 
     def snapshot(self) -> dict:
         with self._lock:
             return self._aggregate()
 
+    def elapsed_seconds(self) -> float:
+        return max(0.0, self._clock() - self._started_at)
+
+    def duration_seconds(self) -> float:
+        return total_duration_seconds(self._scenario_type, self._load_config)
+
     def _run(self) -> None:
         offset = 0
-        last_flush = time.monotonic()
+        last_flush = self._clock()
         while not self._stop.is_set():
             try:
                 with open(self._ndjson_path, "r", encoding="utf-8") as handle:
@@ -292,11 +503,15 @@ class NdjsonSampler:
                     offset = handle.tell()
             except (FileNotFoundError, OSError):
                 pass
-            if time.monotonic() - last_flush >= self._interval:
+            if self._clock() - last_flush >= self._interval:
                 self._write_snapshot()
-                last_flush = time.monotonic()
+                last_flush = self._clock()
+            if self._clock() - self._last_event_at >= self._sample_interval_ms / 1000:
+                self.emit_sample()
             time.sleep(0.5)
         self._write_snapshot()
+        if self._sample_callback:
+            self.emit_sample(force=True)
 
     def _consume_line(self, line: str) -> None:
         text = line.strip()
@@ -313,31 +528,197 @@ class NdjsonSampler:
         if not isinstance(value, (int, float)):
             return
         with self._lock:
+            now = self._clock()
+            if metric == "vus":
+                self._vus = int(value)
+                self._vus_max = max(self._vus_max, self._vus)
+                self._metric_window(metric).append((now, float(value)))
+                self._evict_window(now)
+                return
+            if metric == "vus_max":
+                self._vus_max = max(self._vus_max, int(value))
+                self._metric_window(metric).append((now, float(value)))
+                self._evict_window(now)
+                return
             if metric == "http_reqs":
                 # k6 --out json 每个 http_reqs Point 代表一次计数，应累计而非覆盖。
                 count = int(value)
                 self._count += count
-                self._recent_requests.append((time.monotonic(), count))
+                bucket = self._bucket(now)
+                self._request_buckets[bucket] = self._request_buckets.get(bucket, 0) + count
+                self._recent_requests.append((now, count))
+                self._metric_window(metric).append((now, float(count)))
+                tags = item.get("data", {}).get("tags") or {}
+                status = str(tags.get("status") or "")
+                if status:
+                    self._status_codes[status] = self._status_codes.get(status, 0) + count
+                if status and status not in {"200", "201", "202", "204", "304"}:
+                    key = f"status:{status}"
+                    entry = self._error_counts.setdefault(key, {"key": key, "message": f"HTTP {status}", "count": 0})
+                    entry["count"] = _int_value(entry.get("count", 0)) + count
             elif metric == "http_req_duration":
-                self._durations.append(float(value))
+                duration = float(value)
+                bucket = self._bucket(now)
+                reservoir = self._duration_buckets.setdefault(bucket, [])
+                seen = self._duration_bucket_seen.get(bucket, 0)
+                if len(reservoir) < self._duration_reservoir_limit:
+                    reservoir.append(duration)
+                else:
+                    reservoir[seen % self._duration_reservoir_limit] = duration
+                self._duration_bucket_seen[bucket] = seen + 1
+                self._durations.append((now, duration))
+                self._metric_window(metric).append((now, duration))
+                self._duration_sum += duration
+                self._duration_count += 1
             elif metric == "http_req_failed":
                 self._total += 1
                 failed = bool(value)
-                self._recent_failures.append(failed)
+                bucket = self._bucket(now)
+                counts = self._failure_buckets.setdefault(bucket, [0, 0])
+                counts[0] += 1
+                counts[1] += int(failed)
+                self._recent_failures.append((now, failed))
+                self._metric_window(metric).append((now, 1.0 if failed else 0.0))
                 if failed:
                     self._fails += 1
+            else:
+                self._metric_window(metric).append((now, float(value)))
+            self._evict_window(now)
+
+    def _metric_window(self, metric: str) -> deque[tuple[float, float]]:
+        window = self._metric_windows.get(metric)
+        if window is None:
+            window = deque(maxlen=self._window_limit)
+            self._metric_windows[metric] = window
+        return window
+
+    def _bucket(self, timestamp: float) -> int:
+        return int(timestamp / self._bucket_width_seconds)
+
+    def _cutoff_bucket(self) -> int:
+        return math.ceil((self._clock() - self._window_seconds) / self._bucket_width_seconds)
+
+    def _evict_window(self, now: float) -> None:
+        cutoff = now - self._window_seconds
+        for window in (self._durations, self._recent_requests, self._recent_failures, *self._metric_windows.values()):
+            while window and window[0][0] < cutoff:
+                window.popleft()
+        cutoff_bucket = math.ceil(cutoff / self._bucket_width_seconds)
+        for buckets in (self._request_buckets, self._failure_buckets, self._duration_buckets, self._duration_bucket_seen):
+            for bucket in list(buckets):
+                if bucket < cutoff_bucket:
+                    del buckets[bucket]
+
+    def _window_duration_values(self) -> list[float]:
+        return [value for bucket, values in self._duration_buckets.items() if bucket >= self._cutoff_bucket() for value in values]
+
+    def _window_request_count(self) -> int:
+        cutoff = self._cutoff_bucket()
+        return sum(value for bucket, value in self._request_buckets.items() if bucket >= cutoff)
+
+    def _window_failure_counts(self) -> tuple[int, int]:
+        cutoff = self._cutoff_bucket()
+        total = sum(values[0] for bucket, values in self._failure_buckets.items() if bucket >= cutoff)
+        failed = sum(values[1] for bucket, values in self._failure_buckets.items() if bucket >= cutoff)
+        return total, failed
+
+    def emit_sample(self, force: bool = False) -> None:
+        if not self._sample_callback:
+            return
+        now = self._clock()
+        if not force and now - self._last_event_at < self._sample_interval_ms / 1000:
+            return
+        self._last_event_at = now
+        snapshot = self._aggregate()
+        self._sequence += 1
+        values = sorted(self._window_duration_values())
+        window = snapshot.get("window") or {}
+        duration_ms = int(total_duration_seconds(self._scenario_type, self._load_config) * 1000)
+        elapsed_ms = int((now - self._started_at) * 1000)
+        thresholds = []
+        messages = []
+        for item in self._thresholds:
+            metric = str(item.get("metric") or "")
+            expression = f"{item.get('aggregation', 'value')}{item.get('operator', '')}{item.get('value', '')}"
+            delay = str(item.get("delayAbortEval") or "").strip()
+            try:
+                delay_seconds = parse_duration(delay) if delay else 0
+                delay_error = ""
+            except ValueError:
+                delay_seconds, delay_error = 0, "delayAbortEval 无效"
+            actual, reason = self._threshold_actual(metric, str(item.get("aggregation") or ""), now)
+            if delay_error:
+                status, reason = "pending", delay_error
+            elif elapsed_ms / 1000 < delay_seconds:
+                status, reason = "pending", f"等待 delayAbortEval={delay}"
+            elif reason:
+                status = "pending"
+            else:
+                status = "passing" if _threshold_passed(actual, item.get("operator"), item.get("value")) else "failing"
+            if reason:
+                messages.append(f"{metric}/{item.get('aggregation')}: {reason}")
+            thresholds.append({"metric": metric, "expression": expression, "actual": actual, "status": status})
+        event = {
+            "taskId": self._task_id,
+            "sequence": self._sequence,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "type": "sample",
+            "status": "running",
+            "stage": self._stage_for(elapsed_ms),
+            "remainingMs": max(0, duration_ms - elapsed_ms),
+            "windowMs": self._sample_interval_ms,
+            "vus": self._vus,
+            "totalRequests": self._count,
+            "rps": window.get("rps"),
+            "p50": self._percentile(values, 0.50),
+            "p90": self._percentile(values, 0.90),
+            "p95": self._percentile(values, 0.95),
+            "p99": self._percentile(values, 0.99),
+            "errorRate": window.get("error_rate"),
+            "statusCodes": dict(self._status_codes),
+            "errorTopN": sorted(self._error_counts.values(), key=lambda item: _int_value(item.get("count", 0)), reverse=True)[:10],
+            "thresholds": thresholds,
+            "message": "; ".join(messages) if messages else "",
+        }
+        self._latest_thresholds = thresholds
+        self._latest_message = "; ".join(messages)
+        self._append_series_point({key: value for key, value in event.items() if key not in {"statusCodes", "errorTopN", "thresholds", "message"}})
+        try:
+            self._sample_callback(event)
+        except Exception:
+            logger.exception("性能采样事件回调失败")
+
+    def series(self, partial: bool) -> dict:
+        ended_at = self._series_ended_at or datetime.now(timezone.utc)
+        return {
+            "version": 1,
+            "intervalMs": self._sample_interval_ms,
+            "lastSequence": self._sequence,
+            "startedAt": self._series_started_at.isoformat().replace("+00:00", "Z"),
+            "endedAt": ended_at.isoformat().replace("+00:00", "Z"),
+            "partial": partial,
+            "points": _downsample_series_points(self._points, 3000),
+            "statusCodes": dict(self._status_codes),
+            "errorTopN": sorted(self._error_counts.values(), key=lambda item: _int_value(item.get("count", 0)), reverse=True)[:10],
+            "thresholds": self._latest_thresholds,
+        }
+
+    def _append_series_point(self, point: dict) -> None:
+        self._points.append(point)
+        if len(self._points) > 6000:
+            self._points = _downsample_series_points(self._points, 3000)
 
     def _aggregate(self) -> dict:
-        durations = sorted(self._durations)
-        now = time.monotonic()
+        now = self._clock()
+        self._evict_window(now)
+        durations = sorted(self._window_duration_values())
         elapsed = max(0.001, now - self._started_at)
-        window_elapsed = elapsed
-        if self._recent_requests:
-            window_elapsed = max(0.001, now - self._recent_requests[0][0])
-        window_count = sum(count for _, count in self._recent_requests)
+        window_count = self._window_request_count()
+        window_elapsed = max(0.001, self._window_seconds)
+        failure_total, failure_count = self._window_failure_counts()
         window_error_rate = (
-            sum(1 for failed in self._recent_failures if failed) / len(self._recent_failures)
-            if self._recent_failures
+            failure_count / failure_total
+            if failure_total
             else None
         )
         window = {
@@ -348,16 +729,78 @@ class NdjsonSampler:
             "rps": round(window_count / window_elapsed, 2),
             "error_rate": round(window_error_rate, 4) if window_error_rate is not None else None,
             "sample_points": len(durations),
+            "vus": self._vus,
+            "vus_max": self._vus_max,
         }
         return {
             "total_requests": self._count,
-            "avg_duration_ms": round(sum(durations) / len(durations)) if durations else None,
+            "avg_duration_ms": round(self._duration_sum / self._duration_count) if self._duration_count else None,
             "p95_duration_ms": self._percentile(durations, 0.95),
             "error_rate": round(self._fails / self._total, 4) if self._total else None,
             "rps": round(self._count / elapsed, 2),
             "window": window,
             "partial": True,
         }
+
+    def _threshold_actual(self, metric: str, aggregation: str, now: float) -> tuple[float | None, str]:
+        if metric == "http_reqs":
+            count = self._window_request_count()
+            if aggregation == "count":
+                return float(count), "" if count else "暂无样本"
+            if aggregation == "rate":
+                return count / max(0.001, self._window_seconds), "" if count else "暂无样本"
+        if metric == "http_req_failed":
+            total, failed = self._window_failure_counts()
+            if not total:
+                return None, "暂无样本"
+            if aggregation == "rate":
+                return failed / total, ""
+        if metric == "http_req_duration":
+            values = self._window_duration_values()
+        else:
+            values = [value for _, value in self._metric_windows.get(metric, [])]
+        if not values:
+            return None, "暂无样本"
+        if aggregation in {"p(50)", "p(90)", "p(95)", "p(99)"}:
+            return self._percentile(sorted(values), float(aggregation[2:-1]) / 100), ""
+        if aggregation == "avg":
+            return sum(values) / len(values), ""
+        if aggregation == "min":
+            return min(values), ""
+        if aggregation == "max":
+            return max(values), ""
+        if aggregation == "count":
+            return sum(values) if metric in {"http_reqs", "iterations"} else float(len(values)), ""
+        if aggregation == "rate":
+            if metric == "http_req_failed":
+                return sum(values) / len(values), ""
+            return sum(values) / max(0.001, self._window_seconds), ""
+        return None, "不支持该指标聚合方式"
+
+    def _stage_for(self, elapsed_ms: int) -> str:
+        elapsed = elapsed_ms / 1000
+        if self._scenario_type in {"baseline", "soak", "mixed"}:
+            return "steady"
+        if self._scenario_type == "peak":
+            ramp = parse_duration(str(self._load_config.get("rampDuration") or "1m"))
+            hold = parse_duration(str(self._load_config.get("holdDuration") or "10m"))
+            return "ramp-up" if elapsed < ramp else "hold" if elapsed < ramp + hold else "ramp-down"
+        stages = self._load_config.get("stages") or []
+        if self._scenario_type == "stress":
+            step = parse_duration(str(self._load_config.get("stepDuration") or "1m"))
+            start = int(self._load_config.get("startVus") or 1)
+            step_vus = max(1, int(self._load_config.get("stepVus") or 1))
+            max_vus = int(self._load_config.get("maxVus") or start)
+            count = 1 + max(0, (max_vus - start + step_vus - 1) // step_vus)
+            return f"stage:{min(count, int(elapsed // step) + 1)}"
+        if self._scenario_type == "ramp":
+            elapsed_total = 0.0
+            for index, stage in enumerate(stages, 1):
+                elapsed_total += parse_duration(str(stage.get("duration") or "0s"))
+                if elapsed < elapsed_total:
+                    return f"stage:{index}"
+            return f"stage:{len(stages) or 1}"
+        return "steady"
 
     def _write_snapshot(self) -> None:
         payload = json.dumps(self._aggregate(), ensure_ascii=False)
@@ -385,9 +828,11 @@ class PerfRunner(Runner):
         progress: Callable | None = None,
         canceled: Callable[[], bool] | None = None,
         started: Callable[[dict], None] | None = None,
+        sample: Callable[[dict], None] | None = None,
     ) -> TaskResult:
         payload = task.payload or {}
-        scenario_type = str(payload.get("scenario_type") or "baseline").lower()
+        scenario_type = "smoke" if payload.get("mode") == "smoke" else str(payload.get("scenario_type") or "baseline").lower()
+        load_config = payload.get("load_config") or {}
 
         if progress:
             progress("[检查] 正在检测 k6 运行环境")
@@ -428,6 +873,11 @@ class PerfRunner(Runner):
                 script_hash,
                 k6_version,
                 started,
+                sample,
+                task.task_id or "",
+                load_config,
+                payload.get("thresholds") or [],
+                task.sample_interval_ms,
             )
         return self._attach_runtime_metadata(result, script_hash, k6_version)
 
@@ -440,9 +890,14 @@ class PerfRunner(Runner):
         timeout: float,
         canceled: Callable[[], bool] | None,
         progress: Callable | None,
-        script_hash: str,
-        k6_version: str,
-        started: Callable[[dict], None] | None,
+        script_hash: str = "",
+        k6_version: str = "",
+        started: Callable[[dict], None] | None = None,
+        sample: Callable[[dict], None] | None = None,
+        task_id: str = "",
+        load_config: dict | None = None,
+        thresholds: list | None = None,
+        sample_interval_ms: int = 2000,
     ) -> TaskResult:
         ndjson_path = workdir / "ndjson.out"
         report_path = workdir / "report.json"
@@ -480,7 +935,16 @@ class PerfRunner(Runner):
             except Exception:
                 logger.exception("性能测试 running 回调失败")
 
-        sampler = NdjsonSampler(ndjson_path, snapshot_path)
+        sampler = NdjsonSampler(
+            ndjson_path,
+            snapshot_path,
+            task_id=task_id,
+            scenario_type=scenario_type,
+            load_config=load_config,
+            thresholds=thresholds,
+            sample_interval_ms=sample_interval_ms,
+            sample_callback=sample,
+        )
         sampler.start()
 
         started_at = time.monotonic()
@@ -501,7 +965,7 @@ class PerfRunner(Runner):
                 error = "性能测试超时"
                 if progress:
                     progress(f"[超时] {error}")
-                return self._result(scenario_type, exit_code=1, failure_stage="timeout", error=error, metrics=partial, summary=_summary_from_metrics(partial), diagnostic=diagnostic, partial=True, terminal_status="timed_out")
+                return self._result(scenario_type, exit_code=1, failure_stage="timeout", error=error, metrics=partial, summary=_summary_from_metrics(partial), series=sampler.series(True), diagnostic=diagnostic, partial=True, terminal_status="timed_out")
 
         returncode = process.returncode
         sampler.stop()
@@ -521,6 +985,9 @@ class PerfRunner(Runner):
             metrics = self._extract_metrics(report)
             if not thresholds_ok:
                 # k6 threshold 失败可能以非零退出码结束，必须优先使用 report 判定。
+                elapsed_seconds = sampler.elapsed_seconds() if hasattr(sampler, "elapsed_seconds") else 0.0
+                total_duration = sampler.duration_seconds() if hasattr(sampler, "duration_seconds") else 0.0
+                partial = self._threshold_abort_early(thresholds or [], threshold_details, elapsed_seconds, total_duration)
                 return self._result(
                     scenario_type,
                     exit_code=returncode,
@@ -531,8 +998,9 @@ class PerfRunner(Runner):
                     thresholds=threshold_details,
                     metrics=metrics,
                     summary=report,
+                    series=sampler.series(partial),
                     diagnostic=diagnostic,
-                    partial=False,
+                    partial=partial,
                 )
             if returncode != 0:
                 error = f"k6 执行失败（exit_code={returncode}）"
@@ -547,6 +1015,7 @@ class PerfRunner(Runner):
                     thresholds=threshold_details,
                     metrics=metrics,
                     summary=report,
+                    series=sampler.series(True),
                     diagnostic=diagnostic,
                     partial=False,
                     terminal_status="execution_failed",
@@ -563,6 +1032,7 @@ class PerfRunner(Runner):
                 thresholds=threshold_details,
                 metrics=metrics,
                 summary=report,
+                series=sampler.series(False),
                 diagnostic=diagnostic,
                 partial=False,
             )
@@ -579,9 +1049,28 @@ class PerfRunner(Runner):
             failure_stage="k6_runtime",
             error=error,
             diagnostic=diagnostic,
+            series=sampler.series(True),
             partial=True,
             terminal_status="execution_failed",
         )
+
+    @staticmethod
+    def _threshold_abort_early(thresholds: list, details: list[dict], elapsed_seconds: float, total_duration: float) -> bool:
+        if not thresholds or not details:
+            return False
+        failed = {str(item.get("threshold") or "") for item in details if item.get("ok") is False}
+        if not failed:
+            return False
+        try:
+            # threshold abort is partial only when an aborting threshold stops the run before its configured duration.
+            # The duration is supplied by the sampler through its elapsed comparison below.
+            for item in thresholds:
+                expression = f"{item.get('aggregation', 'value')}{item.get('operator', '')}{item.get('value', '')}"
+                if item.get("abortOnFail") and expression in failed:
+                    return elapsed_seconds < total_duration - 0.1
+        except (TypeError, ValueError):
+            return False
+        return False
 
     def _handle_cancel(self, process, sampler, report_path, snapshot_path, log_path, log_handle, scenario_type, progress) -> TaskResult:
         """优雅停止 → 宽限期 → 强制终止，并用本地采样快照兜底部分结果（SPEC §5.1）。"""
@@ -625,6 +1114,7 @@ class PerfRunner(Runner):
             thresholds=threshold_details,
             metrics=metrics,
             summary=report if isinstance(report, dict) else _summary_from_metrics(metrics),
+            series=sampler.series(True),
             diagnostic=diagnostic,
             partial=True,
             terminal_status="canceled",
@@ -705,6 +1195,7 @@ class PerfRunner(Runner):
         thresholds=None,
         metrics=None,
         summary=None,
+        series=None,
         diagnostic="",
         partial=False,
     ) -> TaskResult:
@@ -717,6 +1208,7 @@ class PerfRunner(Runner):
             "thresholds": thresholds or [],
             "metrics": metrics or {},
             "summary": _sanitize_json_value(summary or {}),
+            "series": _sanitize_json_value(series or {"version": 1, "points": [], "statusCodes": {}, "errorTopN": [], "thresholds": []}),
             "partial": partial,
             "diagnostic": _sanitize_text(diagnostic),
         }
@@ -751,6 +1243,24 @@ def _round_ms(value) -> float | None:
     return round(float(value))
 
 
+def _int_value(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _threshold_passed(actual, operator, target) -> bool:
+    if actual is None or target is None:
+        return False
+    try:
+        actual = float(actual)
+        target = float(target)
+    except (TypeError, ValueError):
+        return False
+    return {"<": actual < target, "<=": actual <= target, ">": actual > target, ">=": actual >= target}.get(str(operator), False)
+
+
 def _summary_from_metrics(metrics: dict) -> dict:
     """把无 report 的部分结果包装成最小 k6 summary 结构。"""
     return {
@@ -773,7 +1283,7 @@ def _summary_from_metrics(metrics: dict) -> dict:
 def _sanitize_text(value: str) -> str:
     text = str(value or "")
     text = _SENSITIVE_QUERY_PATTERN.sub(r"\1***", text)
-    return _SENSITIVE_TEXT_PATTERN.sub(r"\1\2***", text)
+    return _SENSITIVE_TEXT_PATTERN.sub(r"\1***", text)
 
 
 def _sanitize_json_value(value):

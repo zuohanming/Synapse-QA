@@ -687,6 +687,12 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table perf_test_plans add column if not exists scenario_type text not null default 'baseline'`,
 		`alter table perf_test_plans add column if not exists load_config jsonb not null default '{}'::jsonb`,
 		`alter table perf_test_plans add column if not exists environment text not null default 'test'`,
+		`alter table perf_test_plans add column if not exists environment_id bigint`,
+		`do $$ begin
+			if not exists (select 1 from pg_constraint where conrelid='perf_test_plans'::regclass and conname='fk_perf_plans_environment') then
+				alter table perf_test_plans add constraint fk_perf_plans_environment foreign key(environment_id) references test_objects(id) on delete restrict;
+			end if;
+		end $$`,
 		// §3.2 执行记录：执行快照、任务关联、幂等、结果诊断与失效凭据。
 		`alter table perf_test_runs add column if not exists scenario_type text not null default 'baseline'`,
 		`alter table perf_test_runs add column if not exists plan_snapshot jsonb not null default '{}'::jsonb`,
@@ -695,6 +701,14 @@ func (a *app) migrate(ctx context.Context) error {
 		`alter table perf_test_runs add column if not exists executor_name text not null default ''`,
 		`alter table perf_test_runs add column if not exists k6_version text not null default ''`,
 		`alter table perf_test_runs add column if not exists environment text not null default 'test'`,
+		`alter table perf_test_runs add column if not exists environment_id bigint`,
+		`alter table perf_test_runs add column if not exists p99_duration_ms numeric`,
+		`alter table perf_test_runs add column if not exists degradation_checked_at timestamptz`,
+		`do $$ begin
+			if not exists (select 1 from pg_constraint where conrelid='perf_test_runs'::regclass and conname='fk_perf_runs_environment') then
+				alter table perf_test_runs add constraint fk_perf_runs_environment foreign key(environment_id) references test_objects(id) on delete restrict;
+			end if;
+		end $$`,
 		`alter table perf_test_runs add column if not exists requested_at timestamptz`,
 		`alter table perf_test_runs add column if not exists dispatched_at timestamptz`,
 		`alter table perf_test_runs add column if not exists dispatch_deadline_at timestamptz`,
@@ -725,6 +739,58 @@ func (a *app) migrate(ctx context.Context) error {
 			set scenario_type = 'ramp', load_config = jsonb_build_object('stages', stages)
 			where load_mode = 'ramping' and scenario_type = 'baseline' and load_config = '{}'::jsonb
 			  and jsonb_array_length(stages) > 0`,
+		`update perf_test_plans p set environment_id = matched.id
+		 from (select p2.id as plan_id, min(t.id) as id
+		       from perf_test_plans p2 join test_objects t on t.product_id = p2.product_id
+		       where p2.environment_id is null and t.deleted_at is null
+		         and lower(trim(t.env_name)) = lower(trim(p2.environment))
+		       group by p2.id having count(*) = 1) matched
+		 where p.id = matched.plan_id`,
+		`update perf_test_runs r set p99_duration_ms = case
+			when jsonb_typeof(r.summary->'metrics'->'http_req_duration'->'values'->'p(99)') = 'number' then (r.summary->'metrics'->'http_req_duration'->'values'->>'p(99)')::numeric
+			when jsonb_typeof(r.summary->'metrics'->'http_req_duration'->'p99_duration_ms') = 'number' then (r.summary->'metrics'->'http_req_duration'->>'p99_duration_ms')::numeric
+			when jsonb_typeof(r.summary->'metrics'->'p99_duration_ms') = 'number' then (r.summary->'metrics'->>'p99_duration_ms')::numeric
+			else null end
+		 where r.p99_duration_ms is null`,
+		`create table if not exists perf_test_baselines (
+			id bigserial primary key,
+			plan_id bigint not null references perf_test_plans(id) on delete restrict,
+			scenario_type text not null,
+			environment_id bigint references test_objects(id) on delete restrict,
+			environment text not null default '',
+			run_id bigint not null unique references perf_test_runs(id) on delete restrict,
+			set_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now()
+		)`,
+		`create unique index if not exists uq_perf_baseline_dimension_env on perf_test_baselines(plan_id, scenario_type, environment_id) where environment_id is not null`,
+		`create unique index if not exists uq_perf_baseline_dimension_text on perf_test_baselines(plan_id, scenario_type, environment) where environment_id is null`,
+		`create table if not exists perf_test_schedules (
+			id bigserial primary key,
+			name text not null,
+			plan_id bigint not null references perf_test_plans(id) on delete restrict,
+			environment_id bigint references test_objects(id) on delete restrict,
+			cron_expression text not null,
+			timezone text not null,
+			enabled boolean not null default false,
+			next_run_at timestamptz,
+			claim_token text not null default '',
+			claim_owner text not null default '',
+			claim_until timestamptz,
+			last_scheduled_for timestamptz,
+			last_triggered_at timestamptz,
+			last_run_id bigint references perf_test_runs(id) on delete set null,
+			last_result text not null default '' check(last_result in ('','triggered','skipped_active_run','blocked','error')),
+			last_error text not null default '',
+			created_by text not null default '',
+			updated_by text not null default '',
+			created_at timestamptz not null default now(),
+			updated_at timestamptz not null default now(),
+			deleted_at timestamptz
+		)`,
+		`create index if not exists idx_perf_schedule_due on perf_test_schedules(enabled, next_run_at) where deleted_at is null`,
+		`create index if not exists idx_perf_schedule_plan on perf_test_schedules(plan_id) where deleted_at is null`,
+		`create unique index if not exists uq_notifications_perf_degradation on notifications(user_id,type,target_type,target_id) where type = 'perf.degradation'`,
 	}
 	statements = append(statements, elementCaptureMigrationStatements()...)
 	for _, statement := range statements {

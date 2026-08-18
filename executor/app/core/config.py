@@ -87,6 +87,8 @@ class Settings:
     perf_ndjson_window_points = int(os.getenv("EXECUTOR_PERF_NDJSON_WINDOW_POINTS", "5000"))
     # 已取消 task_id 墓碑的存活时间（幂等返回已取消）。
     perf_cancel_tombstone_ttl_seconds = int(os.getenv("EXECUTOR_PERF_CANCEL_TOMBSTONE_TTL_SECONDS", "3600"))
+    perf_task_ttl_seconds = int(os.getenv("EXECUTOR_PERF_TASK_TTL_SECONDS", "600"))
+    perf_task_max_retained = int(os.getenv("EXECUTOR_PERF_TASK_MAX_RETAINED", "1000"))
     # 终态回调重试策略（SPEC §5.5）。
     callback_max_attempts = int(os.getenv("EXECUTOR_CALLBACK_MAX_ATTEMPTS", "5"))
     callback_retry_base_delay_seconds = float(os.getenv("EXECUTOR_CALLBACK_RETRY_BASE_DELAY_SECONDS", "1"))

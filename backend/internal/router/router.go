@@ -46,6 +46,7 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	api.POST("/api-automation/test-runs/tasks/:taskId/callback", deps.APIAutomationController.TestRunCallback)
 	// 性能测试回调使用 Bearer callback token 鉴权，task_id 仅定位，不依赖用户登录态。
 	api.POST("/perf/tasks/:taskId/callback", deps.PerformanceController.Callback)
+	api.POST("/perf/tasks/:taskId/events/callback", deps.PerformanceController.EventCallback)
 	api.POST("/auth/login", deps.AuthController.Login)
 	api.POST("/auth/register", deps.AuthController.Register)
 	// 候选项响应始终先设置 no-store，连 JWT 认证失败响应也不例外。
@@ -78,6 +79,7 @@ func registerDataFactoryRoutes(authed *gin.RouterGroup, deps Dependencies) {
 }
 
 func registerPerformanceRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	authed.GET("/perf/environments", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListEnvironments)
 	authed.GET("/perf/plans", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListPlans)
 	authed.GET("/perf/plans/:id", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetPlan)
 	authed.POST("/perf/plans", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.CreatePlan)
@@ -87,6 +89,19 @@ func registerPerformanceRoutes(authed *gin.RouterGroup, deps Dependencies) {
 	authed.POST("/perf/runs/:id/cancel", controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.CancelRun)
 	authed.GET("/perf/runs", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListRuns)
 	authed.GET("/perf/runs/:id", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetRun)
+	authed.GET("/perf/runs/:id/events/stream", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.StreamEvents)
+	authed.PUT("/perf/runs/:id/baseline", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.SetBaseline)
+	authed.GET("/perf/runs/:id/baseline", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetBaseline)
+	authed.DELETE("/perf/runs/:id/baseline", controller.RequirePermission("perf.plan.manage"), deps.PerformanceController.DeleteBaseline)
+	authed.GET("/perf/runs/:id/compare", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.CompareRun)
+	authed.GET("/perf/runs/:id/trend", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.TrendRun)
+	authed.GET("/perf/runs/:id/export", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ExportRun)
+	authed.GET("/perf/schedules", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.ListSchedules)
+	authed.POST("/perf/schedules", controller.RequirePermission("perf.plan.manage"), controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.CreateSchedule)
+	authed.PATCH("/perf/schedules/:id", controller.RequirePermission("perf.plan.manage"), controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.UpdateSchedule)
+	authed.POST("/perf/schedules/:id/enable", controller.RequirePermission("perf.plan.manage"), controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.EnableSchedule)
+	authed.POST("/perf/schedules/:id/disable", controller.RequirePermission("perf.plan.manage"), controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.DisableSchedule)
+	authed.DELETE("/perf/schedules/:id", controller.RequirePermission("perf.plan.manage"), controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.DeleteSchedule)
 	authed.POST("/perf/smoke", controller.RequirePermission("perf.plan.execute"), deps.PerformanceController.StartSmoke)
 	authed.GET("/perf/smoke/:taskId", controller.RequirePermission("perf.plan.read"), deps.PerformanceController.GetSmoke)
 }

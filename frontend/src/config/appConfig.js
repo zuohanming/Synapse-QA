@@ -17,7 +17,7 @@ export const menuData = [
   },
   {
     title: "性能测试",
-    children: ["压测方案", "测试报告"]
+    children: ["压测方案", "测试报告", "定时规则"]
   },
   {
     title: "数据工厂",

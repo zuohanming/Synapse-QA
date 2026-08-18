@@ -8,6 +8,7 @@ import { performanceService } from "../services/performanceService.js";
 import { pageItems } from "../utils/formatters.js";
 import {
   ENVIRONMENTS,
+  PLATFORM_VUS_LIMIT,
   SCENARIO_TYPES,
   THRESHOLD_METRICS,
   THRESHOLD_OPERATORS,
@@ -19,6 +20,11 @@ import {
   normalizeScenarioType,
   normalizeThresholds,
   parseDurationToSeconds,
+  isValidK6Duration,
+  normalizeHeadersObject,
+  validateMixedConfig,
+  validateMixedTarget,
+  validateVusLimit,
   renderK6Thresholds,
   thresholdExpression
 } from "../utils/perf.js";
@@ -42,6 +48,11 @@ export function PerfPlanEditPage({ planId }) {
   );
   const { data: productsData, loading: loadingProducts } = useAsyncData(() => configService.products.list({ page: 1, pageSize: 200 }), []);
   const productOptions = pageItems(productsData);
+  const { data: environmentsData, loading: loadingEnvironments } = useAsyncData(
+    () => (form?.productId ? performanceService.environments(form.productId) : Promise.resolve({ items: [] })),
+    [form?.productId]
+  );
+  const environmentOptions = Array.isArray(environmentsData) ? environmentsData : (environmentsData?.items || []);
 
   // 首次加载完成后初始化表单（planId 为空时为新建空表单）。
   useEffect(() => {
@@ -63,6 +74,10 @@ export function PerfPlanEditPage({ planId }) {
 
   function update(partial) {
     setForm((prev) => ({ ...prev, ...partial }));
+  }
+
+  function updateProduct(productId) {
+    update({ productId, environmentId: "", environmentName: "", environmentBaseUrl: "", environmentDeployEnv: "" });
   }
 
   function updateLoadConfig(next) {
@@ -127,7 +142,7 @@ export function PerfPlanEditPage({ planId }) {
           </label>
           <label className="form-field required-field">
             <span>项目/产品</span>
-            <select className="text-input" disabled={loadingProducts} value={current.productId} onChange={(event) => update({ productId: event.target.value })}>
+            <select className="text-input" disabled={loadingProducts} value={current.productId} onChange={(event) => updateProduct(event.target.value)}>
               <option value="">{loadingProducts ? "加载产品中" : "请选择产品"}</option>
               {productOptions.map((item) => <option key={item.id} value={item.id}>{item.projectName}/{item.name}</option>)}
             </select>
@@ -136,6 +151,13 @@ export function PerfPlanEditPage({ planId }) {
             <span>测试环境</span>
             <select className="text-input" value={current.environment} onChange={(event) => update({ environment: event.target.value })}>
               {Object.entries(ENVIRONMENTS).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>运行环境</span>
+            <select className="text-input" disabled={!current.productId || loadingEnvironments} value={current.environmentId || ""} onChange={(event) => { const selected = environmentOptions.find((item) => String(item.environmentId) === event.target.value); update({ environmentId: event.target.value, environmentName: selected?.envName || "", environmentBaseUrl: selected?.baseUrl || "", environmentDeployEnv: selected?.deployEnv || "" }); }}>
+              <option value="">{loadingEnvironments ? "加载环境中" : "跟随旧环境配置"}</option>
+              {environmentOptions.map((item) => <option key={item.environmentId} value={item.environmentId}>{item.envName} · {maskSensitiveUrl(item.baseUrl || "-")}</option>)}
             </select>
           </label>
           <label className="form-field">
@@ -180,6 +202,10 @@ export function PerfPlanEditPage({ planId }) {
 function emptyForm() {
   return {
     productId: "",
+    environmentId: "",
+    environmentName: "",
+    environmentBaseUrl: "",
+    environmentDeployEnv: "",
     name: "",
     environment: "test",
     scenarioType: "baseline",
@@ -202,6 +228,10 @@ function planToForm(plan) {
   const scenarioType = normalizeScenarioType(plan);
   return {
     productId: plan.productId ? String(plan.productId) : "",
+    environmentId: plan.environmentId ? String(plan.environmentId) : "",
+    environmentName: plan.environmentName || "",
+    environmentBaseUrl: plan.environmentBaseUrl || "",
+    environmentDeployEnv: plan.environmentDeployEnv || plan.deployEnv || "",
     name: plan.name || "",
     environment: plan.environment || "test",
     scenarioType,
@@ -214,31 +244,32 @@ function planToForm(plan) {
     headers: objectToKv(plan.headers),
     body: plan.body || "",
     loadConfig: normalizeLoadConfig(plan),
-    thresholds: normalizeThresholds(plan).map((item) => ({ ...item })),
+    thresholds: normalizeThresholds(plan).map((item) => ({ abortOnFail: false, delayAbortEval: "", ...item })),
     status: plan.status || "draft",
     priority: plan.priority || "P2"
   };
 }
 
-function serializeForm(form) {
+export function serializeForm(form) {
   return {
     productId: Number(form.productId),
     name: form.name.trim(),
-    targetUrl: buildFinalUrl(form.targetUrl, form.params),
+    targetUrl: form.scenarioType === "mixed" ? form.targetUrl.trim() : buildFinalUrl(form.targetUrl, form.params),
     method: form.method,
     headers: headersToObject(form.headers),
     body: form.body,
     scenarioType: form.scenarioType,
     loadConfig: form.loadConfig,
     environment: form.environment,
+    environmentId: form.environmentId ? Number(form.environmentId) : null,
     thresholds: (form.thresholds || []).map((item) => ({
       metric: item.metric,
       aggregation: item.aggregation,
       operator: item.operator,
       value: Number(item.value),
       unit: item.unit || "",
-      abortOnFail: false,
-      delayAbortEval: ""
+      abortOnFail: Boolean(item.abortOnFail),
+      ...(item.abortOnFail && item.delayAbortEval ? { delayAbortEval: item.delayAbortEval } : {})
     })),
     status: form.status,
     priority: form.priority,
@@ -248,16 +279,28 @@ function serializeForm(form) {
   };
 }
 
-function validateForm(form) {
+export function buildSmokeRequest({ targetUrl, method, headers, body, executorId }) {
+  return { mode: "smoke", targetUrl, method, headers, body, executorId: String(executorId) };
+}
+
+export function validateForm(form) {
   if (!form.productId) return "请选择项目/产品。";
   if (!form.name.trim()) return "方案名称不能为空。";
   if ([...form.name.trim()].length > 120) return "方案名称不能超过 120 个字符。";
-  if (!form.targetUrl.trim()) return "目标 URL 不能为空。";
-  if (!/^https?:\/\//i.test(form.targetUrl.trim())) return "目标 URL 必须是 http/https 地址。";
-  const bodyError = validateBody(form.body);
-  if (bodyError) return bodyError;
+  if (form.scenarioType !== "mixed") {
+    if (!form.targetUrl.trim()) return "目标 URL 不能为空。";
+    const isAbsoluteTarget = /^https?:\/\//i.test(form.targetUrl.trim());
+    const isRelativeTarget = /^(?:\/|[^\s:/?#]+(?:[/?#].*)?)$/.test(form.targetUrl.trim());
+    if (!isAbsoluteTarget && !(form.environmentId && isRelativeTarget)) return "目标 URL 必须是合法 HTTP(S) 地址，或在选择环境后填写相对路径。";
+    const bodyError = validateBody(form.body);
+    if (bodyError) return bodyError;
+  }
   const loadError = validateLoadConfig(form.scenarioType, form.loadConfig);
   if (loadError) return loadError;
+  if (form.scenarioType === "mixed") {
+    const targetError = validateMixedTarget(form.loadConfig, form.targetUrl, form.environmentId);
+    if (targetError) return targetError;
+  }
   return validateThresholds(form.thresholds);
 }
 
@@ -278,7 +321,7 @@ function validateLoadConfig(scenarioType, cfg) {
   switch (scenarioType) {
     case "baseline":
     case "soak":
-      if (!Number.isInteger(num(cfg2.vus)) || num(cfg2.vus) <= 0) return "请填写合法的并发数 VU（正整数）。";
+      if (validateVusLimit(cfg2.vus, "并发数 VU")) return validateVusLimit(cfg2.vus, "并发数 VU");
       if (Number.isNaN(parseDurationToSeconds(cfg2.duration))) return "时长格式不正确（如 2m、30s、1h）。";
       break;
     case "ramp": {
@@ -288,12 +331,13 @@ function validateLoadConfig(scenarioType, cfg) {
         const stage = stages[index] || {};
         if (Number.isNaN(parseDurationToSeconds(stage.duration))) return `第 ${index + 1} 个阶段时长格式不正确。`;
         if (!Number.isInteger(num(stage.target)) || num(stage.target) <= 0) return `第 ${index + 1} 个阶段目标并发不合法。`;
+        if (num(stage.target) > PLATFORM_VUS_LIMIT) return `第 ${index + 1} 个阶段目标并发不能超过 ${PLATFORM_VUS_LIMIT}。`;
         if (index > 0 && num(stage.target) < num(stages[index - 1].target)) return "阶段目标并发应按顺序递增。";
       }
       break;
     }
     case "peak":
-      if (!Number.isInteger(num(cfg2.peakVus)) || num(cfg2.peakVus) <= 0) return "请填写合法的峰值并发 VU。";
+      if (validateVusLimit(cfg2.peakVus, "峰值并发 VU")) return validateVusLimit(cfg2.peakVus, "峰值并发 VU");
       if (["rampDuration", "holdDuration", "rampDownDuration"].some((key) => Number.isNaN(parseDurationToSeconds(cfg2[key])))) return "爬坡/保持/降压时长格式不正确。";
       break;
     case "stress":
@@ -301,9 +345,10 @@ function validateLoadConfig(scenarioType, cfg) {
       if (!Number.isInteger(num(cfg2.stepVus)) || num(cfg2.stepVus) <= 0) return "步长 VU 不合法。";
       if (Number.isNaN(parseDurationToSeconds(cfg2.stepDuration))) return "每阶时长格式不正确。";
       if (!Number.isInteger(num(cfg2.maxVus)) || num(cfg2.maxVus) <= num(cfg2.startVus)) return "最大 VU 必须大于起始 VU。";
+      if (num(cfg2.maxVus) > PLATFORM_VUS_LIMIT) return `最大 VU 不能超过 ${PLATFORM_VUS_LIMIT}。`;
       break;
     case "mixed":
-      break;
+      return validateMixedConfig(cfg2);
     default:
       return "未知场景类型。";
   }
@@ -317,6 +362,7 @@ function validateThresholds(list) {
     if (!item.aggregation) return `第 ${index + 1} 条阈值请选择聚合方式。`;
     if (!item.operator) return `第 ${index + 1} 条阈值请选择运算符。`;
     if (item.value == null || item.value === "" || Number.isNaN(Number(item.value))) return `第 ${index + 1} 条阈值请填写合法数值。`;
+    if (item.abortOnFail && item.delayAbortEval && !isValidK6Duration(item.delayAbortEval)) return `第 ${index + 1} 条阈值的延迟评估时间格式不正确。`;
   }
   return "";
 }
@@ -410,13 +456,13 @@ function RequestConfigSection({ form, update }) {
     setSmoking(true);
     setSmokeResult(null);
     try {
-      const task = await performanceService.smoke.start({
+      const task = await performanceService.smoke.start(buildSmokeRequest({
         targetUrl: finalUrl,
         method: form.method,
         headers: headersToObject(form.headers),
         body: form.body,
         executorId: String(executorId)
-      });
+      }));
       const taskId = task?.taskId || task?.id;
       if (!taskId) throw new Error("冒烟请求未返回任务 ID");
       const deadline = Date.now() + 30000;
@@ -427,7 +473,10 @@ function RequestConfigSection({ form, update }) {
         if (["success", "failed", "canceled"].includes(result?.status)) break;
         await new Promise((resolve) => window.setTimeout(resolve, 500));
       }
-      if (!["success", "failed", "canceled"].includes(result?.status)) throw new Error("冒烟请求超时");
+      if (!["success", "failed", "canceled"].includes(result?.status)) {
+        try { await performanceService.smoke.cancel(taskId); } catch { /* 取消接口不可用时，明确提示任务可能继续 */ }
+        setSmokeResult({ status: "timeout", result: { error: "冒烟请求超时，已请求取消；任务可能仍在继续。" } });
+      }
     } catch (err) {
       setSmokeResult({ status: "failed", result: { error: err.message || "冒烟请求失败" } });
     } finally {
@@ -529,10 +578,11 @@ function KvEditor({ rows, onChange, keyLabel, valueLabel, valuePlaceholder }) {
 
 function SmokeResult({ result }) {
   const ok = result?.status === "success";
+  const timeout = result?.status === "timeout";
   const body = result?.result?.body ?? result?.result?.responseBody ?? result?.result?.error ?? "";
   return (
     <div className={`perf-smoke-result ${ok ? "ok" : "fail"}`}>
-      <span className="perf-smoke-status">{ok ? <Check size={14} /> : "✕"}{ok ? "冒烟成功" : "冒烟失败"}</span>
+      <span className="perf-smoke-status">{ok ? <Check size={14} /> : timeout ? "⚠" : "✕"}{ok ? "冒烟成功" : timeout ? "冒烟超时" : "冒烟失败"}</span>
       {result?.result?.statusCode != null ? <span>状态码 {result.result.statusCode}</span> : null}
       {result?.result?.durationMs != null ? <span>耗时 {result.result.durationMs} ms</span> : null}
       <pre className="perf-json">{body ? String(body).slice(0, 2000) : "无响应体"}</pre>
@@ -582,7 +632,7 @@ function LoadConfigSection({ scenarioType, loadConfig, onChange }) {
           ) : null}
 
           {scenarioType === "mixed" ? (
-            <div className="perf-p1-placeholder">混合场景接口列表 / 权重 / 思考时间的完整编辑为 P1 能力，当前仅支持结构化存储，预览见右侧。</div>
+            <MixedEditor config={cfg} onChange={patch} />
           ) : null}
         </div>
 
@@ -653,6 +703,29 @@ function LoadPreview({ preview }) {
   );
 }
 
+function MixedEditor({ config, onChange }) {
+  const scenarios = Array.isArray(config.scenarios) ? config.scenarios : [];
+  const update = (index, partial) => onChange({ scenarios: scenarios.map((item, i) => i === index ? { ...item, ...partial } : item) });
+  const totalWeight = scenarios.reduce((sum, item) => sum + Number(item.weight || 0), 0);
+  return <div className="perf-mixed-editor">
+    <div className="perf-load-fields">
+      <NumberField label="全局 VU" value={config.vus} onChange={(value) => onChange({ vus: Number(value) })} />
+      <label className="form-field"><span>持续时间</span><input className="text-input" value={config.duration || ""} onChange={(e) => onChange({ duration: e.target.value })} placeholder="10m" /></label>
+      <label className="form-field"><span>思考时间</span><input className="text-input" value={config.thinkTime || ""} onChange={(e) => onChange({ thinkTime: e.target.value })} placeholder="0.5s" /></label>
+    </div>
+    <div className={`perf-mixed-summary${Math.abs(totalWeight - 1) <= 1e-6 ? " valid" : ""}`}>接口 {scenarios.length}/50 · 权重合计 <strong>{totalWeight.toFixed(6)}</strong>（必须为 1）</div>
+    {scenarios.map((item, index) => <div className="perf-mixed-row" key={index}>
+      <span className="perf-mixed-index">{index + 1}</span><input className="text-input" aria-label={`混合接口名称 ${index + 1}`} placeholder="接口名称" value={item.name || ""} onChange={(e) => update(index, { name: e.target.value })} />
+      <input className="text-input" type="number" min="0.000001" max="1" step="0.000001" aria-label={`混合接口权重 ${index + 1}`} value={item.weight ?? ""} onChange={(e) => update(index, { weight: Number(e.target.value) })} />
+      <select className="text-input" value={item.method || "GET"} onChange={(e) => update(index, { method: e.target.value })}>{["GET", "POST", "PUT", "DELETE", "PATCH"].map((m) => <option key={m}>{m}</option>)}</select>
+      <input className="text-input perf-mixed-url" aria-label={`混合接口 URL ${index + 1}`} placeholder="https://example.com/api" value={item.url || ""} onChange={(e) => update(index, { url: e.target.value })} />
+      <button className="icon-text-button compact-button" type="button" onClick={() => onChange({ scenarios: scenarios.filter((_, i) => i !== index) })} aria-label="删除接口"><Trash2 size={14} /></button>
+      <details className="perf-mixed-advanced"><summary>Headers / Body</summary><div className="perf-mixed-advanced-grid"><label className="form-field"><span>Headers JSON</span><textarea className="text-area" rows="2" value={typeof item.headers === "string" ? item.headers : JSON.stringify(item.headers || {}, null, 2)} onChange={(e) => { try { update(index, { headers: normalizeHeadersObject(JSON.parse(e.target.value)) }); } catch { update(index, { headers: e.target.value }); } }} /></label><label className="form-field"><span>Body JSON</span><textarea className="text-area" rows="2" value={item.body || ""} onChange={(e) => update(index, { body: e.target.value })} /></label></div></details>
+    </div>)}
+    <button className="icon-text-button compact-button" type="button" disabled={scenarios.length >= 50} onClick={() => onChange({ scenarios: [...scenarios, { name: "新接口", weight: 0.1, method: "GET", url: "", headers: {}, body: "" }] })}><Plus size={14} />添加接口</button>
+  </div>;
+}
+
 // 阈值设置区块（SPEC §8.2：结构化表格 + 模板 + k6 配置预览）。
 function ThresholdSection({ thresholds, onChange }) {
   const list = Array.isArray(thresholds) ? thresholds : [];
@@ -686,7 +759,7 @@ function ThresholdSection({ thresholds, onChange }) {
       </div>
 
       <div className="perf-threshold-table">
-        <div className="perf-threshold-head"><span>指标</span><span>聚合方式</span><span>运算符</span><span>阈值</span><span /></div>
+        <div className="perf-threshold-head"><span>指标</span><span>聚合方式</span><span>运算符</span><span>阈值</span><span>自动停止</span><span /></div>
         {list.map((item, index) => (
           <ThresholdRow key={index} item={item} index={index} onChange={(partial) => updateRow(index, partial)} onRemove={() => removeRow(index)} />
         ))}
@@ -698,7 +771,7 @@ function ThresholdSection({ thresholds, onChange }) {
         <summary>查看生成的 k6 配置</summary>
         <pre className="perf-json">{JSON.stringify(renderK6Thresholds(list), null, 2)}</pre>
       </details>
-      <p className="perf-threshold-note">P0 不开放「自动停止」配置，abortOnFail 强制为 false。</p>
+      <p className="perf-threshold-note">启用自动停止后，阈值持续失败时将提前结束压测。</p>
     </section>
   );
 }
@@ -725,8 +798,10 @@ function ThresholdRow({ item, onChange, onRemove }) {
         <input className="text-input" type="number" step="any" value={item.value ?? ""} onChange={(event) => onChange({ value: event.target.value })} />
         {item.unit ? <span>{item.unit}</span> : null}
       </div>
+      <label className="perf-abort-toggle"><input type="checkbox" checked={Boolean(item.abortOnFail)} onChange={(event) => onChange({ abortOnFail: event.target.checked, ...(event.target.checked ? {} : { delayAbortEval: "" }) })} />停止</label>
       <div className="perf-threshold-op">
         <code title={expression}>{expression || "-"}</code>
+        {item.abortOnFail ? <input className="text-input perf-delay-input" aria-label="延迟评估" placeholder="如 10s" value={item.delayAbortEval || ""} onChange={(event) => onChange({ delayAbortEval: event.target.value })} /> : null}
         <button className="icon-text-button compact-button" onClick={onRemove} type="button" aria-label="删除阈值"><Trash2 size={14} /></button>
       </div>
     </div>

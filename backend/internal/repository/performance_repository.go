@@ -24,14 +24,25 @@ func NewPerformanceRepository(db *sql.DB) *PerformanceRepository {
 // perfRunColumns 是执行记录查询的统一列清单，scanPerfTestRun 的顺序与之对应。
 const perfRunColumns = `run.id, run.plan_id, coalesce(plan.name, ''), run.scenario_type, run.status, run.triggered_by,
 	run.plan_snapshot, run.config_hash, run.executor_id, run.executor_name, run.k6_version, run.environment,
+	run.environment_id, coalesce(env.env_name, ''), coalesce(env.target, ''), coalesce(env.deploy_env, ''),
 	run.requested_at, run.dispatched_at, run.dispatch_deadline_at, run.start_deadline_at, run.expected_finish_at,
 	run.script_hash, run.generator_version, run.task_id, run.callback_token_hash, run.idempotency_key,
-	run.exit_code, run.duration_ms, run.total_requests, run.avg_duration_ms, run.p95_duration_ms, run.error_rate, run.rps,
+	run.exit_code, run.duration_ms, run.total_requests, run.avg_duration_ms, run.p95_duration_ms, run.p99_duration_ms, run.error_rate, run.rps,
 	run.error_message, run.failure_stage, run.diagnostic_output, run.needs_attention,
-	run.summary, run.series, run.started_at, run.finished_at, run.created_at, run.updated_at`
+	run.summary, run.series, run.started_at, run.finished_at, run.created_at, run.updated_at, run.degradation_checked_at`
+
+const perfRunListColumns = `run.id, run.plan_id, coalesce(plan.name, ''), run.scenario_type, run.status, run.triggered_by,
+	run.config_hash, run.executor_id, run.executor_name, run.k6_version, run.environment,
+	run.environment_id, coalesce(env.env_name, ''), coalesce(env.target, ''), coalesce(env.deploy_env, ''),
+	run.requested_at, run.dispatched_at, run.dispatch_deadline_at, run.start_deadline_at, run.expected_finish_at,
+	run.script_hash, run.generator_version, run.task_id, run.callback_token_hash, run.idempotency_key,
+	run.exit_code, run.duration_ms, run.total_requests, run.avg_duration_ms, run.p95_duration_ms, run.p99_duration_ms, run.error_rate, run.rps,
+	run.error_message, run.failure_stage, run.needs_attention,
+	run.started_at, run.finished_at, run.created_at, run.updated_at, run.degradation_checked_at`
 
 const perfRunJoin = `from perf_test_runs run
-	left join perf_test_plans plan on plan.id = run.plan_id`
+	left join perf_test_plans plan on plan.id = run.plan_id
+	left join test_objects env on env.id = run.environment_id and env.deleted_at is null`
 
 // perfRunUpdateColumns 是 UpdateRunStatus 允许白名单更新的列，顺序固定保证 SQL 稳定。
 var perfRunUpdateColumns = []string{
@@ -93,10 +104,11 @@ func (r *PerformanceRepository) ListPlans(ctx context.Context, filter model.Perf
 	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
 		select p.id, p.product_id, coalesce(pr.name, ''), p.name, p.target_url, p.method, p.headers, p.body,
-		       p.scenario_type, p.load_config, p.environment, p.thresholds, p.status, p.priority, p.owner,
+		       p.scenario_type, p.load_config, p.environment, p.environment_id, coalesce(env.env_name, ''), coalesce(env.target, ''), coalesce(env.deploy_env, ''), p.thresholds, p.status, p.priority, p.owner,
 		       p.tags, p.description, p.created_by, p.created_at, p.updated_at
 		from perf_test_plans p
 		left join products pr on pr.id = p.product_id
+		left join test_objects env on env.id = p.environment_id and env.deleted_at is null
 		where `+whereSQL+`
 		order by p.id desc
 		limit $`+strconv.Itoa(len(queryArgs)-1)+` offset $`+strconv.Itoa(len(queryArgs)), queryArgs...)
@@ -118,10 +130,11 @@ func (r *PerformanceRepository) ListPlans(ctx context.Context, filter model.Perf
 func (r *PerformanceRepository) GetPlan(ctx context.Context, id int64) (model.PerfTestPlan, error) {
 	row := r.db.QueryRowContext(ctx, `
 		select p.id, p.product_id, coalesce(pr.name, ''), p.name, p.target_url, p.method, p.headers, p.body,
-		       p.scenario_type, p.load_config, p.environment, p.thresholds, p.status, p.priority, p.owner,
+		       p.scenario_type, p.load_config, p.environment, p.environment_id, coalesce(env.env_name, ''), coalesce(env.target, ''), coalesce(env.deploy_env, ''), p.thresholds, p.status, p.priority, p.owner,
 		       p.tags, p.description, p.created_by, p.created_at, p.updated_at
 		from perf_test_plans p
 		left join products pr on pr.id = p.product_id
+		left join test_objects env on env.id = p.environment_id and env.deleted_at is null
 		where p.id = $1 and p.deleted_at is null`, id)
 	return scanPerfTestPlan(row)
 }
@@ -210,7 +223,7 @@ func (r *PerformanceRepository) ListRuns(ctx context.Context, filter model.PerfT
 	queryArgs := append([]any{}, args...)
 	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
-		select `+perfRunColumns+`
+		select `+perfRunListColumns+`
 		`+perfRunJoin+`
 		where `+whereSQL+`
 		order by run.id desc
@@ -221,7 +234,7 @@ func (r *PerformanceRepository) ListRuns(ctx context.Context, filter model.PerfT
 	defer rows.Close()
 	items := []model.PerfTestRun{}
 	for rows.Next() {
-		item, err := scanPerfTestRun(rows)
+		item, err := scanPerfTestRunList(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -290,6 +303,7 @@ func (r *PerformanceRepository) UpdateRunStatus(ctx context.Context, id int64, f
 func (r *PerformanceRepository) UpdateRunResult(ctx context.Context, id int64, from []string, to string, result model.PerfRunResult) (int64, error) {
 	avg := nullableFloat(result.AvgDurationMs)
 	p95 := nullableFloat(result.P95DurationMs)
+	p99 := nullableFloat(result.P99DurationMs)
 	errorRate := nullableFloat(result.ErrorRate)
 	rps := nullableFloat(result.RPS)
 	var exitCode any
@@ -301,17 +315,19 @@ func (r *PerformanceRepository) UpdateRunResult(ctx context.Context, id int64, f
 		durationMs = *result.DurationMs
 	}
 	res, err := r.db.ExecContext(ctx, `
-		update perf_test_runs set status = $2, total_requests = $3, avg_duration_ms = $4, p95_duration_ms = $5,
-			error_rate = $6, rps = $7, summary = $8, exit_code = $9, duration_ms = $10,
-			error_message = $11, failure_stage = $12, diagnostic_output = $13, needs_attention = $14,
-			script_hash = coalesce(nullif($15, ''), script_hash),
-			generator_version = coalesce(nullif($16, ''), generator_version),
-			k6_version = coalesce(nullif($17, ''), k6_version),
-			finished_at = now(), callback_token_hash = '', updated_at = now()
-		where id = $1 and status = any(string_to_array($18, ','))`,
-		id, to, result.TotalRequests, avg, p95, errorRate, rps, result.Summary, exitCode, durationMs,
+		update perf_test_runs set status = $2, total_requests = $3, avg_duration_ms = $4, p95_duration_ms = $5, p99_duration_ms = $6,
+			error_rate = $7, rps = $8, summary = $9, exit_code = $10, duration_ms = $11,
+			error_message = $12, failure_stage = $13, diagnostic_output = $14, needs_attention = $15,
+			script_hash = coalesce(nullif($16, ''), script_hash),
+			generator_version = coalesce(nullif($17, ''), generator_version),
+			k6_version = coalesce(nullif($18, ''), k6_version),
+			series = $19,
+			finished_at = now(), callback_token_hash = '', degradation_checked_at = null, updated_at = now()
+		where id = $1 and status = any(string_to_array($20, ','))`,
+		id, to, result.TotalRequests, avg, p95, p99, errorRate, rps, result.Summary, exitCode, durationMs,
 		result.ErrorMessage, result.FailureStage, result.DiagnosticOutput, result.NeedsAttention,
 		result.ScriptHash, result.GeneratorVersion, result.K6Version,
+		result.Series,
 		strings.Join(from, ","))
 	if err != nil {
 		return 0, err
@@ -335,6 +351,7 @@ func scanPerfTestPlan(scanner perfTestScanner) (model.PerfTestPlan, error) {
 	var thresholdsRaw []byte
 	err := scanner.Scan(&item.ID, &item.ProductID, &item.ProductName, &item.Name, &item.TargetURL, &item.Method,
 		&item.Headers, &item.Body, &item.ScenarioType, &item.LoadConfig, &item.Environment,
+		&item.EnvironmentID, &item.EnvironmentName, &item.EnvironmentBaseURL, &item.EnvironmentDeployEnv,
 		&thresholdsRaw, &item.Status, &item.Priority, &item.Owner,
 		&item.Tags, &item.Description, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
@@ -359,18 +376,21 @@ func scanPerfTestRun(scanner perfTestScanner) (model.PerfTestRun, error) {
 	var item model.PerfTestRun
 	var exitCode sql.NullInt64
 	var durationMs sql.NullInt64
-	var avg, p95, errorRate, rps sql.NullFloat64
+	var avg, p95, p99, errorRate, rps sql.NullFloat64
 	var requestedAt, dispatchedAt, dispatchDeadlineAt, startDeadlineAt, expectedFinishAt, startedAt, finishedAt sql.NullTime
-	var executorID, taskID, idempotencyKey sql.NullString
+	var executorID, taskID, idempotencyKey, environmentName, environmentBaseURL sql.NullString
+	var environmentID sql.NullInt64
 	var errorMessage sql.NullString
+	var degradationCheckedAt sql.NullTime
 	var seriesRaw []byte
 	err := scanner.Scan(&item.ID, &item.PlanID, &item.PlanName, &item.ScenarioType, &item.Status, &item.TriggeredBy,
 		&item.PlanSnapshot, &item.ConfigHash, &executorID, &item.ExecutorName, &item.K6Version, &item.Environment,
+		&environmentID, &environmentName, &environmentBaseURL, &item.EnvironmentDeployEnv,
 		&requestedAt, &dispatchedAt, &dispatchDeadlineAt, &startDeadlineAt, &expectedFinishAt,
 		&item.ScriptHash, &item.GeneratorVersion, &taskID, &item.CallbackTokenHash, &idempotencyKey,
-		&exitCode, &durationMs, &item.TotalRequests, &avg, &p95, &errorRate, &rps,
+		&exitCode, &durationMs, &item.TotalRequests, &avg, &p95, &p99, &errorRate, &rps,
 		&errorMessage, &item.FailureStage, &item.DiagnosticOutput, &item.NeedsAttention,
-		&item.Summary, &seriesRaw, &startedAt, &finishedAt, &item.CreatedAt, &item.UpdatedAt)
+		&item.Summary, &seriesRaw, &startedAt, &finishedAt, &item.CreatedAt, &item.UpdatedAt, &degradationCheckedAt)
 	if err != nil {
 		return model.PerfTestRun{}, err
 	}
@@ -387,6 +407,9 @@ func scanPerfTestRun(scanner perfTestScanner) (model.PerfTestRun, error) {
 	}
 	if p95.Valid {
 		item.P95DurationMs = &p95.Float64
+	}
+	if p99.Valid {
+		item.P99DurationMs = &p99.Float64
 	}
 	if errorRate.Valid {
 		item.ErrorRate = &errorRate.Float64
@@ -415,9 +438,18 @@ func scanPerfTestRun(scanner perfTestScanner) (model.PerfTestRun, error) {
 	if finishedAt.Valid {
 		item.FinishedAt = &finishedAt.Time
 	}
+	if degradationCheckedAt.Valid {
+		item.DegradationCheckedAt = &degradationCheckedAt.Time
+	}
 	if executorID.Valid {
 		item.ExecutorID = executorID.String
 	}
+	if environmentID.Valid {
+		value := environmentID.Int64
+		item.EnvironmentID = &value
+	}
+	item.EnvironmentName = environmentName.String
+	item.EnvironmentBaseURL = environmentBaseURL.String
 	if taskID.Valid {
 		item.TaskID = taskID.String
 	}
@@ -432,6 +464,94 @@ func scanPerfTestRun(scanner perfTestScanner) (model.PerfTestRun, error) {
 	}
 	if len(seriesRaw) > 0 {
 		item.Series = json.RawMessage(seriesRaw)
+	}
+	return item, nil
+}
+
+func scanPerfTestRunList(scanner perfTestScanner) (model.PerfTestRun, error) {
+	var item model.PerfTestRun
+	var exitCode sql.NullInt64
+	var durationMs sql.NullInt64
+	var avg, p95, p99, errorRate, rps sql.NullFloat64
+	var requestedAt, dispatchedAt, dispatchDeadlineAt, startDeadlineAt, expectedFinishAt, startedAt, finishedAt sql.NullTime
+	var executorID, taskID, idempotencyKey, environmentName, environmentBaseURL sql.NullString
+	var environmentID sql.NullInt64
+	var errorMessage sql.NullString
+	var degradationCheckedAt sql.NullTime
+	if err := scanner.Scan(&item.ID, &item.PlanID, &item.PlanName, &item.ScenarioType, &item.Status, &item.TriggeredBy,
+		&item.ConfigHash, &executorID, &item.ExecutorName, &item.K6Version, &item.Environment,
+		&environmentID, &environmentName, &environmentBaseURL, &item.EnvironmentDeployEnv,
+		&requestedAt, &dispatchedAt, &dispatchDeadlineAt, &startDeadlineAt, &expectedFinishAt,
+		&item.ScriptHash, &item.GeneratorVersion, &taskID, &item.CallbackTokenHash, &idempotencyKey,
+		&exitCode, &durationMs, &item.TotalRequests, &avg, &p95, &p99, &errorRate, &rps,
+		&errorMessage, &item.FailureStage, &item.NeedsAttention,
+		&startedAt, &finishedAt, &item.CreatedAt, &item.UpdatedAt, &degradationCheckedAt); err != nil {
+		return model.PerfTestRun{}, err
+	}
+	if exitCode.Valid {
+		code := int(exitCode.Int64)
+		item.ExitCode = &code
+	}
+	if durationMs.Valid {
+		ms := int(durationMs.Int64)
+		item.DurationMs = &ms
+	}
+	if avg.Valid {
+		item.AvgDurationMs = &avg.Float64
+	}
+	if p95.Valid {
+		item.P95DurationMs = &p95.Float64
+	}
+	if p99.Valid {
+		item.P99DurationMs = &p99.Float64
+	}
+	if errorRate.Valid {
+		item.ErrorRate = &errorRate.Float64
+	}
+	if rps.Valid {
+		item.RPS = &rps.Float64
+	}
+	if requestedAt.Valid {
+		item.RequestedAt = &requestedAt.Time
+	}
+	if dispatchedAt.Valid {
+		item.DispatchedAt = &dispatchedAt.Time
+	}
+	if dispatchDeadlineAt.Valid {
+		item.DispatchDeadlineAt = &dispatchDeadlineAt.Time
+	}
+	if startDeadlineAt.Valid {
+		item.StartDeadlineAt = &startDeadlineAt.Time
+	}
+	if expectedFinishAt.Valid {
+		item.ExpectedFinishAt = &expectedFinishAt.Time
+	}
+	if startedAt.Valid {
+		item.StartedAt = &startedAt.Time
+	}
+	if finishedAt.Valid {
+		item.FinishedAt = &finishedAt.Time
+	}
+	if degradationCheckedAt.Valid {
+		item.DegradationCheckedAt = &degradationCheckedAt.Time
+	}
+	if executorID.Valid {
+		item.ExecutorID = executorID.String
+	}
+	if environmentID.Valid {
+		value := environmentID.Int64
+		item.EnvironmentID = &value
+	}
+	item.EnvironmentName = environmentName.String
+	item.EnvironmentBaseURL = environmentBaseURL.String
+	if taskID.Valid {
+		item.TaskID = taskID.String
+	}
+	if idempotencyKey.Valid {
+		item.IdempotencyKey = idempotencyKey.String
+	}
+	if errorMessage.Valid {
+		item.ErrorMessage = errorMessage.String
 	}
 	return item, nil
 }

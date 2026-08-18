@@ -4,6 +4,12 @@
 // 平台并发安全上限（前端预览用默认值，实际以平台配置为准）。
 export const PLATFORM_VUS_LIMIT = 500;
 
+export function validateVusLimit(value, label = "VU") {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return `${label} 必须是正整数。`;
+  return number > PLATFORM_VUS_LIMIT ? `${label} 不能超过平台上限 ${PLATFORM_VUS_LIMIT}。` : "";
+}
+
 // 6 大场景类型（SPEC §2 / §8.2）。
 export const SCENARIO_TYPES = [
   {
@@ -184,7 +190,7 @@ export function defaultLoadConfig(scenarioType) {
     case "soak":
       return { vus: 100, duration: "30m" };
     case "mixed":
-      return { scenarios: [], thinkTime: "0.5s", randomizeParams: true, coldHotMix: true };
+      return { vus: 10, duration: "10m", thinkTime: "0.5s", scenarios: [] };
     default:
       return { vus: 3, duration: "2m" };
   }
@@ -200,6 +206,81 @@ export function parseDurationToSeconds(value) {
   const num = Number(match[1]);
   const factors = { ms: 0.001, s: 1, m: 60, h: 3600 };
   return num * factors[match[2]];
+}
+
+export function isValidK6Duration(value) {
+  return Number.isFinite(parseDurationToSeconds(value));
+}
+
+export function normalizeHeadersObject(value) {
+  if (value === undefined || value === "") return {};
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [String(key), String(item ?? "")]));
+}
+
+export function validateMixedConfig(config) {
+  const cfg = config || {};
+  const vusError = validateVusLimit(cfg.vus, "并发数 VU");
+  if (vusError) return vusError;
+  if (!isValidK6Duration(cfg.duration)) return "混合场景时长格式不正确。";
+  if (!isValidK6Duration(cfg.thinkTime)) return "思考时间格式不正确。";
+  const scenarios = Array.isArray(cfg.scenarios) ? cfg.scenarios : [];
+  if (scenarios.length < 1 || scenarios.length > 50) return "混合场景接口数量必须为 1~50 条。";
+  for (const item of scenarios) {
+    if (!String(item?.name || "").trim() || !String(item?.url || "").trim() || !isAllowedRequestUrl(item.url) || !item.method || !Number.isFinite(Number(item.weight)) || Number(item.weight) <= 0) return "混合场景接口的名称、URL、方法和正权重不能为空。";
+    if (normalizeHeadersObject(item.headers) === null) return "混合场景接口 Headers 必须是 JSON object。";
+    if (item.body != null && typeof item.body !== "string") return "混合场景接口 Body 必须是字符串。";
+  }
+  if (Math.abs(scenarios.reduce((sum, item) => sum + Number(item.weight), 0) - 1) > 1e-6) return "混合场景接口权重合计必须等于 1。";
+  return "";
+}
+
+export function validateMixedTarget(config, targetUrl, environmentId = null) {
+  const scenarios = Array.isArray(config?.scenarios) ? config.scenarios : [];
+  const target = String(targetUrl || "").trim();
+  const hasRelative = scenarios.some((item) => !/^https?:\/\//i.test(String(item?.url || "").trim()));
+  const hasEnvironment = environmentId !== null && environmentId !== undefined && String(environmentId).trim() !== "";
+  const relativeTarget = /^(?:\/|[^\s:/?#]+(?:[/?#].*)?)$/.test(target);
+  if (target && !/^https?:\/\//i.test(target) && !(hasEnvironment && relativeTarget)) return "混合场景目标必须是相对路径或合法 HTTP(S) 地址。";
+  if (hasRelative && !hasEnvironment && !/^https?:\/\//i.test(target)) return "混合场景包含相对 URL 且未选择环境时，目标 Base URL 必须是合法 HTTP(S) 地址。";
+  return "";
+}
+
+function isAllowedRequestUrl(value) {
+  const url = String(value || "").trim();
+  return /^(https?:\/\/|\/)/i.test(url) || /^[^\s:/?#]+(?:[/?#].*)?$/.test(url);
+}
+
+export function formatCompareRate(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "不可比较";
+  return `${(Number(value) * 100).toFixed(2).replace(/\.00$/, "")}%`;
+}
+
+export function filterTrendPoints(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => item && item.runId != null);
+}
+
+export function environmentTargetPreview(environment, targetUrl) {
+  const base = environment?.baseUrl || "";
+  const target = String(targetUrl || "").trim();
+  if (!base) return target || "-";
+  try {
+    const baseUrl = new URL(`${base.replace(/\/$/, "")}/`);
+    if (/^https?:\/\//i.test(target)) {
+      const absolute = new URL(target);
+      absolute.protocol = baseUrl.protocol;
+      absolute.host = baseUrl.host;
+      return absolute.toString();
+    }
+    if (target.startsWith("/")) return new URL(target, baseUrl.origin).toString();
+    return new URL(target, baseUrl).toString();
+  } catch {
+    return target || base;
+  }
+}
+
+export function isProductionEnvironment(environment) {
+  return environment?.deployEnv === "production" || environment?.environment === "production";
 }
 
 export function formatDurationSeconds(seconds) {
@@ -226,10 +307,12 @@ export function computeLoadPreview(scenarioType, loadConfig) {
   if (!scenarioType) return empty;
 
   if (scenarioType === "mixed") {
-    return {
-      ...empty,
-      note: "混合场景的负载预览需按各接口吞吐量精确计算，P1 开放。"
-    };
+    const scenarios = Array.isArray(cfg.scenarios) ? cfg.scenarios : [];
+    const seconds = parseDurationToSeconds(cfg.duration) || 0;
+    const vus = Number(cfg.vus || 0);
+    const weighted = scenarios.reduce((sum, item) => sum + Math.max(0, Number(item?.weight || 0)), 0);
+    const preview = buildPreview(vus, seconds, [{ label: "混合流量", seconds, vus }]);
+    return { ...preview, scenarios: scenarios.map((item, index) => ({ name: item.name || `接口 ${index + 1}`, weight: Number(item.weight || 0), color: ["#49d6c8", "#f2b35b", "#8e9cff", "#ff6b8a"][index % 4] })), note: `P1 混合流量按接口权重随机选择${weighted ? `（当前合计 ${(weighted * 100).toFixed(2)}%）` : ""}。` };
   }
 
   if (scenarioType === "baseline" || scenarioType === "soak") {
@@ -264,7 +347,7 @@ export function computeLoadPreview(scenarioType, loadConfig) {
     const stepVus = Number(cfg.stepVus || 0);
     const stepDuration = parseDurationToSeconds(cfg.stepDuration) || 0;
     const maxVus = Number(cfg.maxVus || 0);
-    const steps = stepVus > 0 ? Math.max(1, Math.ceil((maxVus - startVus) / stepVus)) : 1;
+    const steps = stepVus > 0 ? Math.max(1, Math.floor((maxVus - startVus) / stepVus) + 1) : 1;
     const seconds = steps * stepDuration;
     const timeline = Array.from({ length: steps }, (_, index) => ({
       label: `第 ${index + 1} 阶`,
@@ -277,7 +360,7 @@ export function computeLoadPreview(scenarioType, loadConfig) {
   return empty;
 }
 
-function buildPreview(maxVus, totalSeconds, timeline) {
+function buildPreview(maxVus, totalSeconds, timeline, note) {
   // 预计请求量：假设平均响应时间 200ms（乐观）~ 1s（悲观），每 VU 串行迭代 1~5 req/s。
   const optimistic = Math.round(maxVus * totalSeconds * 5);
   const pessimistic = Math.round(maxVus * totalSeconds * 1);
@@ -290,7 +373,7 @@ function buildPreview(maxVus, totalSeconds, timeline) {
     overSafeLimit: maxVus > PLATFORM_VUS_LIMIT,
     safeLimitVus: PLATFORM_VUS_LIMIT,
     timeline,
-    note: "预计请求量按平均响应时间 200ms~1s 估算，实际取决于被测接口响应速度。"
+    note: note || "预计请求量按平均响应时间 200ms~1s 估算，实际取决于被测接口响应速度。"
   };
 }
 
@@ -306,16 +389,68 @@ export function renderK6Thresholds(thresholds) {
   const grouped = {};
   (Array.isArray(thresholds) ? thresholds : []).forEach((t) => {
     if (!t?.metric || !t?.operator || t?.value == null) return;
-    const expr = thresholdExpression(t);
+    const expr = k6ThresholdExpression(t);
     if (!expr) return;
-    (grouped[t.metric] = grouped[t.metric] || []).push({ threshold: expr, abortOnFail: Boolean(t.abortOnFail) });
+    const item = { threshold: expr, abortOnFail: Boolean(t.abortOnFail) };
+    if (t.abortOnFail && t.delayAbortEval) item.delayAbortEval = t.delayAbortEval;
+    (grouped[t.metric] = grouped[t.metric] || []).push(item);
   });
   return grouped;
 }
 
+export function k6ThresholdExpression(t) {
+  if (!t?.aggregation || !t?.operator || t?.value == null) return "";
+  return `${t.aggregation}${t.operator}${t.value}`;
+}
+
+export function mergeSeries(series, incoming) {
+  const base = series && typeof series === "object" ? series : { version: 1, points: [] };
+  const points = Array.isArray(base.points) ? base.points : [];
+  const additions = Array.isArray(incoming) ? incoming : Array.isArray(incoming?.points) ? incoming.points : incoming ? [incoming] : [];
+  const bySequence = new Map(points.filter((point) => point?.sequence != null).map((point) => [point.sequence, point]));
+  additions.forEach((point) => {
+    if (point?.sequence != null) bySequence.set(point.sequence, point);
+  });
+  const sorted = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+  const nextPoints = sorted.length > 3000 ? [sorted[0], ...sorted.slice(-2999)] : sorted;
+  return { ...base, ...(incoming?.version ? incoming : {}), points: nextPoints, lastSequence: nextPoints.length ? nextPoints.at(-1).sequence : (base.lastSequence ?? -1) };
+}
+
+export function normalizeSeries(series) {
+  return mergeSeries({ version: 1, intervalMs: series?.intervalMs, points: [] }, series || {});
+}
+
+// 统一正式 k6 summary；兼容早期把自定义 output 直接保存为 summary 的历史记录。
+export function normalizePerfSummary(summary) {
+  const source = summary?.summary?.metrics && !summary?.metrics ? summary.summary : summary;
+  if (!source || typeof source !== "object") return { metrics: {}, options: {}, state: {} };
+  const sourceMetrics = source.metrics || {};
+  const hasK6Values = Object.values(sourceMetrics).some((item) => item?.values && typeof item.values === "object");
+  if (hasK6Values) return source;
+
+  const metrics = {};
+  Object.entries(sourceMetrics).forEach(([metric, item]) => {
+    if (!item || typeof item !== "object") return;
+    const values = { ...(item.values || {}) };
+    if (item.count != null) values.count = item.count;
+    if (item.rate != null) values.rate = item.rate;
+    if (item.avg_duration_ms != null) values.avg = item.avg_duration_ms;
+    if (item.p95_duration_ms != null) values["p(95)"] = item.p95_duration_ms;
+    if (item.p99_duration_ms != null) values["p(99)"] = item.p99_duration_ms;
+    if (item.error_rate != null) values.rate = item.error_rate;
+    metrics[metric] = { ...item, values };
+  });
+  (Array.isArray(source.thresholds) ? source.thresholds : []).forEach((item) => {
+    if (!item?.metric || !item.threshold) return;
+    const metric = (metrics[item.metric] = metrics[item.metric] || { values: {} });
+    metric.thresholds = { ...(metric.thresholds || {}), [item.threshold]: { ok: Boolean(item.ok) } };
+  });
+  return { ...source, metrics, options: source.options || {}, state: source.state || {} };
+}
+
 // 从 k6 summary 解析阈值结果（SPEC §9 第 2 屏）。
 export function extractThresholdResults(summary) {
-  const metrics = summary?.metrics || {};
+  const metrics = normalizePerfSummary(summary).metrics || {};
   const results = [];
   Object.entries(metrics).forEach(([metric, item]) => {
     const thresholds = item?.thresholds || {};
@@ -339,7 +474,7 @@ export function extractThresholdResults(summary) {
 
 // 从 summary 读取指标值（P99 等仅存 summary，SPEC §3.2）。
 export function metricValueFromSummary(summary, metric, aggregation) {
-  return summary?.metrics?.[metric]?.values?.[aggregation];
+  return normalizePerfSummary(summary)?.metrics?.[metric]?.values?.[aggregation];
 }
 
 // 报告指标占位：空值显示 "--"，不显示 null/NaN。
@@ -356,7 +491,7 @@ export function renderMs(value) {
 
 export function renderPercent(value) {
   const num = numOrDash(value);
-  return num === "--" ? "--" : `${num}%`;
+  return num === "--" ? "--" : `${(Number(num) <= 1 ? Number(num) * 100 : Number(num)).toFixed(2).replace(/\.00$/, "")}%%`.replace("%%", "%");
 }
 
 export function renderRps(value) {

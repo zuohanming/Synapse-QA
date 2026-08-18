@@ -34,14 +34,15 @@ type fakePerformanceRepo struct {
 	idempotentMiss  bool
 	idempotentCalls int
 
-	run              model.PerfTestRun
-	runByTaskID      model.PerfTestRun
-	runByTaskErr     error
-	updateStatusRows int64
-	updateResultRows int64
-	updateResultTo   string
-	updateResult     model.PerfRunResult
-	listRunsReturn   []model.PerfTestRun
+	run               model.PerfTestRun
+	runByTaskID       model.PerfTestRun
+	runByTaskErr      error
+	updateStatusRows  int64
+	updateStatusExtra map[string]any
+	updateResultRows  int64
+	updateResultTo    string
+	updateResult      model.PerfRunResult
+	listRunsReturn    []model.PerfTestRun
 }
 
 func (f *fakePerformanceRepo) ListPlans(ctx context.Context, filter model.PerfTestPlanFilter, page, pageSize int) ([]model.PerfTestPlan, int64, error) {
@@ -157,6 +158,7 @@ func (f *fakePerformanceRepo) MarkNeedsAttention(ctx context.Context, id int64) 
 }
 
 func (f *fakePerformanceRepo) UpdateRunStatus(ctx context.Context, id int64, from, to string, extra map[string]any) (int64, error) {
+	f.updateStatusExtra = extra
 	return f.updateStatusRows, nil
 }
 
@@ -173,6 +175,7 @@ func defaultPerfPlan(id int64) model.PerfTestPlan {
 		TargetURL:    "https://example.com/login",
 		Method:       "GET",
 		ScenarioType: "baseline",
+		Status:       "active",
 		Environment:  "test",
 		LoadConfig:   json.RawMessage(`{"vus":3,"duration":"2m"}`),
 		Thresholds:   []model.PerfThreshold{{Metric: "http_req_duration", Aggregation: "p(95)", Operator: "<", Value: 500}},
@@ -241,9 +244,65 @@ func TestPerformanceServiceMixedScenarioAllowed(t *testing.T) {
 	svc := NewPerformanceService(&fakePerformanceRepo{productExists: true}, nil, nil, "http://localhost")
 	req := validPerfPlanRequest()
 	req.ScenarioType = "mixed"
-	req.LoadConfig = json.RawMessage(`{"scenarios":[{"name":"首页","weight":1}]}`)
+	req.LoadConfig = json.RawMessage(`{"vus":1,"duration":"3s","thinkTime":"10ms","scenarios":[{"name":"首页","weight":1,"method":"GET","url":"/health"}]}`)
 	if _, err := svc.CreatePlan(context.Background(), "admin", req); err != nil {
 		t.Fatalf("mixed 场景应允许持久化，返回错误：%v", err)
+	}
+}
+
+func TestNormalizeThresholdDelayAndMixedValidation(t *testing.T) {
+	req := validPerfPlanRequest()
+	req.Thresholds = []model.PerfThreshold{{Metric: "http_req_duration", Aggregation: "p(95)", Operator: "<", Value: 500, AbortOnFail: false, DelayAbortEval: "1s"}}
+	if err := normalizeThresholds(&req); err != nil {
+		t.Fatalf("non-abort delay should be normalized: %v", err)
+	}
+	if req.Thresholds[0].DelayAbortEval != "" {
+		t.Fatal("non-abort threshold must not retain delayAbortEval")
+	}
+	req.Thresholds[0].AbortOnFail = true
+	req.Thresholds[0].DelayAbortEval = "not-duration"
+	if err := normalizeThresholds(&req); err == nil {
+		t.Fatal("invalid delayAbortEval should be rejected")
+	}
+	if err := validateLoadConfig("mixed", json.RawMessage(`{"vus":1,"duration":"1s","thinkTime":"0.5s","scenarios":[{"name":"a","weight":0.6,"method":"GET","url":"/a","headers":{},"body":{"x":1}},{"name":"b","weight":0.4,"method":"GET","url":"relative","headers":{},"body":"x"}]}`)); err != nil {
+		t.Fatalf("valid mixed config rejected: %v", err)
+	}
+	if err := validateLoadConfig("mixed", json.RawMessage(`{"vus":1,"duration":"1s","thinkTime":"0.5s","scenarios":[{"name":"a","weight":0.600001,"method":"GET","url":"/a"},{"name":"b","weight":0.4,"method":"GET","url":"/b"}]}`)); err == nil {
+		t.Fatal("mixed weight tolerance should be strict")
+	}
+}
+
+func TestPerformanceVUsHardLimitAndMixedTargetSemantics(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{"baseline500", `{"vus":500,"duration":"1s"}`, false},
+		{"baseline501", `{"vus":501,"duration":"1s"}`, true},
+		{"ramp500", `{"stages":[{"duration":"1s","target":500}]}`, false},
+		{"ramp501", `{"stages":[{"duration":"1s","target":501}]}`, true},
+		{"stress500", `{"startVus":10,"stepVus":10,"maxVus":500,"stepDuration":"1m"}`, false},
+		{"stress501", `{"startVus":10,"stepVus":10,"maxVus":501,"stepDuration":"1m"}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validateLoadConfig(map[string]string{"baseline500": "baseline", "baseline501": "baseline", "ramp500": "ramp", "ramp501": "ramp", "stress500": "stress", "stress501": "stress"}[test.name], json.RawMessage(test.config)); (got != nil) != test.wantErr {
+				t.Fatalf("validateLoadConfig error=%v wantErr=%v", got, test.wantErr)
+			}
+		})
+	}
+	if err := validateMixedTarget("", json.RawMessage(`{"scenarios":[{"url":"https://example.com/a"}]}`)); err != nil {
+		t.Fatalf("absolute mixed URL should not require target: %v", err)
+	}
+	if err := validateMixedTarget("", json.RawMessage(`{"scenarios":[{"url":"/a"}]}`)); err == nil {
+		t.Fatal("relative mixed URL should require target")
+	}
+}
+
+func TestPerformanceStressDurationUsesFiftyStages(t *testing.T) {
+	duration := stressDuration(map[string]any{"startVus": float64(10), "stepVus": float64(10), "maxVus": float64(500), "stepDuration": "1m"})
+	if duration != 50*time.Minute {
+		t.Fatalf("expected 50 minute stress duration, got %v", duration)
 	}
 }
 
@@ -269,13 +328,13 @@ func TestPerformanceServiceAbortOnFailNormalized(t *testing.T) {
 	if _, err := svc.CreatePlan(context.Background(), "admin", req); err != nil {
 		t.Fatalf("CreatePlan returned error: %v", err)
 	}
-	// 规范化后 abortOnFail 应为 false，但 fake 不保留 req，此处校验 normalizeRequest 单独调用。
+	// P1 允许 abortOnFail，只有关闭自动中止时才清空 delayAbortEval。
 	normalized, err := svc.normalizeRequest(context.Background(), req)
 	if err != nil {
 		t.Fatalf("normalizeRequest returned error: %v", err)
 	}
-	if normalized.Thresholds[0].AbortOnFail {
-		t.Fatal("expected abortOnFail normalized to false")
+	if !normalized.Thresholds[0].AbortOnFail {
+		t.Fatal("expected abortOnFail to remain enabled in P1")
 	}
 }
 
@@ -402,7 +461,7 @@ func TestPerformanceServiceRunPlanMissingPlan(t *testing.T) {
 }
 
 func TestPerformanceServiceCancelRun(t *testing.T) {
-	repo := &fakePerformanceRepo{updateStatusRows: 1}
+	repo := &fakePerformanceRepo{updateStatusRows: 1, updateResultRows: 1}
 	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
 	if err := svc.CancelRun(context.Background(), "admin", 1); err != nil {
 		t.Fatalf("CancelRun returned error: %v", err)
@@ -427,6 +486,84 @@ func TestPerformanceServiceHandleCallbackRunning(t *testing.T) {
 	req := model.PerfCallbackRequest{Status: "running", ScriptHash: "abc", K6Version: "0.52.0"}
 	if err := svc.HandleCallback(context.Background(), "task-1", token, req); err != nil {
 		t.Fatalf("HandleCallback returned error: %v", err)
+	}
+	if _, ok := repo.updateStatusExtra["expected_finish_at"]; !ok {
+		t.Fatal("running callback should recalculate expected_finish_at from startedAt")
+	}
+}
+
+func TestPerformanceServiceAllowsStartupFailureFromDispatched(t *testing.T) {
+	token := "startup-token"
+	repo := &fakePerformanceRepo{
+		runByTaskID:      model.PerfTestRun{ID: 1, PlanID: 1, Status: model.PerfRunDispatched, CallbackTokenHash: sha256Hex(token)},
+		updateResultRows: 1,
+	}
+	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
+	err := svc.HandleCallback(context.Background(), "task-1", token, model.PerfCallbackRequest{
+		Status:           model.PerfRunExecutionFailed,
+		FailureStage:     model.PerfFailureStartup,
+		DiagnosticOutput: "k6 启动失败",
+	})
+	if err != nil {
+		t.Fatalf("startup failure callback returned error: %v", err)
+	}
+	if repo.updateResultTo != model.PerfRunExecutionFailed || repo.updateResult.Series == nil {
+		t.Fatalf("startup failure result was not persisted: %+v", repo.updateResult)
+	}
+	var series model.PerfSeries
+	_ = json.Unmarshal(repo.updateResult.Series, &series)
+	if !series.Partial {
+		t.Fatal("startup failure series must be partial")
+	}
+}
+
+func TestPerformanceServiceSanitizesSeriesStructAndEvent(t *testing.T) {
+	series := normalizePerfSeries(json.RawMessage(`{"points":[{"message":"token=secret"}],"errorTopN":[{"message":"password=secret"}],"statusCodes":{},"thresholds":[]}`))
+	if strings.Contains(string(series), "secret") {
+		t.Fatalf("series secret was not sanitized: %s", series)
+	}
+	token := "event-token"
+	repo := &fakePerformanceRepo{runByTaskID: model.PerfTestRun{ID: 1, Status: model.PerfRunRunning, CallbackTokenHash: sha256Hex(token)}}
+	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
+	if err := svc.HandleSampleEvent(context.Background(), "task-1", token, model.PerfSampleEvent{Sequence: 1, WindowMs: 1000, Message: "token=secret"}); err != nil {
+		t.Fatalf("sample event returned error: %v", err)
+	}
+	snapshot, ok := svc.events.Snapshot(1)
+	if !ok || strings.Contains(snapshot.Points[0].Message, "secret") {
+		t.Fatalf("event secret was not sanitized: %+v", snapshot)
+	}
+}
+
+func TestPerformanceServiceSampleEventAuthAndSequenceIdempotency(t *testing.T) {
+	token := "sample-token"
+	repo := &fakePerformanceRepo{runByTaskID: model.PerfTestRun{ID: 1, PlanID: 1, Status: model.PerfRunRunning, CallbackTokenHash: sha256Hex(token)}}
+	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
+	event := model.PerfSampleEvent{Sequence: 1, WindowMs: 2000, StatusCodes: map[string]int{"200": 3}}
+	if err := svc.HandleSampleEvent(context.Background(), "task-1", token, event); err != nil {
+		t.Fatalf("HandleSampleEvent returned error: %v", err)
+	}
+	if err := svc.HandleSampleEvent(context.Background(), "task-1", token, event); err != nil {
+		t.Fatalf("duplicate sample should be ignored: %v", err)
+	}
+	series, ok := svc.events.Snapshot(1)
+	if !ok || len(series.Points) != 1 || series.LastSequence != 1 {
+		t.Fatalf("unexpected hub series: %+v", series)
+	}
+	if err := svc.HandleSampleEvent(context.Background(), "task-1", "wrong", event); err == nil || err.Error() != "回调凭据无效" {
+		t.Fatalf("expected sample auth failure, got %v", err)
+	}
+}
+
+func TestNormalizePerfSeriesCapsPoints(t *testing.T) {
+	points := make([]model.PerfSampleEvent, 3001)
+	for index := range points {
+		points[index].Sequence = int64(index + 1)
+	}
+	raw, _ := json.Marshal(model.PerfSeries{Version: 1, Points: points})
+	var series model.PerfSeries
+	_ = json.Unmarshal(normalizePerfSeries(raw), &series)
+	if len(series.Points) != 3000 || series.Points[0].Sequence != 1 || series.Points[len(series.Points)-1].Sequence != 3001 {
+		t.Fatalf("series was not downsampled with endpoints: len=%d first=%d last=%d", len(series.Points), len(series.Points), series.Points[len(series.Points)-1].Sequence)
 	}
 }
 
@@ -456,13 +593,40 @@ func TestPerformanceServiceHandleCallbackGone(t *testing.T) {
 func TestPerformanceServiceHandleCallbackConflict(t *testing.T) {
 	token := "secret-token"
 	repo := &fakePerformanceRepo{
-		runByTaskID:      model.PerfTestRun{ID: 1, PlanID: 1, Status: "running", CallbackTokenHash: sha256Hex(token)},
+		runByTaskID:      model.PerfTestRun{ID: 1, PlanID: 1, Status: "dispatching", CallbackTokenHash: sha256Hex(token)},
 		updateStatusRows: 0,
 	}
 	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
 	req := model.PerfCallbackRequest{Status: "running"}
 	if err := svc.HandleCallback(context.Background(), "task-1", token, req); err == nil || err.Error() != "回调状态冲突" {
 		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
+func TestPerformanceServiceHandleCallbackDuplicateRunningIsIdempotent(t *testing.T) {
+	token := "secret-token"
+	repo := &fakePerformanceRepo{runByTaskID: model.PerfTestRun{ID: 1, PlanID: 1, Status: model.PerfRunRunning, CallbackTokenHash: sha256Hex(token)}}
+	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
+	if err := svc.HandleCallback(context.Background(), "task-1", token, model.PerfCallbackRequest{Status: "running"}); err != nil {
+		t.Fatalf("duplicate running callback should be idempotent: %v", err)
+	}
+}
+
+func TestPerformanceServiceStoppingCallbackKeepsCancelIntent(t *testing.T) {
+	token := "secret-token"
+	repo := &fakePerformanceRepo{
+		runByTaskID:      model.PerfTestRun{ID: 1, PlanID: 1, Status: model.PerfRunStopping, CallbackTokenHash: sha256Hex(token)},
+		updateResultRows: 1,
+	}
+	svc := NewPerformanceService(repo, nil, nil, "http://localhost")
+	if err := svc.HandleCallback(context.Background(), "task-1", token, model.PerfCallbackRequest{Status: "completed"}); err == nil || err.Error() != "回调状态冲突" {
+		t.Fatalf("stopping should reject completed callback, got %v", err)
+	}
+	if err := svc.HandleCallback(context.Background(), "task-1", token, model.PerfCallbackRequest{Status: "canceled"}); err != nil {
+		t.Fatalf("stopping canceled callback should persist partial result: %v", err)
+	}
+	if repo.updateResultTo != model.PerfRunCanceled {
+		t.Fatalf("expected canceled result, got %s", repo.updateResultTo)
 	}
 }
 
@@ -525,7 +689,8 @@ func TestPerformanceServiceHandleCallbackMapsPerfPayload(t *testing.T) {
 	if repo.updateResultTo != model.PerfRunCompleted || repo.updateResult.TotalRequests != 3571 || repo.updateResult.ExitCode == nil || *repo.updateResult.ExitCode != 0 || repo.updateResult.K6Version != "v1.0.0" {
 		t.Fatalf("perf payload was not mapped: status=%s result=%+v", repo.updateResultTo, repo.updateResult)
 	}
-	if string(repo.updateResult.Summary) != string(summary) || repo.updateResult.DurationMs == nil || *repo.updateResult.DurationMs != 3456 {
+	var gotSummary map[string]any
+	if err := json.Unmarshal(repo.updateResult.Summary, &gotSummary); err != nil || gotSummary["k6_version"] != "v1.0.0" || repo.updateResult.DurationMs == nil || *repo.updateResult.DurationMs != 3456 {
 		t.Fatalf("summary/duration were not preserved: summary=%s duration=%v", repo.updateResult.Summary, repo.updateResult.DurationMs)
 	}
 }
@@ -571,6 +736,15 @@ func TestPerformanceServiceRepositoryErrors(t *testing.T) {
 	}
 	if err := NewPerformanceService(&fakePerformanceRepo{deleteErr: errors.New("db")}, nil, nil, "http://localhost").DeletePlan(context.Background(), "admin", 1); err == nil {
 		t.Fatal("expected delete repository error")
+	}
+}
+
+func TestGenerateCallbackTokenFailsClosedWhenRandomSourceFails(t *testing.T) {
+	original := perfRandRead
+	perfRandRead = func([]byte) (int, error) { return 0, errors.New("random source unavailable") }
+	defer func() { perfRandRead = original }()
+	if token, err := generateCallbackToken(); err == nil || token != "" {
+		t.Fatalf("expected callback token generation to fail closed, token=%q err=%v", token, err)
 	}
 }
 
@@ -733,6 +907,30 @@ func TestPerformanceServiceRecoverDispatchingTimeout(t *testing.T) {
 	}
 }
 
+func TestPerformanceServiceRecoveryPersistsExecutorTerminalResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		output, _ := json.Marshal(map[string]any{
+			"terminal_status": "completed",
+			"metrics":         map[string]any{"total_requests": 9, "avg_duration_ms": 2, "p95_duration_ms": 4, "error_rate": 0, "rps": 3},
+			"summary":         map[string]any{"metrics": map[string]any{"http_reqs": map[string]any{"values": map[string]any{"count": 9}}}},
+			"series":          map[string]any{"version": 1, "points": []any{}, "partial": false},
+		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "result": map[string]any{"exitCode": 0, "output": string(output)}})
+	}))
+	defer server.Close()
+	deadline := time.Now().Add(-time.Minute)
+	repo := &fakePerformanceRepo{updateResultRows: 1, listRunsReturn: []model.PerfTestRun{{ID: 1, Status: model.PerfRunDispatched, ExecutorID: "exec-1", TaskID: "task-1", StartDeadlineAt: &deadline}}}
+	execRepo := &fakeExecutorRepo{executors: []model.ExecutorView{{ExecutorID: "exec-1", Endpoint: server.URL}}}
+	svc := NewPerformanceService(repo, execRepo, nil, server.URL)
+	if err := svc.RecoverStale(context.Background()); err != nil {
+		t.Fatalf("RecoverStale returned error: %v", err)
+	}
+	if repo.updateResultTo != model.PerfRunCompleted || repo.updateResult.TotalRequests != 9 {
+		t.Fatalf("expected recovered completed result, status=%s result=%+v", repo.updateResultTo, repo.updateResult)
+	}
+}
+
 func TestPerformanceServiceRecoverRunningTimeoutNeedsAttention(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -756,6 +954,40 @@ func TestPerformanceServiceRecoverRunningTimeoutNeedsAttention(t *testing.T) {
 	}
 	if repo.updateResultTo != "" {
 		t.Fatalf("running 仍存在应仅标记 needs_attention，不应写终态，got %s", repo.updateResultTo)
+	}
+}
+
+func TestPerformanceServiceRecoverStoppingPersistsPartialCanceledResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		output, _ := json.Marshal(map[string]any{
+			"terminal_status": "canceled",
+			"metrics":         map[string]any{"total_requests": 5, "avg_duration_ms": 2, "p95_duration_ms": 4, "error_rate": 0, "rps": 5},
+			"summary":         map[string]any{"metrics": map[string]any{"http_reqs": map[string]any{"values": map[string]any{"count": 5}}}, "options": map[string]any{}, "state": map[string]any{}},
+			"failure_stage":   "cancel",
+			"diagnostic":      "partial",
+		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "canceled", "result": map[string]any{"exitCode": 1, "error": "任务已取消", "output": string(output)}})
+	}))
+	defer server.Close()
+	updatedAt := time.Now().Add(-time.Minute)
+	repo := &fakePerformanceRepo{
+		updateResultRows: 1,
+		listRunsReturn: []model.PerfTestRun{{
+			ID: 1, PlanID: 1, Status: model.PerfRunStopping, ExecutorID: "exec-1", TaskID: "task-1", UpdatedAt: updatedAt,
+		}},
+	}
+	execRepo := &fakeExecutorRepo{executors: []model.ExecutorView{{ExecutorID: "exec-1", Endpoint: server.URL}}}
+	svc := NewPerformanceService(repo, execRepo, nil, server.URL)
+	if err := svc.RecoverStale(context.Background()); err != nil {
+		t.Fatalf("RecoverStale returned error: %v", err)
+	}
+	if repo.updateResultTo != model.PerfRunCanceled || repo.updateResult.TotalRequests != 5 {
+		t.Fatalf("expected canceled partial result, status=%s result=%+v", repo.updateResultTo, repo.updateResult)
 	}
 }
 

@@ -11,7 +11,8 @@ const PERF_GROUP = "性能测试";
 const PERF_URL_PREFIX = "performance";
 const PERF_SLUGS = {
   压测方案: "plans",
-  测试报告: "runs"
+  测试报告: "runs",
+  定时规则: "schedules"
 };
 
 export function getDefaultPath() {
@@ -31,6 +32,10 @@ export function isValidPath(path) {
     return false;
   }
   if (path[1] === "测试报告") {
+    if (path.length === 2) return true;
+    return path.length === 3 && /^\d+$/.test(path[2]);
+  }
+  if (path[1] === "定时规则") {
     if (path.length === 2) return true;
     return path.length === 3 && /^\d+$/.test(path[2]);
   }

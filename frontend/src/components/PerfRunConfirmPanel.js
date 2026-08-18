@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, Play, X } from "lucide-react";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { performanceService } from "../services/performanceService.js";
@@ -10,40 +10,39 @@ import {
   PLATFORM_VUS_LIMIT,
   RUNNING_STATUSES,
   scenarioLabel,
-  thresholdExpression
+  thresholdExpression,
+  isProductionEnvironment
+  ,environmentTargetPreview
 } from "../utils/perf.js";
 
 // 执行确认面板（SPEC §8.3）：触发前二次确认，生产/高负载需输入方案名称。
 export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
-  const [executor, setExecutor] = useState("");
   const [step, setStep] = useState("confirm");
+  const [environmentOverride, setEnvironmentOverride] = useState("");
   const [confirmName, setConfirmName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const preview = computeLoadPreview(plan?.scenarioType, plan?.loadConfig);
-  const isProduction = plan?.environment === "production";
-  const highLoad = preview.overSafeLimit;
-  const needSecondConfirm = isProduction || highLoad;
+  const defaultEnvironment = { environmentId: plan?.environmentId, envName: plan?.environmentName, baseUrl: plan?.environmentBaseUrl, deployEnv: plan?.environmentDeployEnv || plan?.deployEnv || plan?.environment };
+  const highLoad = preview.maxVus > PLATFORM_VUS_LIMIT;
 
   const { data: executorsData, loading: loadingExecutors } = useAsyncData(() => performanceService.executors(), []);
   const executors = Array.isArray(executorsData) ? executorsData : [];
   const perfExecutors = executors.filter(
     (item) => item.status === "online" && (!Array.isArray(item.supportedTypes) || item.supportedTypes.includes("perf"))
   );
-  const candidateExecutors = perfExecutors.length ? perfExecutors : executors.filter((item) => item.status === "online");
+  const { data: environmentsData } = useAsyncData(() => (plan?.productId ? performanceService.environments(plan.productId) : Promise.resolve({ items: [] })), [plan?.productId]);
+  const environments = Array.isArray(environmentsData) ? environmentsData : (environmentsData?.items || []);
+  const selectedEnvironment = environments.find((item) => String(item.environmentId) === String(environmentOverride)) || (!environmentOverride ? defaultEnvironment : null);
+  const isProduction = isProductionEnvironment(selectedEnvironment);
+  const needSecondConfirm = isProduction;
 
   const { data: runsData } = useAsyncData(
     () => (plan?.id ? performanceService.runs.list({ planId: plan.id, page: 1, pageSize: 100 }) : Promise.resolve({ items: [] })),
     [plan?.id]
   );
   const activeRuns = (Array.isArray(runsData?.items) ? runsData.items : []).filter((row) => RUNNING_STATUSES.includes(row.status));
-
-  useEffect(() => {
-    if (!executor && candidateExecutors.length) {
-      setExecutor(String(candidateExecutors[0].executorId || candidateExecutors[0].id));
-    }
-  }, [candidateExecutors, executor]);
 
   function generateIdempotencyKey() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -73,6 +72,10 @@ export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
   }
 
   async function submit() {
+    if (preview.maxVus > PLATFORM_VUS_LIMIT) {
+      setError(`最大并发不能超过平台上限 ${PLATFORM_VUS_LIMIT} VU。`);
+      return;
+    }
     if (needSecondConfirm && step !== "second") {
       setStep("second");
       setError("");
@@ -85,7 +88,7 @@ export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
     setBusy(true);
     setError("");
     try {
-      const result = await performanceService.plans.run(plan.id, getOrCreateIdempotencyKey());
+      const result = await performanceService.plans.run(plan.id, getOrCreateIdempotencyKey(), environmentOverride ? { environmentId: Number(environmentOverride) } : {});
       // 已收到成功响应：清除幂等键，下一次为全新执行。
       try {
         localStorage.removeItem(idempotencyStorageKey());
@@ -117,23 +120,15 @@ export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
           </div>
 
           <dl className="perf-confirm-grid">
-            <div><dt>目标域名</dt><dd className="perf-url" title={plan?.targetUrl || ""}>{maskSensitiveUrl(plan?.targetUrl)}</dd></div>
+            <div><dt>最终目标预览</dt><dd className="perf-url" title={plan?.targetUrl || ""}>{maskSensitiveUrl(environmentTargetPreview(selectedEnvironment || { baseUrl: plan?.environmentBaseUrl }, plan?.targetUrl))}<br /><small>最终解析以后端快照为准</small></dd></div>
             <div>
               <dt>测试环境</dt>
-              <dd><span className={`status-pill ${environmentTone(plan?.environment)}`}>{environmentLabel(plan?.environment)}</span></dd>
+              <dd><span className={`status-pill ${environmentTone(plan?.environment)}`}>{selectedEnvironment?.envName || plan?.environmentName || environmentLabel(plan?.environment)}</span></dd>
             </div>
             <div><dt>最大并发</dt><dd>{preview.maxVus > 0 ? `${preview.maxVus} VU` : "--"}</dd></div>
             <div><dt>预计时长</dt><dd>{preview.totalDurationText}</dd></div>
-            <div><dt>执行器</dt><dd>
-              <select className="text-input" disabled={loadingExecutors} value={executor} onChange={(event) => setExecutor(event.target.value)}>
-                <option value="">{loadingExecutors ? "加载执行器中" : "请选择执行器"}</option>
-                {candidateExecutors.map((item) => (
-                  <option key={item.executorId || item.id} value={String(item.executorId || item.id)}>
-                    {item.name || item.executorId || item.id}
-                  </option>
-                ))}
-              </select>
-            </dd></div>
+            <div><dt>本次环境</dt><dd><select className="text-input" value={environmentOverride} onChange={(event) => setEnvironmentOverride(event.target.value)}><option value="">跟随方案默认：{plan?.environmentName || plan?.environment || "旧环境"}</option>{environments.map((item) => <option key={item.environmentId} value={item.environmentId}>{item.envName}</option>)}</select></dd></div>
+            <div><dt>执行器</dt><dd>平台自动调度执行器<br /><small>{loadingExecutors ? "正在读取在线能力" : `在线 perf 执行器 ${perfExecutors.length} 个`}</small></dd></div>
           </dl>
 
           {(plan?.thresholds || []).length ? (
@@ -147,10 +142,14 @@ export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
             <div className="perf-confirm-warn"><AlertTriangle size={15} /><span>该方案已有 {activeRuns.length} 个任务执行中，同方案同时仅允许 1 个活动任务。</span></div>
           ) : null}
 
+          {highLoad ? (
+            <div className="perf-confirm-warn perf-confirm-danger"><AlertTriangle size={15} /><span>最大并发 {preview.maxVus} 超过平台硬上限 {PLATFORM_VUS_LIMIT}，当前执行已阻止。</span></div>
+          ) : null}
+
           {needSecondConfirm ? (
             <div className="perf-confirm-warn perf-confirm-danger">
               <AlertTriangle size={15} />
-              <span>{isProduction ? "目标为生产环境" : `最大并发 ${preview.maxVus} 超过平台安全限制（${PLATFORM_VUS_LIMIT}）`}，执行可能影响线上服务，请谨慎确认。</span>
+              <span>目标为生产环境，执行可能影响线上服务，请谨慎确认。</span>
             </div>
           ) : null}
 
@@ -166,7 +165,7 @@ export function PerfRunConfirmPanel({ plan, onClose, onRun }) {
 
         <div className="modal-actions">
           <button className="icon-text-button compact-button" disabled={busy} onClick={onClose} type="button">取消</button>
-          <button className="success-button compact-button" disabled={busy || !executor} onClick={submit} type="button">
+          <button className="success-button compact-button" disabled={busy || highLoad} onClick={submit} type="button">
             <Play size={14} />{busy ? "触发中" : step === "second" ? "确认并执行" : "确认执行"}
           </button>
         </div>

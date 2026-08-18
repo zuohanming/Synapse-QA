@@ -4,6 +4,8 @@ import {
   defaultLoadConfig,
   extractThresholdResults,
   maskSensitiveUrl,
+  metricValueFromSummary,
+  normalizePerfSummary,
   normalizeLoadConfig,
   normalizeScenarioType,
   normalizeThresholds,
@@ -15,6 +17,14 @@ import {
   runStatusLabel,
   runStatusTone,
   thresholdExpression
+  ,isValidK6Duration
+  ,normalizeHeadersObject
+  ,validateMixedConfig
+  ,mergeSeries
+  ,validateVusLimit
+  ,validateMixedTarget
+  ,environmentTargetPreview
+  ,isProductionEnvironment
 } from "./perf.js";
 
 describe("parseDurationToSeconds", () => {
@@ -68,6 +78,14 @@ describe("computeLoadPreview", () => {
     expect(preview.overSafeLimit).toBe(true);
   });
 
+  it("stress 默认 10..500 共 50 阶段、50 分钟", () => {
+    const preview = computeLoadPreview("stress", defaultLoadConfig("stress"));
+    expect(preview.timeline).toHaveLength(50);
+    expect(preview.timeline[0].vus).toBe(10);
+    expect(preview.timeline.at(-1).vus).toBe(500);
+    expect(preview.totalDurationSeconds).toBe(3000);
+  });
+
   it("mixed 场景返回 P1 占位提示", () => {
     const preview = computeLoadPreview("mixed", {});
     expect(preview.maxVus).toBe(0);
@@ -86,8 +104,8 @@ describe("thresholdExpression 与 renderK6Thresholds", () => {
       { metric: "http_req_duration", aggregation: "p(95)", operator: "<", value: 500, unit: "ms" },
       { metric: "http_req_failed", aggregation: "rate", operator: "<", value: 0.01, unit: "" }
     ]);
-    expect(result.http_req_duration[0].threshold).toBe("http_req_duration p(95)<500ms");
-    expect(result.http_req_failed[0].threshold).toBe("http_req_failed rate<0.01");
+    expect(result.http_req_duration[0].threshold).toBe("p(95)<500");
+    expect(result.http_req_failed[0].threshold).toBe("rate<0.01");
     expect(result.http_req_duration[0].abortOnFail).toBe(false);
   });
 });
@@ -112,6 +130,21 @@ describe("extractThresholdResults", () => {
   it("空 summary 返回空数组", () => {
     expect(extractThresholdResults(null)).toEqual([]);
   });
+
+  it("兼容历史自定义 summary 并统一为 k6 metrics.values", () => {
+    const summary = {
+      metrics: { http_req_duration: { p99_duration_ms: 789 } },
+      thresholds: [{ metric: "http_req_duration", threshold: "p(99)<800", ok: true }]
+    };
+    expect(metricValueFromSummary(summary, "http_req_duration", "p(99)")).toBe(789);
+    expect(extractThresholdResults(summary)[0].passed).toBe(true);
+  });
+
+  it("新 summary 保留 k6 metrics/options/state 结构", () => {
+    const summary = { metrics: { http_req_duration: { values: { "p(99)": 12 }, thresholds: {} } }, options: {}, state: {} };
+    expect(normalizePerfSummary(summary)).toBe(summary);
+    expect(metricValueFromSummary(summary, "http_req_duration", "p(99)")).toBe(12);
+  });
 });
 
 describe("指标占位与脱敏", () => {
@@ -126,7 +159,8 @@ describe("指标占位与脱敏", () => {
     expect(renderMs(null)).toBe("--");
     expect(renderMs(123)).toBe("123 ms");
     expect(renderPercent(null)).toBe("--");
-    expect(renderPercent(0.5)).toBe("0.5%");
+    expect(renderPercent(0.01)).toBe("1%");
+    expect(renderPercent(50)).toBe("50%");
   });
 
   it("maskSensitiveUrl 脱敏敏感 query，保留变量引用", () => {
@@ -169,5 +203,48 @@ describe("状态映射", () => {
     expect(runStatusLabel("threshold_failed")).toBe("性能未达标");
     expect(runStatusLabel("execution_failed")).toBe("执行异常");
     expect(runStatusLabel("timed_out")).toBe("超时");
+  });
+});
+
+describe("P1 协议校验与 series", () => {
+  it("校验 mixed 相对 URL、headers object、weight 和 thinkTime", () => {
+    const config = { vus: 2, duration: "1m", thinkTime: "500ms", scenarios: [{ name: "订单", weight: 1, method: "GET", url: "/orders", headers: {}, body: "" }] };
+    expect(validateMixedConfig(config)).toBe("");
+    expect(validateMixedConfig({ ...config, scenarios: [{ ...config.scenarios[0], headers: [] }] })).toContain("Headers");
+    expect(validateMixedConfig({ ...config, thinkTime: "soon" })).toContain("思考时间");
+    expect(isValidK6Duration("10s")).toBe(true);
+    expect(isValidK6Duration("10")).toBe(false);
+    expect(normalizeHeadersObject({ Authorization: 1 })).toEqual({ Authorization: "1" });
+    expect(normalizeHeadersObject("{}")).toBe(null);
+  });
+
+  it("去重并限制 series 为 3000 点，保留首点和最新点", () => {
+    const points = Array.from({ length: 3001 }, (_, sequence) => ({ sequence, rps: sequence }));
+    const merged = mergeSeries({ points: [] }, points);
+    expect(merged.points).toHaveLength(3000);
+    expect(merged.points[0].sequence).toBe(0);
+    expect(merged.points.at(-1).sequence).toBe(3000);
+    expect(mergeSeries(merged, { sequence: 3000, rps: 99 }).points.at(-1).rps).toBe(99);
+  });
+});
+
+describe("VU 与 mixed target 边界", () => {
+  it("500 允许、501 阻止；相对/绝对 URL base 规则正确", () => {
+    expect(validateVusLimit(500)).toBe("");
+    expect(validateVusLimit(501)).toContain("500");
+    const relative = { scenarios: [{ url: "/orders" }] };
+    expect(validateMixedTarget(relative, "")).toContain("Base URL");
+    expect(validateMixedTarget(relative, "https://api.example.com", null)).toBe("");
+    expect(validateMixedTarget({ scenarios: [{ url: "https://api.example.com/orders" }] }, "", null)).toBe("");
+    expect(validateMixedTarget({ scenarios: [{ url: "orders" }] }, "", null)).toContain("Base URL");
+    expect(validateMixedTarget({ scenarios: [{ url: "orders" }] }, "", 7)).toBe("");
+    expect(validateMixedTarget({ scenarios: [{ url: "orders" }] }, "api", 7)).toBe("");
+    expect(validateMixedTarget({ scenarios: [{ url: "orders" }] }, "ftp://x", 7)).toContain("相对路径");
+    expect(validateMixedConfig({ vus: 1, duration: "1m", thinkTime: "1s", scenarios: [{ name: "ftp", method: "GET", url: "ftp://api.example.com", weight: 1, headers: {}, body: "" }] })).toContain("接口");
+    expect(environmentTargetPreview({ baseUrl: "https://x/api" }, "orders")).toBe("https://x/api/orders");
+    expect(environmentTargetPreview({ baseUrl: "https://x/api" }, "/orders")).toBe("https://x/orders");
+    expect(environmentTargetPreview({ baseUrl: "https://x/api" }, "http://old/path?q=1")).toBe("https://x/path?q=1");
+    expect(isProductionEnvironment({ deployEnv: "production" })).toBe(true);
+    expect(isProductionEnvironment({ environment: "production" })).toBe(true);
   });
 });

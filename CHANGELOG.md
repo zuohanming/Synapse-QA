@@ -3,6 +3,8 @@
 
 ## Unreleased
 
+- 完成性能测试 P2：支持复用产品测试环境进行 Base URL 解析和单次环境覆盖、通过执行设为基线、P95/P99/错误率/RPS 基线对比与同维度趋势、超过 10% 的劣化通知、脱敏 CSV/JSON 报告导出，以及带 IANA 时区、数据库租约和幂等保护的五字段 Cron 定时触发；新增定时规则管理与多环境执行界面。
+- 完成性能测试 P1：支持 mixed 多接口按权重选流、`abortOnFail`、实时 SSE 监控与断线续传、RPS/延迟分位/错误率/VU 趋势图、状态码与错误 Top N、阈值状态，以及最多 3000 点的全程降采样报告；同时加入 500 VU 硬上限、单请求 smoke、4 MiB 终态回调限制和运行恢复保护。
 - 完成性能测试 P0 真实 k6 闭环联调：安装 k6 v2.2.0，执行器上报 `supportedTypes=perf` 与 `checks.k6=true`；修复 PostgreSQL nullable `error_message` 扫描失败、run 停留 `pending`、后端下发 payload 与 runner 字段不一致、perf 回调仍使用通用 TaskView 导致 HTTP 400 四个运行时缺陷。真实 baseline run 已完成并回填请求数、P95、错误率、RPS、k6 版本与执行耗时。
 - 修复性能测试触发后 run 永久停留 `pending`：创建/幂等命中后条件推进至 `queued`，调度器同时兜底推进遗留 `pending` 记录后再分发。
 - 实施性能测试 P0 后端：性能测试模块从占位升级为真实执行闭环。数据模型升级（scenario_type/load_config/environment 替代 load_mode、平台结构化阈值、执行记录补齐快照/task_id/幂等键/回调凭据哈希/状态机字段等 20+ 列与三个唯一索引）；状态机固化（pending→queued→dispatching→dispatched→running→stopping + completed/threshold_failed/execution_failed/timed_out/canceled，条件更新 + 非法转移 409）；幂等触发（idempotency_key 唯一约束）；独立调度器（复用执行器选择原语 + k6 检测校验）；回调鉴权（task_id 与 Bearer Token 分离、终态失效、410/409）；执行器掉线/重启恢复循环（只查询只补偿取消、绝不自动重投）；expected_finish_at 动态计算；smoke 冒烟接口（/perf/smoke）；权限三档（perf.plan.read/manage/execute）；完成/失败通知。

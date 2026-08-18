@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # 后端已终结或 Token 失效，收到这些状态码后停止重试（SPEC §4.2/§5.5）。
 _STOP_STATUS_CODES = {401, 403, 409, 410}
 _SENSITIVE_KEY_PATTERN = re.compile(r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)")
-_SENSITIVE_TEXT_PATTERN = re.compile(r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)(\s*[=:]\s*)([^\s,;]+)")
+_SENSITIVE_TEXT_PATTERN = re.compile(r"(?i)([\"']?(?:authorization|cookie|password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)[^\"'\s,;}]+")
 _SENSITIVE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:authorization|cookie|password|passwd|token|secret|api[_-]?key)=)[^&#\s]+")
 
 
@@ -25,11 +25,17 @@ def notify_callback(task: TaskView) -> None:
         logger.info("任务无需回调：task_id=%s", task.task_id)
         return
     if task.type == TaskType.perf:
-        payload = _perf_callback_payload(task)
+        payload: dict = dict(_perf_callback_payload(task))
     else:
         # callbackToken 仅作请求凭据，不回传（SPEC §4.2 分离 task_id 与回调凭据）。
         payload = task.model_dump(by_alias=True, mode="json", exclude={"callback_token"})
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if task.type == TaskType.perf:
+        data = _encode_terminal_payload(payload)
+        if data is None:
+            logger.warning("性能终态回调过大，丢弃回调：task_id=%s", task.task_id)
+            return
+    else:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if task.callback_token:
         headers["Authorization"] = f"Bearer {task.callback_token}"
@@ -52,6 +58,33 @@ def notify_callback(task: TaskView) -> None:
         if attempt < settings.callback_max_attempts - 1:
             time.sleep(settings.callback_retry_base_delay_seconds * (2 ** attempt))
     logger.error("任务回调最终失败：task_id=%s url=%s", task.task_id, task.callback_url)
+
+
+def notify_perf_event(task: TaskView, event: dict) -> None:
+    """上报性能采样事件；事件允许丢弃，绝不影响 k6 主流程。"""
+    if not task.event_url:
+        return
+    payload = _sanitize_json_value(event)
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if len(data) > 64 * 1024:
+        return
+    headers = {"Content-Type": "application/json"}
+    if task.callback_token:
+        headers["Authorization"] = f"Bearer {task.callback_token}"
+    for attempt in range(2):
+        request = urllib.request.Request(task.event_url, data=data, headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(request, timeout=2).close()
+            return
+        except urllib.error.HTTPError as error:
+            status = error.code
+            error.close()
+            if status in _STOP_STATUS_CODES:
+                return
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(0.1)
 
 
 def _perf_callback_payload(task: TaskView) -> dict:
@@ -99,6 +132,7 @@ def _perf_callback_payload(task: TaskView) -> dict:
         summary_value = output
     duration_ms = _duration_ms(task)
     result = task.result
+    series = _bounded_series(output.get("series") or {"version": 1, "points": [], "statusCodes": {}, "errorTopN": [], "thresholds": []})
     return {
         "status": callback_status,
         "scriptHash": _sanitize_text(output.get("script_hash") or ""),
@@ -109,6 +143,7 @@ def _perf_callback_payload(task: TaskView) -> dict:
         "totalRequests": metrics.get("total_requests", 0),
         "avgDurationMs": metrics.get("avg_duration_ms"),
         "p95DurationMs": metrics.get("p95_duration_ms"),
+        "p99DurationMs": metrics.get("p99_duration_ms"),
         "errorRate": metrics.get("error_rate"),
         "rps": metrics.get("rps"),
         "summary": _sanitize_json_value(summary_value),
@@ -116,6 +151,7 @@ def _perf_callback_payload(task: TaskView) -> dict:
         "failureStage": _sanitize_text(failure_stage),
         "diagnosticOutput": _sanitize_text(diagnostic),
         "needsAttention": bool(output.get("needs_attention", False)),
+        "series": _sanitize_json_value(series),
     }
 
 
@@ -128,7 +164,7 @@ def _duration_ms(task: TaskView) -> int | None:
 def _sanitize_text(value: str) -> str:
     text = str(value or "")
     text = _SENSITIVE_QUERY_PATTERN.sub(r"\1***", text)
-    return _SENSITIVE_TEXT_PATTERN.sub(r"\1\2***", text)
+    return _SENSITIVE_TEXT_PATTERN.sub(r"\1***", text)
 
 
 def _sanitize_json_value(value):
@@ -142,6 +178,63 @@ def _sanitize_json_value(value):
     if isinstance(value, str):
         return _sanitize_text(value)
     return value
+
+
+def _bounded_series(value):
+    if not isinstance(value, dict):
+        return {"version": 1, "points": [], "statusCodes": {}, "errorTopN": [], "thresholds": []}
+    series = dict(value)
+    points = series.get("points")
+    if isinstance(points, list):
+        compacted = []
+        for point in points:
+            if isinstance(point, dict):
+                point = {key: item for key, item in point.items() if key not in {"statusCodes", "errorTopN", "thresholds"}}
+            compacted.append(point)
+        if len(compacted) > 3000:
+            compacted = [compacted[index * (len(compacted) - 1) // 2999] for index in range(3000)]
+        series["points"] = compacted
+    return series
+
+
+def _downsample_points(points: list, limit: int) -> list:
+    if len(points) <= limit:
+        return points
+    required = {0, len(points) - 1}
+    for index in range(1, len(points)):
+        before = points[index - 1] if isinstance(points[index - 1], dict) else {}
+        current = points[index] if isinstance(points[index], dict) else {}
+        if before.get("stage") != current.get("stage"):
+            required.update({index - 1, index})
+    indices = set(required)
+    for index in range(limit):
+        indices.add(index * (len(points) - 1) // (limit - 1))
+    indices = sorted(indices)
+    if len(indices) > limit:
+        indices = indices[:limit - 1] + [len(points) - 1]
+    return [points[index] for index in indices]
+
+
+def _encode_terminal_payload(payload: dict) -> bytes | None:
+    limit = 4 * 1024 * 1024
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if len(data) <= limit:
+        return data
+    payload["diagnosticOutput"] = str(payload.get("diagnosticOutput") or "")[-64 * 1024:]
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        payload["summary"] = {key: summary.get(key) for key in ("metrics", "options", "state") if key in summary}
+    series = payload.get("series")
+    if isinstance(series, dict) and isinstance(series.get("points"), list):
+        points = series["points"]
+        for point_limit in (2000, 1000, 500, 250):
+            if len(points) > point_limit:
+                series["points"] = _downsample_points(points, point_limit)
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            if len(data) <= limit:
+                return data
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return data if len(data) <= limit else None
 
 
 def notify_event(task: TaskView, sequence: int, event_type: str, stage: str, message: str, progress: int, data: dict | None = None) -> None:

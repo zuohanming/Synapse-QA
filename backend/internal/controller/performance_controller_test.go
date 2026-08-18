@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +55,7 @@ func (f *controllerFakePerfRepo) GetPlan(ctx context.Context, id int64) (model.P
 	if f.plan.ID == 0 {
 		f.plan = model.PerfTestPlan{
 			ID: id, Name: "登录接口压测", TargetURL: "https://example.com/login", Method: "GET",
-			ScenarioType: "baseline", Environment: "test", LoadConfig: json.RawMessage(`{"vus":3,"duration":"2m"}`),
+			ScenarioType: "baseline", Status: "active", Environment: "test", LoadConfig: json.RawMessage(`{"vus":3,"duration":"2m"}`),
 		}
 	}
 	return f.plan, nil
@@ -87,7 +90,7 @@ func (f *controllerFakePerfRepo) ListRuns(ctx context.Context, filter model.Perf
 	if f.listRunsErr {
 		return nil, 0, errControllerFake
 	}
-	return []model.PerfTestRun{{ID: 1, PlanID: 1, PlanName: "登录接口压测", Status: "pending"}}, 1, nil
+	return []model.PerfTestRun{{ID: 1, PlanID: 1, PlanName: "登录接口压测", Status: "pending", PlanSnapshot: json.RawMessage(`{"secret":"hidden"}`), Summary: json.RawMessage(`{"large":true}`), Series: json.RawMessage(`{"points":[1]}`), DiagnosticOutput: "diagnostic"}}, 1, nil
 }
 
 func (f *controllerFakePerfRepo) GetRun(ctx context.Context, id int64) (model.PerfTestRun, error) {
@@ -159,7 +162,88 @@ func perfRouterWithRepo(authenticated bool, repo *controllerFakePerfRepo) *gin.E
 	r.GET("/perf/runs", ctl.ListRuns)
 	r.GET("/perf/runs/:id", ctl.GetRun)
 	r.POST("/perf/tasks/:taskId/callback", ctl.Callback)
+	r.POST("/perf/tasks/:taskId/events/callback", ctl.EventCallback)
 	return r
+}
+
+type controllerExportRepo struct {
+	*controllerFakePerfRepo
+	*controllerP2Stub
+	run  model.PerfTestRun
+	plan model.PerfTestPlan
+}
+
+func (r *controllerExportRepo) GetRun(context.Context, int64) (model.PerfTestRun, error) {
+	return r.run, nil
+}
+func (r *controllerExportRepo) GetPlan(context.Context, int64) (model.PerfTestPlan, error) {
+	return r.plan, nil
+}
+func (r *controllerExportRepo) GetPerfBaseline(context.Context, int64, string, string, *int64) (model.PerfBaseline, error) {
+	return model.PerfBaseline{}, errors.New("baseline not found")
+}
+
+type controllerP2Stub struct{}
+
+func (*controllerP2Stub) ListPerfEnvironments(context.Context, int64) ([]model.PerfEnvironment, error) {
+	return nil, errors.New("unused")
+}
+func (*controllerP2Stub) GetPerfEnvironment(context.Context, int64) (model.PerfEnvironment, error) {
+	return model.PerfEnvironment{}, errors.New("unused")
+}
+func (*controllerP2Stub) CreatePlanWithEnvironment(context.Context, model.PerfTestPlanRequest, string) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) UpdatePlanWithEnvironment(context.Context, int64, model.PerfTestPlanRequest) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) GetPerfBaselineByRun(context.Context, int64) (model.PerfBaseline, error) {
+	return model.PerfBaseline{}, errors.New("unused")
+}
+func (*controllerP2Stub) UpsertPerfBaseline(context.Context, model.PerfBaseline) (model.PerfBaseline, error) {
+	return model.PerfBaseline{}, errors.New("unused")
+}
+func (*controllerP2Stub) DeletePerfBaseline(context.Context, int64) error {
+	return errors.New("unused")
+}
+func (*controllerP2Stub) ListPerfTrendRuns(context.Context, int64, string, string, *int64, int) ([]model.PerfTestRun, error) {
+	return nil, errors.New("unused")
+}
+func (*controllerP2Stub) GetActivePerfRun(context.Context, int64) (model.PerfTestRun, error) {
+	return model.PerfTestRun{}, errors.New("unused")
+}
+func (*controllerP2Stub) ListPerfDegradationCandidates(context.Context, int) ([]model.PerfTestRun, error) {
+	return nil, errors.New("unused")
+}
+func (*controllerP2Stub) MarkPerfDegradationChecked(context.Context, int64) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) ListPerfSchedules(context.Context, model.PerfScheduleFilter, int, int) ([]model.PerfSchedule, int64, error) {
+	return nil, 0, errors.New("unused")
+}
+func (*controllerP2Stub) GetPerfSchedule(context.Context, int64) (model.PerfSchedule, error) {
+	return model.PerfSchedule{}, errors.New("unused")
+}
+func (*controllerP2Stub) CreatePerfSchedule(context.Context, model.PerfSchedule) (model.PerfSchedule, error) {
+	return model.PerfSchedule{}, errors.New("unused")
+}
+func (*controllerP2Stub) UpdatePerfSchedule(context.Context, model.PerfSchedule) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) SetPerfScheduleEnabled(context.Context, int64, bool, *time.Time, string) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) SoftDeletePerfSchedule(context.Context, int64, string) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) ClaimPerfSchedules(context.Context, string, time.Time, int) ([]model.PerfSchedule, error) {
+	return nil, errors.New("unused")
+}
+func (*controllerP2Stub) FinishPerfSchedule(context.Context, int64, string, *time.Time, *time.Time, string, *int64, string) (int64, error) {
+	return 0, errors.New("unused")
+}
+func (*controllerP2Stub) SetPerfScheduleError(context.Context, int64, string, string) (int64, error) {
+	return 0, errors.New("unused")
 }
 
 func validPerfPlanBody() []byte {
@@ -182,6 +266,50 @@ func validPerfPlanBody() []byte {
 func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func TestPerformanceControllerExportCSVContract(t *testing.T) {
+	requested := time.Date(2026, 8, 18, 3, 4, 5, 0, time.UTC)
+	finished := requested.Add(time.Second)
+	duration := 100
+	run := model.PerfTestRun{ID: 5, PlanID: 9, ScenarioType: "baseline", Status: model.PerfRunCompleted, TriggeredBy: "admin", RequestedAt: &requested, FinishedAt: &finished, DurationMs: &duration, TotalRequests: 1, PlanSnapshot: json.RawMessage(`{"environmentId":42,"environment":"env","environmentName":"环境","resolvedTargetUrl":"https://example.test/health?token=secret"}`), Summary: json.RawMessage(`{"metrics":{}}`)}
+	repo := &controllerExportRepo{controllerFakePerfRepo: &controllerFakePerfRepo{}, run: run, plan: model.PerfTestPlan{ID: 9, Name: "导出方案"}}
+	ctl := NewPerformanceController(service.NewPerformanceService(repo, nil, nil, ""))
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("claims", model.Claims{UserID: 1, Username: "admin"}); c.Next() })
+	router.GET("/perf/runs/:id/export", ctl.ExportRun)
+	req := httptest.NewRequest(http.MethodGet, "/perf/runs/5/export?format=csv", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "text/csv; charset=utf-8" {
+		t.Fatalf("unexpected content type: %s", rec.Header().Get("Content-Type"))
+	}
+	data := rec.Body.Bytes()
+	if len(data) < 3 || !bytes.Equal(data[:3], []byte{0xEF, 0xBB, 0xBF}) {
+		t.Fatal("CSV BOM missing")
+	}
+	reader := csv.NewReader(bytes.NewReader(data[3:]))
+	header, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(header) != 30 || header[0] != "run_id" || header[9] != "resolved_target_url" || header[29] != "k6_version" {
+		t.Fatalf("unexpected CSV contract: columns=%d header=%v", len(header), header)
+	}
+	row, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(row) != 30 || row[0] != "5" || row[1] != "9" || row[6] != "42" || row[9] != "https://example.test/health?token=***" || row[11] != "" {
+		t.Fatalf("unexpected CSV values: %v", row)
+	}
+	if strings.Contains(string(data), "secret") {
+		t.Fatal("CSV leaked a secret")
+	}
 }
 
 func TestPerformanceControllerListPlans(t *testing.T) {
@@ -233,7 +361,7 @@ func TestPerformanceControllerRunPlan(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/perf/plans/1/run", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true, updateStatusR: 1}).ServeHTTP(rec, req)
+	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true, updateStatusR: 1, updateResultR: 1}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -242,7 +370,7 @@ func TestPerformanceControllerRunPlan(t *testing.T) {
 func TestPerformanceControllerCancelRun(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/perf/runs/1/cancel", nil)
 	rec := httptest.NewRecorder()
-	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true, updateStatusR: 1}).ServeHTTP(rec, req)
+	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true, updateStatusR: 1, updateResultR: 1}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -265,6 +393,36 @@ func TestPerformanceControllerRuns(t *testing.T) {
 		if rec.Code != item.code {
 			t.Fatalf("%s %s expected %d, got %d: %s", item.method, item.path, item.code, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestPerformanceControllerListRunsOmitsLargeFields(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/perf/runs?page=1&pageSize=20", nil)
+	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, field := range []string{"planSnapshot", "summary", "series", "diagnosticOutput"} {
+		if strings.Contains(body, field) {
+			t.Fatalf("list response should omit %s: %s", field, body)
+		}
+	}
+}
+
+func TestPerformanceControllerRejectsOversizedCallbacksBeforeBind(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/perf/tasks/task-1/events/callback", bytes.NewBufferString(strings.Repeat("x", 64*1024+1)))
+	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized event, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/perf/tasks/task-1/callback", bytes.NewBufferString(strings.Repeat("x", 4*1024*1024+1)))
+	perfRouterWithRepo(true, &controllerFakePerfRepo{productExists: true}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized terminal callback, got %d", rec.Code)
 	}
 }
 
@@ -336,15 +494,29 @@ func TestPerformanceControllerCallbackUnauthorized(t *testing.T) {
 
 func TestPerformanceControllerCallbackGone(t *testing.T) {
 	repo := &controllerFakePerfRepo{productExists: true}
-	repo.runByTaskID = model.PerfTestRun{ID: 1, PlanID: 1, Status: "completed", CallbackTokenHash: tokenHash("secret")}
+	// 终态时 token 已被清空，重复回调仍应返回 410 而非先验 token 得到 401。
+	repo.runByTaskID = model.PerfTestRun{ID: 1, PlanID: 1, Status: "completed"}
 	r := perfRouterWithRepo(true, repo)
 	req := httptest.NewRequest(http.MethodPost, "/perf/tasks/task-1/callback", bytes.NewReader([]byte(`{"status":"completed"}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Authorization", "Bearer expired-token")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusGone {
 		t.Fatalf("expected 410, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPerformanceControllerCallbackDuplicateRunningIsIdempotent(t *testing.T) {
+	repo := &controllerFakePerfRepo{productExists: true}
+	repo.runByTaskID = model.PerfTestRun{ID: 1, PlanID: 1, Status: model.PerfRunRunning, CallbackTokenHash: tokenHash("secret")}
+	req := httptest.NewRequest(http.MethodPost, "/perf/tasks/task-1/callback", bytes.NewReader([]byte(`{"status":"running"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	perfRouterWithRepo(true, repo).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate running callback expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

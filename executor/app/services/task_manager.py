@@ -15,7 +15,7 @@ from app.runners.perf_runner import PerfRunner
 from app.runners.playwright_runner import PlaywrightRunner
 from app.runners.pytest_runner import PytestRunner
 from app.runners.script_runner import ScriptRunner
-from app.services.callback_client import notify_callback, notify_event
+from app.services.callback_client import notify_callback, notify_event, notify_perf_event
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class TaskManager:
 
         task_id = task.task_id or str(uuid4())
         with self._lock:
+            self._prune_tasks()
             self._prune_tombstones()
             if task_id in self._canceled_tombstones:
                 logger.info("收到已取消任务的重复提交：task_id=%s，幂等返回已取消", task_id)
@@ -77,6 +78,7 @@ class TaskManager:
                 payload=task.payload,
                 callbackUrl=task.callback_url,
                 eventUrl=task.event_url,
+                sampleIntervalMs=task.sample_interval_ms,
                 callbackToken=task.callback_token,
                 createdAt=datetime.now(),
             )
@@ -90,16 +92,19 @@ class TaskManager:
 
     def list_tasks(self) -> list[TaskView]:
         with self._lock:
+            self._prune_tasks()
             return sorted(self._tasks.values(), key=lambda item: item.created_at, reverse=True)
 
     def get(self, task_id: str) -> TaskView | None:
         with self._lock:
+            self._prune_tasks()
             return self._tasks.get(task_id)
 
     def stats(self) -> dict[str, int]:
         """返回心跳上报所需的任务负载统计。"""
 
         with self._lock:
+            self._prune_tasks()
             queued = sum(1 for task in self._tasks.values() if task.status == TaskStatus.queued)
             running = sum(1 for task in self._tasks.values() if task.status == TaskStatus.running)
             return {"queuedTasks": queued, "runningTasks": running}
@@ -109,6 +114,7 @@ class TaskManager:
 
         callback_view = None
         with self._lock:
+            self._prune_tasks()
             self._prune_tombstones()
             task = self._tasks.get(task_id)
             if not task:
@@ -117,7 +123,12 @@ class TaskManager:
                 logger.info("收到不存在任务的取消请求，记录墓碑：task_id=%s", task_id)
                 return self._canceled_view(task_id, TaskCreate(taskId=task_id, type=TaskType.perf, payload={}))
             future = self._futures.get(task_id)
-            if task.status == TaskStatus.queued and future and future.cancel():
+            if task.status == TaskStatus.queued:
+                cancel_event = self._cancel_events.get(task_id)
+                if cancel_event:
+                    cancel_event.set()
+                if future:
+                    future.cancel()
                 task.status = TaskStatus.canceled
                 task.finished_at = datetime.now()
                 task.result = TaskResult(exitCode=None, error="任务已取消")
@@ -140,6 +151,7 @@ class TaskManager:
         """判断 task_id 是否已登记或命中取消墓碑，供路由区分幂等命中与新建。"""
 
         with self._lock:
+            self._prune_tasks()
             self._prune_tombstones()
             return task_id in self._tasks or task_id in self._canceled_tombstones
 
@@ -164,10 +176,37 @@ class TaskManager:
         for task_id in expired:
             del self._canceled_tombstones[task_id]
 
+    def _prune_tasks(self) -> None:
+        now = datetime.now()
+        terminal = [
+            (task.created_at, task_id)
+            for task_id, task in self._tasks.items()
+            if task.status in (TaskStatus.success, TaskStatus.failed, TaskStatus.canceled)
+            and task.finished_at is not None
+            and (now - task.finished_at).total_seconds() >= settings.perf_task_ttl_seconds
+        ]
+        terminal.sort()
+        for _, task_id in terminal:
+            self._tasks.pop(task_id, None)
+            self._futures.pop(task_id, None)
+            self._cancel_events.pop(task_id, None)
+        retained = [
+            (task.created_at, task_id)
+            for task_id, task in self._tasks.items()
+            if task.status in (TaskStatus.success, TaskStatus.failed, TaskStatus.canceled)
+        ]
+        retained.sort()
+        overflow = max(0, len(retained) - settings.perf_task_max_retained)
+        for _, task_id in retained[:overflow]:
+            self._tasks.pop(task_id, None)
+            self._futures.pop(task_id, None)
+            self._cancel_events.pop(task_id, None)
+
     def _execute(self, task_id: str, task: TaskCreate) -> None:
         """线程池中的执行入口，统一处理成功、失败和回调。"""
 
-        self._mark_running(task_id)
+        if not self._mark_running(task_id):
+            return
         logger.info("任务开始执行：task_id=%s type=%s", task_id, task.type.value)
         try:
             runner = self._runners[task.type]
@@ -187,6 +226,7 @@ class TaskManager:
                     lambda output: self._update_progress(task_id, output),
                     cancel_event.is_set,
                     lambda metadata: self._notify_perf_started(task_id, metadata),
+                    lambda event: self._notify_perf_sample(task_id, event),
                 )
             else:
                 result = runner.run(task)
@@ -203,12 +243,14 @@ class TaskManager:
                 logger.error("任务执行失败：task_id=%s error=%s", task_id, result.error or "未知错误")
             notify_callback(final_view)
 
-    def _mark_running(self, task_id: str) -> None:
+    def _mark_running(self, task_id: str) -> bool:
         with self._lock:
             task = self._tasks[task_id]
-            if task.status != TaskStatus.canceled:
-                task.status = TaskStatus.running
-                task.started_at = datetime.now()
+            if task.status == TaskStatus.canceled:
+                return False
+            task.status = TaskStatus.running
+            task.started_at = datetime.now()
+            return True
 
     def _notify_perf_started(self, task_id: str, metadata: dict) -> None:
         with self._lock:
@@ -217,6 +259,13 @@ class TaskManager:
                 return
             task.result = TaskResult(exitCode=None, output=json.dumps(metadata, ensure_ascii=False))
         notify_callback(task)
+
+    def _notify_perf_sample(self, task_id: str, event: dict) -> None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status != TaskStatus.running:
+                return
+        notify_perf_event(task, event)
 
     def _update_progress(self, task_id: str, output: str) -> None:
         with self._lock:

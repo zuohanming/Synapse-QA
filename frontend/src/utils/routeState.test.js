@@ -16,6 +16,7 @@ describe("性能测试独立 URL 路由（SPEC §8.1）", () => {
     expect(pathFromHash("#/performance/plans/123")).toEqual(["性能测试", "压测方案", "123"]);
     expect(pathFromHash("#/performance/plans/123/edit")).toEqual(["性能测试", "压测方案", "123", "edit"]);
     expect(pathFromHash("#/performance/runs/456")).toEqual(["性能测试", "测试报告", "456"]);
+    expect(pathFromHash("#/performance/schedules")).toEqual(["性能测试", "定时规则"]);
   });
 
   it("路径往返一致（刷新可恢复）", () => {

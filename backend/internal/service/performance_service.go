@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,8 +26,10 @@ import (
 var ErrPerfConfigConflict = errors.New("同幂等键但配置不同")
 
 var (
-	perfSensitiveTextPattern  = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)(\s*[=:]\s*)([^\s,;]+)`)
-	perfSensitiveQueryPattern = regexp.MustCompile(`(?i)([?&](?:authorization|cookie|password|passwd|token|secret|api[_-]?key)=)[^&#\s]+`)
+	perfSensitiveTextPattern  = regexp.MustCompile(`(?i)(["']?(?:authorization|cookie|password|passwd|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|api[_-]?key)["']?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)[^"'\s,;}]+`)
+	perfSensitiveQueryPattern = regexp.MustCompile(`(?i)([?&](?:authorization|cookie|password|passwd|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|api[_-]?key)=)[^&#\s]+`)
+	perfDurationPattern       = regexp.MustCompile(`^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$`)
+	perfRandRead              = rand.Read
 )
 
 // 性能测试调度与超时常量（SPEC §5.1）。
@@ -36,6 +40,7 @@ const (
 	perfDefaultDuration  = 600 * time.Second // 无法解析负载时长的保守默认
 	perfStoppingGrace    = 30 * time.Second  // stopping 宽限期
 	perfRecoverInterval  = 10 * time.Second  // 恢复扫描周期
+	perfMaxVUs           = 500
 )
 
 type PerformanceRepository interface {
@@ -69,6 +74,7 @@ type PerformanceService struct {
 	notifiedRuns sync.Map
 	smokeMu      sync.Mutex
 	smokeTasks   map[string]string // taskID -> executorID（冒烟任务定位）
+	events       *PerfEventHub
 }
 
 func NewPerformanceService(performanceRepo PerformanceRepository, executorRepo ExecutorRepository, systemRepo OperationLogger, callbackBase string) *PerformanceService {
@@ -79,6 +85,7 @@ func NewPerformanceService(performanceRepo PerformanceRepository, executorRepo E
 		httpClient:      &http.Client{Timeout: 10 * time.Second},
 		wakeScheduler:   make(chan struct{}, 1),
 		smokeTasks:      make(map[string]string),
+		events:          NewPerfEventHub(),
 	}
 	if systemRepo != nil {
 		svc.systemRepo = systemRepo
@@ -93,6 +100,7 @@ func NewPerformanceServiceWithLogger(performanceRepo PerformanceRepository, logg
 		httpClient:      &http.Client{Timeout: 10 * time.Second},
 		wakeScheduler:   make(chan struct{}, 1),
 		smokeTasks:      make(map[string]string),
+		events:          NewPerfEventHub(),
 	}
 }
 
@@ -132,7 +140,17 @@ func (s *PerformanceService) CreatePlan(ctx context.Context, actor string, req m
 	if err != nil {
 		return 0, err
 	}
-	id, err := s.performanceRepo.CreatePlan(ctx, req, actor)
+	if err := s.SetPlanEnvironment(ctx, &req); err != nil {
+		return 0, err
+	}
+	var id int64
+	if repo, ok := s.performanceRepo.(interface {
+		CreatePlanWithEnvironment(context.Context, model.PerfTestPlanRequest, string) (int64, error)
+	}); ok {
+		id, err = repo.CreatePlanWithEnvironment(ctx, req, actor)
+	} else {
+		id, err = s.performanceRepo.CreatePlan(ctx, req, actor)
+	}
 	if err != nil {
 		return 0, errors.New("新增性能测试方案失败，名称可能已存在")
 	}
@@ -148,7 +166,17 @@ func (s *PerformanceService) UpdatePlan(ctx context.Context, actor string, id in
 	if err != nil {
 		return err
 	}
-	rows, err := s.performanceRepo.UpdatePlan(ctx, id, req)
+	if err := s.SetPlanEnvironment(ctx, &req); err != nil {
+		return err
+	}
+	var rows int64
+	if repo, ok := s.performanceRepo.(interface {
+		UpdatePlanWithEnvironment(context.Context, int64, model.PerfTestPlanRequest) (int64, error)
+	}); ok {
+		rows, err = repo.UpdatePlanWithEnvironment(ctx, id, req)
+	} else {
+		rows, err = s.performanceRepo.UpdatePlan(ctx, id, req)
+	}
 	if err != nil {
 		return errors.New("更新性能测试方案失败，名称可能已存在")
 	}
@@ -176,6 +204,14 @@ func (s *PerformanceService) DeletePlan(ctx context.Context, actor string, id in
 
 // RunPlan 触发执行（幂等，SPEC §5.3）。reused 为 true 表示命中已有执行记录，应返回 200。
 func (s *PerformanceService) RunPlan(ctx context.Context, actor, idempotencyKey string, planID int64) (model.PerfTestRun, bool, error) {
+	return s.runPlanWithEnvironment(ctx, actor, idempotencyKey, planID, nil)
+}
+
+func (s *PerformanceService) RunPlanWithEnvironment(ctx context.Context, actor, idempotencyKey string, planID int64, environmentID *int64) (model.PerfTestRun, bool, error) {
+	return s.runPlanWithEnvironment(ctx, actor, idempotencyKey, planID, environmentID)
+}
+
+func (s *PerformanceService) runPlanWithEnvironment(ctx context.Context, actor, idempotencyKey string, planID int64, overrideEnvironmentID *int64) (model.PerfTestRun, bool, error) {
 	if planID <= 0 {
 		return model.PerfTestRun{}, false, errors.New("性能测试方案 ID 无效")
 	}
@@ -183,7 +219,42 @@ func (s *PerformanceService) RunPlan(ctx context.Context, actor, idempotencyKey 
 	if err != nil {
 		return model.PerfTestRun{}, false, errors.New("性能测试方案不存在")
 	}
-	snapshot, configHash, err := buildPlanSnapshotAndHash(plan)
+	if plan.Status != "active" {
+		return model.PerfTestRun{}, false, errors.New("方案必须处于 active 状态才能执行")
+	}
+	originalPlan := plan
+	resolvedPlan := plan
+	if overrideEnvironmentID != nil {
+		if *overrideEnvironmentID <= 0 {
+			return model.PerfTestRun{}, false, errors.New("环境 ID 无效")
+		}
+		resolved, resolveErr := s.resolvePerfEnvironment(ctx, resolvedPlan.ProductID, overrideEnvironmentID)
+		if resolveErr != nil {
+			return model.PerfTestRun{}, false, resolveErr
+		}
+		resolvedPlan.EnvironmentID = &resolved.EnvironmentID
+		resolvedPlan.Environment = resolved.EnvName
+		resolvedPlan.EnvironmentName = resolved.EnvName
+		resolvedPlan.EnvironmentDeployEnv = resolved.DeployEnv
+		resolvedPlan.EnvironmentBaseURL = resolved.BaseURL
+	}
+	if resolvedPlan.EnvironmentID != nil {
+		resolved, resolveErr := s.resolvePerfEnvironment(ctx, resolvedPlan.ProductID, resolvedPlan.EnvironmentID)
+		if resolveErr != nil {
+			return model.PerfTestRun{}, false, resolveErr
+		}
+		resolvedPlan.EnvironmentID = &resolved.EnvironmentID
+		resolvedPlan.EnvironmentName = resolved.EnvName
+		resolvedPlan.Environment = resolved.EnvName
+		resolvedPlan.EnvironmentDeployEnv = resolved.DeployEnv
+		resolvedPlan.EnvironmentBaseURL = resolved.BaseURL
+	}
+	if resolvedPlan.EnvironmentID != nil {
+		if err := resolvePerfPlanURLs(&resolvedPlan); err != nil {
+			return model.PerfTestRun{}, false, err
+		}
+	}
+	snapshot, configHash, err := buildPlanSnapshotAndHashForRun(originalPlan, resolvedPlan)
 	if err != nil {
 		return model.PerfTestRun{}, false, errors.New("生成执行快照失败")
 	}
@@ -202,7 +273,14 @@ func (s *PerformanceService) RunPlan(ctx context.Context, actor, idempotencyKey 
 		return existing, false, ErrPerfConfigConflict
 	}
 	requestedAt := time.Now()
-	runID, err := s.performanceRepo.CreateRun(ctx, planID, plan.ScenarioType, plan.Environment, configHash, key, actor, snapshot, requestedAt, computeExpectedFinishAt(plan, requestedAt))
+	var runID int64
+	if repo, ok := s.performanceRepo.(interface {
+		CreateRunWithEnvironment(context.Context, int64, string, string, *int64, string, string, string, json.RawMessage, time.Time, time.Time) (int64, error)
+	}); ok {
+		runID, err = repo.CreateRunWithEnvironment(ctx, planID, resolvedPlan.ScenarioType, resolvedPlan.Environment, resolvedPlan.EnvironmentID, configHash, key, actor, snapshot, requestedAt, computeExpectedFinishAt(resolvedPlan, requestedAt))
+	} else {
+		runID, err = s.performanceRepo.CreateRun(ctx, planID, resolvedPlan.ScenarioType, resolvedPlan.Environment, configHash, key, actor, snapshot, requestedAt, computeExpectedFinishAt(resolvedPlan, requestedAt))
+	}
 	if err != nil {
 		// 唯一索引冲突（并发同 key 或同方案活动任务），重查幂等判定。
 		if existing, getErr := s.performanceRepo.GetRunByIdempotencyKey(ctx, actor, key); getErr == nil {
@@ -261,12 +339,9 @@ func (s *PerformanceService) CancelRun(ctx context.Context, actor string, id int
 	}
 	switch run.Status {
 	case model.PerfRunPending, model.PerfRunQueued:
-		rows, err := s.performanceRepo.UpdateRunStatus(ctx, id, run.Status, model.PerfRunCanceled, nil)
-		if err != nil {
+		result := s.partialTerminalResult(ctx, run, model.PerfFailureCancel, "任务已取消")
+		if err := s.persistTerminal(ctx, run, []string{run.Status}, model.PerfRunCanceled, result); err != nil {
 			return errors.New("取消执行失败")
-		}
-		if rows == 0 {
-			return errors.New("执行状态已变化，取消失败")
 		}
 	case model.PerfRunDispatching, model.PerfRunDispatched, model.PerfRunRunning:
 		rows, err := s.performanceRepo.UpdateRunStatus(ctx, id, run.Status, model.PerfRunStopping, nil)
@@ -307,6 +382,13 @@ func (s *PerformanceService) GetRun(ctx context.Context, id int64) (model.PerfTe
 	if err != nil {
 		return model.PerfTestRun{}, errors.New("执行记录不存在")
 	}
+	hydrateRunEnvironmentFromSnapshot(&item)
+	if !isFinalRunStatus(item.Status) && s.events != nil {
+		if series, ok := s.events.Snapshot(item.ID); ok {
+			encoded, _ := json.Marshal(series)
+			item.Series = encoded
+		}
+	}
 	return item, nil
 }
 
@@ -337,10 +419,10 @@ func (s *PerformanceService) HandleCallback(ctx context.Context, taskID, token s
 		}
 		startedAt := time.Now()
 		rows, err := s.performanceRepo.UpdateRunStatus(ctx, run.ID, model.PerfRunDispatching+","+model.PerfRunDispatched, model.PerfRunRunning, map[string]any{
-			"script_hash":       req.ScriptHash,
-			"generator_version": req.GeneratorVersion,
-			"k6_version":        req.K6Version,
-			"started_at":        startedAt,
+			"script_hash":        req.ScriptHash,
+			"generator_version":  req.GeneratorVersion,
+			"k6_version":         req.K6Version,
+			"started_at":         startedAt,
 			"expected_finish_at": s.expectedFinishAtForRun(run, startedAt),
 		})
 		if err != nil {
@@ -355,7 +437,16 @@ func (s *PerformanceService) HandleCallback(ctx context.Context, taskID, token s
 			return errors.New("回调状态冲突")
 		}
 		summary := sanitizePerfJSON(req.Summary)
+		seriesRaw := normalizePerfSeries(req.Series)
+		if len(req.Series) == 0 && s.events != nil {
+			if current, ok := s.events.Snapshot(run.ID); ok {
+				seriesRaw, _ = json.Marshal(current)
+			}
+		}
 		finalStatus := resolveFinalStatus(status, summary)
+		if status == "execution_failed" || status == "timed_out" || status == "canceled" {
+			seriesRaw = forcePerfSeriesPartial(seriesRaw)
+		}
 		failureStage := req.FailureStage
 		if failureStage == "" {
 			failureStage = defaultFailureStage(status)
@@ -367,6 +458,7 @@ func (s *PerformanceService) HandleCallback(ctx context.Context, taskID, token s
 			TotalRequests:    req.TotalRequests,
 			AvgDurationMs:    req.AvgDurationMs,
 			P95DurationMs:    req.P95DurationMs,
+			P99DurationMs:    firstFloat(req.P99DurationMs, perfP99FromSummary(summary)),
 			ErrorRate:        req.ErrorRate,
 			RPS:              req.RPS,
 			Summary:          summary,
@@ -376,8 +468,9 @@ func (s *PerformanceService) HandleCallback(ctx context.Context, taskID, token s
 			FailureStage:     failureStage,
 			DiagnosticOutput: sanitizePerfText(req.DiagnosticOutput),
 			NeedsAttention:   req.NeedsAttention,
+			Series:           seriesRaw,
 		}
-		rows, err := s.performanceRepo.UpdateRunResult(ctx, run.ID, []string{model.PerfRunRunning, model.PerfRunStopping}, finalStatus, result)
+		rows, err := s.performanceRepo.UpdateRunResult(ctx, run.ID, []string{model.PerfRunDispatching, model.PerfRunDispatched, model.PerfRunRunning, model.PerfRunStopping}, finalStatus, result)
 		if err != nil {
 			return errors.New("更新执行结果失败")
 		}
@@ -385,10 +478,89 @@ func (s *PerformanceService) HandleCallback(ctx context.Context, taskID, token s
 			return errors.New("回调状态冲突")
 		}
 		s.notifyRunFinished(ctx, run, finalStatus)
+		if s.events != nil {
+			var series model.PerfSeries
+			_ = json.Unmarshal(result.Series, &series)
+			s.events.MarkTerminal(run.ID, finalStatus, series)
+		}
 		return nil
 	default:
 		return errors.New("回调状态无效")
 	}
+}
+
+// HandleSampleEvent 接收执行器窗口采样，旧 sequence 幂等忽略，不落库阻塞执行器。
+func (s *PerformanceService) HandleSampleEvent(ctx context.Context, taskID, token string, event model.PerfSampleEvent) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return errors.New("taskId 不能为空")
+	}
+	run, err := s.performanceRepo.GetRunByTaskID(ctx, taskID)
+	if err != nil {
+		return errors.New("执行记录不存在")
+	}
+	if isFinalRunStatus(run.Status) {
+		return errors.New("执行已终结")
+	}
+	if run.CallbackTokenHash == "" || sha256Hex(token) != run.CallbackTokenHash {
+		return errors.New("回调凭据无效")
+	}
+	if event.Sequence <= 0 {
+		return errors.New("采样序号无效")
+	}
+	event.TaskID = taskID
+	if event.Type == "" {
+		event.Type = "sample"
+	}
+	if event.Status == "" {
+		event.Status = model.PerfRunRunning
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	if event.WindowMs < 1000 || event.WindowMs > 5000 {
+		event.WindowMs = 2000
+	}
+	if event.StatusCodes == nil {
+		event.StatusCodes = map[string]int{}
+	}
+	if event.ErrorTopN == nil {
+		event.ErrorTopN = []model.PerfErrorTop{}
+	}
+	if event.Thresholds == nil {
+		event.Thresholds = []model.PerfSampleThreshold{}
+	}
+	event.Message = sanitizePerfText(event.Message)
+	if encoded, marshalErr := json.Marshal(event); marshalErr == nil {
+		var safeEvent model.PerfSampleEvent
+		if json.Unmarshal(sanitizePerfJSON(encoded), &safeEvent) == nil {
+			event = safeEvent
+		}
+	}
+	if encoded, marshalErr := json.Marshal(event); marshalErr != nil || len(encoded) > 64*1024 {
+		return errors.New("采样事件过大")
+	}
+	if s.events != nil {
+		s.events.Publish(run.ID, event)
+	}
+	return nil
+}
+
+func (s *PerformanceService) SubscribeRunEvents(ctx context.Context, id, after int64) (<-chan PerfStreamMessage, func(), error) {
+	if id <= 0 {
+		return nil, nil, errors.New("执行记录 ID 无效")
+	}
+	run, err := s.performanceRepo.GetRun(ctx, id)
+	if err != nil {
+		return nil, nil, errors.New("执行记录不存在")
+	}
+	if isFinalRunStatus(run.Status) && s.events != nil {
+		var series model.PerfSeries
+		_ = json.Unmarshal(normalizePerfSeries(run.Series), &series)
+		s.events.MarkTerminal(id, run.Status, series)
+	}
+	channel, cancel := s.events.Subscribe(id, after)
+	return channel, cancel, nil
 }
 
 // StartScheduler 启动性能测试队列调度与中间态恢复循环。
@@ -396,11 +568,14 @@ func (s *PerformanceService) StartScheduler(ctx context.Context) {
 	go func() {
 		dispatchTicker := time.NewTicker(time.Second)
 		recoverTicker := time.NewTicker(perfRecoverInterval)
+		scheduleTicker := time.NewTicker(10 * time.Second)
 		defer dispatchTicker.Stop()
 		defer recoverTicker.Stop()
+		defer scheduleTicker.Stop()
 		// 启动时立即恢复一次，处理进程重启遗留的中间态任务（SPEC §5.4）。
 		s.recover(ctx)
 		s.dispatch(ctx)
+		s.ProcessPerfSchedules(ctx)
 		for {
 			select {
 			case <-ctx.Done():
@@ -409,6 +584,8 @@ func (s *PerformanceService) StartScheduler(ctx context.Context) {
 				s.dispatch(ctx)
 			case <-recoverTicker.C:
 				s.recover(ctx)
+			case <-scheduleTicker.C:
+				s.ProcessPerfSchedules(ctx)
 			case <-s.wakeScheduler:
 				s.dispatch(ctx)
 			}
@@ -424,9 +601,13 @@ func (s *PerformanceService) dispatch(ctx context.Context) {
 }
 
 func (s *PerformanceService) recover(ctx context.Context) {
+	if s.events != nil {
+		s.events.CleanupExpired(time.Now())
+	}
 	if err := s.RecoverStale(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("性能测试恢复扫描失败：%v", err)
 	}
+	s.RecoverPerfDegradation(ctx)
 }
 
 func (s *PerformanceService) wake() {
@@ -469,6 +650,12 @@ func (s *PerformanceService) DispatchPending(ctx context.Context) error {
 }
 
 func (s *PerformanceService) dispatchRun(ctx context.Context, run model.PerfTestRun) error {
+	fullRun, err := s.performanceRepo.GetRun(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	fullRun.Status = run.Status
+	run = fullRun
 	executor, err := s.pickExecutor(ctx)
 	if err != nil {
 		return err
@@ -479,6 +666,8 @@ func (s *PerformanceService) dispatchRun(ctx context.Context, run model.PerfTest
 		return errors.New("生成性能测试回调凭据失败")
 	}
 	callbackURL := fmt.Sprintf("%s/api/perf/tasks/%s/callback", s.callbackBase, taskID)
+	eventURL := fmt.Sprintf("%s/api/perf/tasks/%s/events/callback", s.callbackBase, taskID)
+	sampleIntervalMs := perfSampleIntervalMs(run)
 	now := time.Now()
 	rows, err := s.performanceRepo.UpdateRunStatus(ctx, run.ID, model.PerfRunQueued, model.PerfRunDispatching, map[string]any{
 		"task_id":              taskID,
@@ -499,7 +688,7 @@ func (s *PerformanceService) dispatchRun(ctx context.Context, run model.PerfTest
 	if err != nil {
 		return errors.New("构建执行器负载失败")
 	}
-	if err := s.submitPerfTask(ctx, executor, taskID, payload, callbackURL, callbackToken); err != nil {
+	if err := s.submitPerfTask(ctx, executor, taskID, payload, callbackURL, eventURL, callbackToken, sampleIntervalMs); err != nil {
 		// 提交失败：保持 dispatching 并依赖超时恢复重试（粘性绑定同一 task_id/executor_id）。
 		return err
 	}
@@ -544,7 +733,9 @@ func (s *PerformanceService) recoverRun(ctx context.Context, run model.PerfTestR
 		case "running":
 			// 执行器已快速启动，启动回调丢失，直接推进到 running。
 			_, _ = s.performanceRepo.UpdateRunStatus(ctx, run.ID, model.PerfRunDispatching, model.PerfRunRunning, nil)
-		case "queued", "success", "failed", "canceled":
+		case "success", "failed", "canceled":
+			s.recoverExecutorTerminal(ctx, run, task)
+		case "queued":
 			// 执行器已接收任务，推进到 dispatched。
 			_, _ = s.performanceRepo.UpdateRunStatus(ctx, run.ID, model.PerfRunDispatching, model.PerfRunDispatched, map[string]any{"dispatched_at": time.Now()})
 		default:
@@ -561,6 +752,8 @@ func (s *PerformanceService) recoverRun(ctx context.Context, run model.PerfTestR
 		}
 		if taskStatus(task) == "running" {
 			_, _ = s.performanceRepo.UpdateRunStatus(ctx, run.ID, model.PerfRunDispatched, model.PerfRunRunning, nil)
+		} else if taskStatus(task) == "success" || taskStatus(task) == "failed" || taskStatus(task) == "canceled" {
+			s.recoverExecutorTerminal(ctx, run, task)
 		} else {
 			s.markExecutionFailed(ctx, run.ID, model.PerfFailureStartup, "执行器未启动 k6")
 		}
@@ -574,7 +767,9 @@ func (s *PerformanceService) recoverRun(ctx context.Context, run model.PerfTestR
 			return
 		}
 		switch taskStatus(task) {
-		case "success", "failed", "canceled", "":
+		case "success", "failed", "canceled":
+			s.recoverExecutorTerminal(ctx, run, task)
+		case "":
 			s.markExecutionFailed(ctx, run.ID, model.PerfFailureTimeout, "执行超时且执行器进程已结束")
 		default:
 			// 仍在运行但已超时，无法确认是否卡死 → 人工关注。
@@ -592,12 +787,46 @@ func (s *PerformanceService) recoverRun(ctx context.Context, run model.PerfTestR
 			s.markExecutionFailed(ctx, run.ID, model.PerfFailureExecutorOffline, "取消确认时执行器不可达")
 			return
 		}
-		if taskStatus(task) == "canceled" {
-			// 取消完成，保存执行器已采集的部分结果并在同一终态更新中撤销回调凭据。
-			_, _ = s.performanceRepo.UpdateRunResult(ctx, run.ID, []string{model.PerfRunStopping}, model.PerfRunCanceled, perfResultFromExecutorTask(task))
+		if taskStatus(task) == "canceled" || taskStatus(task) == "success" || taskStatus(task) == "failed" {
+			// 执行器已结束，取消意图优先，保存已采集的部分结果并撤销回调凭据。
+			result := perfResultFromExecutorTask(task)
+			result.Series = forcePerfSeriesPartial(result.Series)
+			_ = s.persistTerminal(ctx, run, []string{model.PerfRunStopping}, model.PerfRunCanceled, result)
 		} else {
 			s.markNeedsAttention(ctx, run.ID)
 		}
+	}
+}
+
+func (s *PerformanceService) recoverExecutorTerminal(ctx context.Context, run model.PerfTestRun, task map[string]any) {
+	result := perfResultFromExecutorTask(task)
+	status := taskTerminalPerfStatus(task, result)
+	if status == model.PerfRunCanceled || status == model.PerfRunExecutionFailed || status == model.PerfRunTimedOut {
+		result.Series = forcePerfSeriesPartial(result.Series)
+	}
+	_ = s.persistTerminal(ctx, run, []string{run.Status}, status, result)
+}
+
+func taskTerminalPerfStatus(task map[string]any, result model.PerfRunResult) string {
+	resultMap, _ := task["result"].(map[string]any)
+	outputText, _ := resultMap["output"].(string)
+	var output map[string]any
+	_ = json.Unmarshal([]byte(outputText), &output)
+	status, _ := output["terminal_status"].(string)
+	switch status {
+	case model.PerfRunCompleted, model.PerfRunThresholdFailed, model.PerfRunExecutionFailed, model.PerfRunTimedOut, model.PerfRunCanceled:
+		if status == model.PerfRunCompleted {
+			return resolveFinalStatus(status, result.Summary)
+		}
+		return status
+	}
+	switch taskStatus(task) {
+	case "canceled":
+		return model.PerfRunCanceled
+	case "success":
+		return resolveFinalStatus(model.PerfRunCompleted, result.Summary)
+	default:
+		return model.PerfRunExecutionFailed
 	}
 }
 
@@ -612,6 +841,7 @@ func perfResultFromExecutorTask(task map[string]any) model.PerfRunResult {
 		summary = _summaryFromPerfOutput(output)
 	}
 	summaryRaw, _ := json.Marshal(summary)
+	seriesRaw, _ := json.Marshal(output["series"])
 	return model.PerfRunResult{
 		ScriptHash:       sanitizePerfText(stringValue(output, "script_hash")),
 		GeneratorVersion: sanitizePerfText(stringValue(output, "generator_version")),
@@ -619,9 +849,11 @@ func perfResultFromExecutorTask(task map[string]any) model.PerfRunResult {
 		TotalRequests:    intValue(metrics, "total_requests"),
 		AvgDurationMs:    floatValuePtr(metrics, "avg_duration_ms"),
 		P95DurationMs:    floatValuePtr(metrics, "p95_duration_ms"),
+		P99DurationMs:    firstFloat(floatValuePtr(metrics, "p99_duration_ms"), perfP99FromSummary(summaryRaw)),
 		ErrorRate:        floatValuePtr(metrics, "error_rate"),
 		RPS:              floatValuePtr(metrics, "rps"),
 		Summary:          sanitizePerfJSON(summaryRaw),
+		Series:           normalizePerfSeries(seriesRaw),
 		ExitCode:         intPtrFromAny(resultMap["exitCode"]),
 		ErrorMessage:     sanitizePerfText(stringValue(resultMap, "error")),
 		FailureStage:     sanitizePerfText(stringValue(output, "failure_stage")),
@@ -684,12 +916,45 @@ func boolValue(values map[string]any, key string) bool {
 }
 
 func (s *PerformanceService) markExecutionFailed(ctx context.Context, id int64, failureStage, message string) {
-	result := model.PerfRunResult{
-		Summary:      json.RawMessage(`{}`),
-		FailureStage: failureStage,
-		ErrorMessage: message,
+	run, err := s.performanceRepo.GetRun(ctx, id)
+	if err != nil {
+		return
 	}
-	_, _ = s.performanceRepo.UpdateRunResult(ctx, id, []string{model.PerfRunDispatching, model.PerfRunDispatched, model.PerfRunRunning, model.PerfRunStopping}, model.PerfRunExecutionFailed, result)
+	result := s.partialTerminalResult(ctx, run, failureStage, message)
+	_ = s.persistTerminal(ctx, run, []string{model.PerfRunDispatching, model.PerfRunDispatched, model.PerfRunRunning, model.PerfRunStopping}, model.PerfRunExecutionFailed, result)
+}
+
+func (s *PerformanceService) partialTerminalResult(ctx context.Context, run model.PerfTestRun, failureStage, message string) model.PerfRunResult {
+	seriesRaw := run.Series
+	if s.events != nil {
+		if series, ok := s.events.Snapshot(run.ID); ok {
+			seriesRaw, _ = json.Marshal(series)
+		}
+	}
+	return model.PerfRunResult{
+		Summary:          json.RawMessage(`{}`),
+		FailureStage:     failureStage,
+		ErrorMessage:     sanitizePerfText(message),
+		DiagnosticOutput: sanitizePerfText(message),
+		Series:           forcePerfSeriesPartial(normalizePerfSeries(seriesRaw)),
+	}
+}
+
+func (s *PerformanceService) persistTerminal(ctx context.Context, run model.PerfTestRun, from []string, status string, result model.PerfRunResult) error {
+	rows, err := s.performanceRepo.UpdateRunResult(ctx, run.ID, from, status, result)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("执行状态已变化")
+	}
+	s.notifyRunFinished(ctx, run, status)
+	if s.events != nil {
+		var series model.PerfSeries
+		_ = json.Unmarshal(normalizePerfSeries(result.Series), &series)
+		s.events.MarkTerminal(run.ID, status, series)
+	}
+	return nil
 }
 
 func (s *PerformanceService) markNeedsAttention(ctx context.Context, id int64) {
@@ -767,13 +1032,15 @@ func (s *PerformanceService) pickExecutor(ctx context.Context) (model.ExecutorVi
 	return selected, nil
 }
 
-func (s *PerformanceService) submitPerfTask(ctx context.Context, executor model.ExecutorView, taskID string, payload map[string]any, callbackURL, callbackToken string) error {
+func (s *PerformanceService) submitPerfTask(ctx context.Context, executor model.ExecutorView, taskID string, payload map[string]any, callbackURL, eventURL, callbackToken string, sampleIntervalMs int) error {
 	body := map[string]any{
-		"taskId":        taskID,
-		"type":          "perf",
-		"payload":       payload,
-		"callbackUrl":   callbackURL,
-		"callbackToken": callbackToken,
+		"taskId":           taskID,
+		"type":             "perf",
+		"payload":          payload,
+		"callbackUrl":      callbackURL,
+		"eventUrl":         eventURL,
+		"callbackToken":    callbackToken,
+		"sampleIntervalMs": sampleIntervalMs,
 	}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
@@ -915,28 +1182,31 @@ func (s *PerformanceService) lookupSmoke(taskID string) (string, bool) {
 }
 
 func (s *PerformanceService) notifyRunFinished(ctx context.Context, run model.PerfTestRun, status string) {
-	if s.notifier == nil {
-		return
+	if s.notifier != nil {
+		if _, loaded := s.notifiedRuns.Load(run.ID); !loaded {
+			level, title, notificationType := "success", "性能测试执行完成", "perf.completed"
+			if status == model.PerfRunThresholdFailed {
+				level, title, notificationType = "warning", "性能测试未达标", "perf.threshold_failed"
+			} else if status == model.PerfRunExecutionFailed || status == model.PerfRunTimedOut || status == model.PerfRunCanceled {
+				level, title, notificationType = "error", "性能测试执行失败", "perf.failed"
+			}
+			if err := s.notifier.Create(ctx, model.NotificationCreate{
+				Username:   run.TriggeredBy,
+				Type:       notificationType,
+				Level:      level,
+				Title:      title,
+				Content:    fmt.Sprintf("性能测试方案 #%d 执行结束：%s", run.PlanID, status),
+				TargetType: "perf_run",
+				TargetID:   strconv.FormatInt(run.ID, 10),
+				TargetURL:  "#/性能测试/测试报告",
+			}); err == nil {
+				s.notifiedRuns.Store(run.ID, true)
+			}
+		}
 	}
-	if _, loaded := s.notifiedRuns.LoadOrStore(run.ID, true); loaded {
-		return
+	if status == model.PerfRunCompleted || status == model.PerfRunThresholdFailed {
+		s.notifyPerfDegradation(ctx, run.ID)
 	}
-	level, title, notificationType := "success", "性能测试执行完成", "perf.completed"
-	if status == model.PerfRunThresholdFailed {
-		level, title, notificationType = "warning", "性能测试未达标", "perf.threshold_failed"
-	} else if status == model.PerfRunExecutionFailed || status == model.PerfRunTimedOut || status == model.PerfRunCanceled {
-		level, title, notificationType = "error", "性能测试执行失败", "perf.failed"
-	}
-	_ = s.notifier.Create(ctx, model.NotificationCreate{
-		Username:   run.TriggeredBy,
-		Type:       notificationType,
-		Level:      level,
-		Title:      title,
-		Content:    fmt.Sprintf("性能测试方案 #%d 执行结束：%s", run.PlanID, status),
-		TargetType: "perf_run",
-		TargetID:   strconv.FormatInt(run.ID, 10),
-		TargetURL:  "#/性能测试/测试报告",
-	})
 }
 
 func (s *PerformanceService) normalizeRequest(ctx context.Context, req model.PerfTestPlanRequest) (model.PerfTestPlanRequest, error) {
@@ -977,7 +1247,7 @@ func (s *PerformanceService) normalizeRequest(ctx context.Context, req model.Per
 	if !allowed(req.ScenarioType, "baseline", "ramp", "peak", "stress", "soak", "mixed") {
 		return req, errors.New("场景类型无效")
 	}
-	if !allowed(req.Environment, "test", "staging", "production") {
+	if req.EnvironmentID == nil && !allowed(req.Environment, "test", "staging", "production") {
 		return req, errors.New("测试环境无效")
 	}
 	if !allowed(req.Priority, "P0", "P1", "P2", "P3") {
@@ -998,13 +1268,45 @@ func (s *PerformanceService) normalizeRequest(ctx context.Context, req model.Per
 	if len(req.LoadConfig) == 0 {
 		req.LoadConfig = json.RawMessage(`{}`)
 	}
+	if req.ScenarioType == "mixed" {
+		if err := normalizeMixedLoadConfig(&req.LoadConfig); err != nil {
+			return req, err
+		}
+	}
 	if err := validateLoadConfig(req.ScenarioType, req.LoadConfig); err != nil {
 		return req, err
+	}
+	if req.ScenarioType == "mixed" && req.EnvironmentID == nil {
+		if err := validateMixedTarget(req.TargetURL, req.LoadConfig); err != nil {
+			return req, err
+		}
+	}
+	if req.ScenarioType == "mixed" {
+		if err := validateMixedAbsoluteURLs(req.LoadConfig); err != nil {
+			return req, err
+		}
 	}
 	if err := normalizeThresholds(&req); err != nil {
 		return req, err
 	}
 	return req, nil
+}
+
+func validateMixedAbsoluteURLs(config json.RawMessage) error {
+	var value map[string]any
+	if err := json.Unmarshal(config, &value); err != nil {
+		return errors.New("混合场景负载配置无效")
+	}
+	items, _ := value["scenarios"].([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		text, _ := item["url"].(string)
+		parsed, err := url.Parse(strings.TrimSpace(text))
+		if err == nil && parsed.IsAbs() && !isAbsoluteHTTPURL(text) {
+			return errors.New("mixed scenario URL 只允许 HTTP(S) 地址")
+		}
+	}
+	return nil
 }
 
 func validateLoadConfig(scenarioType string, config json.RawMessage) error {
@@ -1017,22 +1319,74 @@ func validateLoadConfig(scenarioType string, config json.RawMessage) error {
 		if !hasPositiveNumber(cfg, "vus") || !hasNonEmptyString(cfg, "duration") {
 			return errors.New("该场景需要设置并发数和时长")
 		}
+		if !hasVUsWithinLimit(cfg, "vus") {
+			return errors.New("vus 不能超过 500")
+		}
 	case "ramp":
 		stages, ok := cfg["stages"].([]any)
 		if !ok || len(stages) == 0 {
 			return errors.New("梯度压力场景需要配置爬坡阶段")
 		}
+		for _, raw := range stages {
+			stage, ok := raw.(map[string]any)
+			if !ok || !hasStageTargetWithinLimit(stage, "target") {
+				return errors.New("梯度阶段并发不能超过 500")
+			}
+		}
 	case "peak":
 		if !hasPositiveNumber(cfg, "peakVus") || !hasNonEmptyString(cfg, "rampDuration") || !hasNonEmptyString(cfg, "holdDuration") {
 			return errors.New("峰值负载场景需要设置峰值并发、爬坡时长和保持时长")
+		}
+		if !hasVUsWithinLimit(cfg, "peakVus") {
+			return errors.New("peakVus 不能超过 500")
 		}
 	case "stress":
 		if !hasPositiveNumber(cfg, "startVus") || !hasPositiveNumber(cfg, "stepVus") || !hasNonEmptyString(cfg, "stepDuration") || !hasPositiveNumber(cfg, "maxVus") {
 			return errors.New("极限压力场景需要设置起始并发、步长、每阶时长和最大并发")
 		}
+		if !hasVUsWithinLimit(cfg, "startVus") || !hasVUsWithinLimit(cfg, "maxVus") {
+			return errors.New("stress 并发不能超过 500")
+		}
 	case "mixed":
-		// P0 不实现 mixed 执行，仅允许持久化配置。
-		return nil
+		if !hasPositiveNumber(cfg, "vus") || !hasPositiveDuration(cfg, "duration") || !hasPositiveDuration(cfg, "thinkTime") {
+			return errors.New("混合场景需要设置正数 vus、duration 和 thinkTime")
+		}
+		if !hasVUsWithinLimit(cfg, "vus") {
+			return errors.New("vus 不能超过 500")
+		}
+		scenarios, ok := cfg["scenarios"].([]any)
+		if !ok || len(scenarios) < 1 || len(scenarios) > 50 {
+			return errors.New("混合场景需要配置 1~50 个接口场景")
+		}
+		seen := map[string]bool{}
+		totalWeight := 0.0
+		for _, raw := range scenarios {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return errors.New("混合场景接口配置无效")
+			}
+			name, _ := item["name"].(string)
+			name = strings.TrimSpace(name)
+			url, _ := item["url"].(string)
+			method, _ := item["method"].(string)
+			if rawHeaders, exists := item["headers"]; exists && rawHeaders != nil {
+				if _, ok := rawHeaders.(map[string]any); !ok {
+					return errors.New("混合场景 headers 必须是对象")
+				}
+			}
+			if rawBody, exists := item["body"]; exists && !isAllowedMixedBody(rawBody) {
+				return errors.New("混合场景 body 类型无效")
+			}
+			weight, ok := numberValue(item["weight"])
+			if name == "" || seen[name] || !ok || weight <= 0 || strings.TrimSpace(url) == "" || !allowed(strings.ToUpper(method), "GET", "POST", "PUT", "DELETE", "PATCH") {
+				return errors.New("混合场景名称、权重和 URL 必须有效且名称唯一")
+			}
+			seen[name] = true
+			totalWeight += weight
+		}
+		if math.Abs(totalWeight-1) > 1e-6 {
+			return errors.New("混合场景权重总和必须为 1")
+		}
 	}
 	return nil
 }
@@ -1043,41 +1397,129 @@ func normalizeThresholds(req *model.PerfTestPlanRequest) error {
 		item.Metric = strings.TrimSpace(item.Metric)
 		item.Aggregation = strings.TrimSpace(item.Aggregation)
 		item.Operator = strings.TrimSpace(item.Operator)
+		item.DelayAbortEval = strings.TrimSpace(item.DelayAbortEval)
 		if item.Metric == "" {
 			return errors.New("阈值指标不能为空")
 		}
 		if item.Aggregation == "" {
 			return errors.New("阈值聚合方式不能为空")
 		}
-		if !allowed(item.Operator, "<", "<=", ">", ">=", "==", "!=") {
+		if !allowed(item.Operator, "<", "<=", ">", ">=") {
 			return errors.New("阈值运算符无效")
 		}
-		// P0 强制规范化 abortOnFail 为 false（SPEC §3.1）。
-		item.AbortOnFail = false
+		if !allowedThreshold(item.Metric, item.Aggregation) {
+			return errors.New("阈值指标或聚合方式无效")
+		}
+		if !item.AbortOnFail {
+			item.DelayAbortEval = ""
+		} else if item.DelayAbortEval != "" {
+			if _, err := perfParseDuration(item.DelayAbortEval); err != nil {
+				return errors.New("delayAbortEval 必须是合法 k6 duration")
+			}
+		}
 	}
 	return nil
 }
 
+func normalizeMixedLoadConfig(raw *json.RawMessage) error {
+	var cfg map[string]any
+	if err := json.Unmarshal(*raw, &cfg); err != nil {
+		return errors.New("负载配置必须是 JSON 对象")
+	}
+	// P1 不实现随机参数/冷热流量扩展，明确关闭而不是静默执行。
+	cfg["randomizeParams"] = false
+	cfg["coldHotMix"] = false
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return errors.New("混合场景配置无效")
+	}
+	*raw = encoded
+	return nil
+}
+
+func hasPositiveDuration(cfg map[string]any, key string) bool {
+	value, ok := cfg[key].(string)
+	if !ok {
+		return false
+	}
+	parsed, err := perfParseDuration(value)
+	return err == nil && parsed > 0
+}
+
+func numberValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case json.Number:
+		result, err := typed.Float64()
+		return result, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func isAllowedMixedBody(value any) bool {
+	switch value.(type) {
+	case nil, string, bool, float64, []any, map[string]any:
+		return true
+	default:
+		return false
+	}
+}
+
+func allowedThreshold(metric, aggregation string) bool {
+	allowedAggregations := map[string]map[string]bool{
+		"http_req_duration":        {"avg": true, "min": true, "max": true, "p(50)": true, "p(90)": true, "p(95)": true, "p(99)": true},
+		"http_req_failed":          {"rate": true},
+		"http_reqs":                {"count": true, "rate": true},
+		"http_req_waiting":         {"avg": true, "p(90)": true, "p(95)": true, "p(99)": true},
+		"http_req_blocked":         {"avg": true, "p(90)": true, "p(95)": true},
+		"http_req_connecting":      {"avg": true, "p(90)": true, "p(95)": true},
+		"http_req_tls_handshaking": {"avg": true, "p(90)": true, "p(95)": true},
+		"http_req_receiving":       {"avg": true, "p(90)": true, "p(95)": true},
+		"http_req_sending":         {"avg": true, "p(90)": true, "p(95)": true},
+		"iterations":               {"count": true, "rate": true},
+		"iteration_duration":       {"avg": true, "p(90)": true, "p(95)": true, "p(99)": true},
+	}
+	return allowedAggregations[metric][aggregation]
+}
+
 func buildPlanSnapshotAndHash(plan model.PerfTestPlan) (json.RawMessage, string, error) {
-	headers, err := canonicalRaw(plan.Headers)
+	return buildPlanSnapshotAndHashForRun(plan, plan)
+}
+
+func buildPlanSnapshotAndHashForRun(original, resolved model.PerfTestPlan) (json.RawMessage, string, error) {
+	headers, err := canonicalRaw(original.Headers)
 	if err != nil {
 		return nil, "", err
 	}
-	loadConfig, err := canonicalRaw(plan.LoadConfig)
+	originalLoadConfig, err := canonicalRaw(original.LoadConfig)
+	if err != nil {
+		return nil, "", err
+	}
+	resolvedLoadConfig, err := canonicalRaw(resolved.LoadConfig)
 	if err != nil {
 		return nil, "", err
 	}
 	snapshot := map[string]any{
-		"planId":       plan.ID,
-		"name":         plan.Name,
-		"targetUrl":    plan.TargetURL,
-		"method":       plan.Method,
-		"headers":      headers,
-		"body":         plan.Body,
-		"scenarioType": plan.ScenarioType,
-		"loadConfig":   loadConfig,
-		"environment":  plan.Environment,
-		"thresholds":   plan.Thresholds,
+		"planId":               original.ID,
+		"name":                 original.Name,
+		"targetUrl":            original.TargetURL,
+		"method":               original.Method,
+		"headers":              headers,
+		"body":                 original.Body,
+		"scenarioType":         original.ScenarioType,
+		"loadConfig":           originalLoadConfig,
+		"environment":          resolved.Environment,
+		"environmentId":        resolved.EnvironmentID,
+		"environmentName":      resolved.EnvironmentName,
+		"environmentBaseUrl":   resolved.EnvironmentBaseURL,
+		"environmentDeployEnv": resolved.EnvironmentDeployEnv,
+		"resolvedTargetUrl":    resolved.TargetURL,
+		"resolvedLoadConfig":   resolvedLoadConfig,
+		"thresholds":           original.Thresholds,
 	}
 	canonical, err := json.Marshal(snapshot) // map key 自动排序
 	if err != nil {
@@ -1100,17 +1542,28 @@ func buildPerfPayload(run model.PerfTestRun) (map[string]any, error) {
 	if value, ok := snapshot["scenarioType"].(string); ok && value != "" {
 		scenarioType = value
 	}
+	target := snapshot["resolvedTargetUrl"]
+	if target == nil {
+		target = snapshot["targetUrl"]
+	}
+	loadConfig := snapshot["resolvedLoadConfig"]
+	if loadConfig == nil {
+		loadConfig = snapshot["loadConfig"]
+	}
 	return map[string]any{
-		"runId":         run.ID,
-		"planId":        run.PlanID,
-		"environment":   run.Environment,
-		"scenario_type": scenarioType,
-		"target":        snapshot["targetUrl"],
-		"method":        snapshot["method"],
-		"headers":       snapshot["headers"],
-		"body":          snapshot["body"],
-		"load_config":   snapshot["loadConfig"],
-		"thresholds":    snapshot["thresholds"],
+		"runId":                run.ID,
+		"planId":               run.PlanID,
+		"environment":          run.Environment,
+		"scenario_type":        scenarioType,
+		"target":               target,
+		"method":               snapshot["method"],
+		"headers":              snapshot["headers"],
+		"body":                 snapshot["body"],
+		"load_config":          loadConfig,
+		"environment_id":       snapshot["environmentId"],
+		"environment_name":     snapshot["environmentName"],
+		"environment_base_url": snapshot["environmentBaseUrl"],
+		"thresholds":           snapshot["thresholds"],
 	}, nil
 }
 
@@ -1133,18 +1586,38 @@ func computeExpectedFinishAt(plan model.PerfTestPlan, requestedAt time.Time) tim
 }
 
 func (s *PerformanceService) expectedFinishAtForRun(run model.PerfTestRun, startedAt time.Time) time.Time {
+	return startedAt.Add(perfDurationForRun(run) + perfTimeoutBuffer)
+}
+
+func perfDurationForRun(run model.PerfTestRun) time.Duration {
 	plan := model.PerfTestPlan{ScenarioType: run.ScenarioType}
 	var snapshot struct {
-		ScenarioType string          `json:"scenarioType"`
-		LoadConfig   json.RawMessage `json:"loadConfig"`
+		ScenarioType       string          `json:"scenarioType"`
+		LoadConfig         json.RawMessage `json:"loadConfig"`
+		ResolvedLoadConfig json.RawMessage `json:"resolvedLoadConfig"`
 	}
 	if json.Unmarshal(run.PlanSnapshot, &snapshot) == nil {
 		if snapshot.ScenarioType != "" {
 			plan.ScenarioType = snapshot.ScenarioType
 		}
-		plan.LoadConfig = snapshot.LoadConfig
+		plan.LoadConfig = snapshot.ResolvedLoadConfig
+		if len(plan.LoadConfig) == 0 {
+			plan.LoadConfig = snapshot.LoadConfig
+		}
 	}
-	return computeExpectedFinishAt(plan, startedAt)
+	return perfTotalDuration(plan.ScenarioType, plan.LoadConfig)
+}
+
+func perfSampleIntervalMs(run model.PerfTestRun) int {
+	durationMs := float64(perfDurationForRun(run).Milliseconds())
+	interval := int(math.Ceil(durationMs/3000.0)) * 1000
+	if interval < 1000 {
+		return 1000
+	}
+	if interval > 5000 {
+		return 5000
+	}
+	return interval
 }
 
 // perfTotalDuration 解析 load_config 计算压测总时长，无法解析时用保守默认。
@@ -1160,8 +1633,10 @@ func perfTotalDuration(scenarioType string, config json.RawMessage) time.Duratio
 				return parsed
 			}
 		}
-	case "ramp", "stress":
+	case "ramp":
 		return sumStagesDuration(cfg)
+	case "stress":
+		return stressDuration(cfg)
 	case "peak":
 		if stages, ok := cfg["stages"].([]any); ok && len(stages) > 0 {
 			if total := sumStageList(stages); total > 0 {
@@ -1170,6 +1645,11 @@ func perfTotalDuration(scenarioType string, config json.RawMessage) time.Duratio
 		}
 		return sumDurationFields(cfg, "rampDuration", "holdDuration", "rampDownDuration")
 	case "mixed":
+		if value, ok := cfg["duration"].(string); ok {
+			if parsed, err := perfParseDuration(value); err == nil {
+				return parsed
+			}
+		}
 		return perfDefaultDuration
 	}
 	return perfDefaultDuration
@@ -1181,6 +1661,22 @@ func sumStagesDuration(cfg map[string]any) time.Duration {
 		return perfDefaultDuration
 	}
 	return sumStageList(stages)
+}
+
+func stressDuration(cfg map[string]any) time.Duration {
+	start, startOK := numberValue(cfg["startVus"])
+	step, stepOK := numberValue(cfg["stepVus"])
+	max, maxOK := numberValue(cfg["maxVus"])
+	duration, durationOK := cfg["stepDuration"].(string)
+	if !startOK || !stepOK || !maxOK || !durationOK || step <= 0 || max < start {
+		return perfDefaultDuration
+	}
+	count := 1 + int(math.Ceil((max-start)/step))
+	parsed, err := perfParseDuration(duration)
+	if err != nil || parsed <= 0 {
+		return perfDefaultDuration
+	}
+	return time.Duration(count) * parsed
 }
 
 func sumStageList(stages []any) time.Duration {
@@ -1223,7 +1719,7 @@ func sumDurationFields(cfg map[string]any, keys ...string) time.Duration {
 
 func perfParseDuration(value string) (time.Duration, error) {
 	value = strings.TrimSpace(value)
-	if value == "" {
+	if value == "" || !perfDurationPattern.MatchString(value) {
 		return 0, errors.New("duration 为空")
 	}
 	return time.ParseDuration(value)
@@ -1325,6 +1821,45 @@ func hasPositiveNumber(cfg map[string]any, key string) bool {
 	return false
 }
 
+func hasVUsWithinLimit(cfg map[string]any, key string) bool {
+	value, ok := numberValue(cfg[key])
+	return ok && value > 0 && value <= perfMaxVUs && math.Trunc(value) == value
+}
+
+func hasStageTargetWithinLimit(cfg map[string]any, key string) bool {
+	value, ok := numberValue(cfg[key])
+	return ok && value >= 0 && value <= perfMaxVUs && math.Trunc(value) == value
+}
+
+func validateMixedTarget(target string, config json.RawMessage) error {
+	var cfg map[string]any
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return errors.New("负载配置必须是 JSON 对象")
+	}
+	scenarios, _ := cfg["scenarios"].([]any)
+	needsTarget := false
+	for _, raw := range scenarios {
+		item, _ := raw.(map[string]any)
+		value, _ := item["url"].(string)
+		if parsed, parseErr := url.Parse(strings.TrimSpace(value)); parseErr == nil && parsed.IsAbs() && !isAbsoluteHTTPURL(value) {
+			return errors.New("mixed scenario URL 只允许 HTTP(S) 地址")
+		}
+		if !isAbsoluteHTTPURL(value) {
+			needsTarget = true
+			break
+		}
+	}
+	if needsTarget && !isAbsoluteHTTPURL(target) {
+		return errors.New("mixed 含相对 URL 时必须提供合法 HTTP(S) target")
+	}
+	return nil
+}
+
+func isAbsoluteHTTPURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
+}
+
 func hasNonEmptyString(cfg map[string]any, key string) bool {
 	value, ok := cfg[key]
 	if !ok {
@@ -1336,7 +1871,7 @@ func hasNonEmptyString(cfg map[string]any, key string) bool {
 
 func generateCallbackToken() (string, error) {
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := perfRandRead(raw); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
@@ -1349,7 +1884,7 @@ func sha256Hex(value string) string {
 
 func sanitizePerfText(value string) string {
 	text := perfSensitiveQueryPattern.ReplaceAllString(value, `${1}***`)
-	return perfSensitiveTextPattern.ReplaceAllString(text, `${1}${2}***`)
+	return perfSensitiveTextPattern.ReplaceAllString(text, `${1}***`)
 }
 
 func sanitizePerfJSON(raw json.RawMessage) json.RawMessage {
@@ -1365,6 +1900,41 @@ func sanitizePerfJSON(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return encoded
+}
+
+func normalizePerfSeries(raw json.RawMessage) json.RawMessage {
+	series := model.PerfSeries{Version: 1, Points: []model.PerfSampleEvent{}, StatusCodes: map[string]int{}, ErrorTopN: []model.PerfErrorTop{}, Thresholds: []model.PerfSampleThreshold{}}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &series)
+	}
+	if series.Version == 0 {
+		series.Version = 1
+	}
+	if len(series.Points) > 3000 {
+		series.Points = downsamplePerfPoints(series.Points, 3000)
+	}
+	if series.StatusCodes == nil {
+		series.StatusCodes = map[string]int{}
+	}
+	if series.ErrorTopN == nil {
+		series.ErrorTopN = []model.PerfErrorTop{}
+	}
+	if series.Thresholds == nil {
+		series.Thresholds = []model.PerfSampleThreshold{}
+	}
+	encoded, err := json.Marshal(series)
+	if err != nil {
+		return json.RawMessage(`{"version":1,"points":[],"statusCodes":{},"errorTopN":[],"thresholds":[]}`)
+	}
+	return sanitizePerfJSON(encoded)
+}
+
+func forcePerfSeriesPartial(raw json.RawMessage) json.RawMessage {
+	var series model.PerfSeries
+	_ = json.Unmarshal(normalizePerfSeries(raw), &series)
+	series.Partial = true
+	encoded, _ := json.Marshal(series)
+	return sanitizePerfJSON(encoded)
 }
 
 func sanitizePerfValue(value any) any {
@@ -1387,7 +1957,17 @@ func sanitizePerfValue(value any) any {
 		}
 		return result
 	case string:
-		return sanitizePerfText(typed)
+		text := sanitizePerfText(typed)
+		trimmed := strings.TrimSpace(text)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			var nested any
+			if json.Unmarshal([]byte(trimmed), &nested) == nil {
+				if encoded, err := json.Marshal(sanitizePerfValue(nested)); err == nil {
+					return string(encoded)
+				}
+			}
+		}
+		return text
 	default:
 		return value
 	}

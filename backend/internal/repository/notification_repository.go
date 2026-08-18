@@ -25,8 +25,13 @@ func (r *NotificationRepository) Create(ctx context.Context, req model.Notificat
 		 when $2 like 'executor.%' then case when coalesce(p.use_system_defaults,true) then coalesce((s.value->>'executorOffline')::boolean,true) else p.executor_alert end
 		 when $2='system' then true
 		 else true end)
+		on conflict (user_id,type,target_type,target_id) where type='perf.degradation' do nothing
 		returning id,user_id,type,level,title,content,target_type,target_id,target_url,is_read,read_at,created_at`, req.Username, req.Type, req.Level, req.Title, req.Content, req.TargetType, req.TargetID, req.TargetURL)
-	return scanNotification(row)
+	notification, err := scanNotification(row)
+	if err == sql.ErrNoRows && req.Type == "perf.degradation" {
+		return model.Notification{}, nil
+	}
+	return notification, err
 }
 
 func (r *NotificationRepository) CreateForAll(ctx context.Context, req model.NotificationCreate) error {

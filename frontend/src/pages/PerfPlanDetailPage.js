@@ -11,6 +11,7 @@ import {
   environmentLabel,
   environmentTone,
   maskSensitiveUrl,
+  environmentTargetPreview,
   normalizeLoadConfig,
   normalizeScenarioType,
   normalizeThresholds,
@@ -87,7 +88,8 @@ export function PerfPlanDetailPage({ planId }) {
         <div className="panel-header"><strong>基本信息</strong></div>
         <div className="detail-grid">
           <span>项目/产品：{plan.productName || "-"}</span>
-          <span>测试环境：<span className={`status-pill ${environmentTone(plan.environment)}`}>{environmentLabel(plan.environment)}</span></span>
+          <span>测试环境：<span className={`status-pill ${environmentTone(plan.environment)}`}>{plan.environmentName || environmentLabel(plan.environment)}</span></span>
+          {plan.environmentBaseUrl ? <span>Base URL：<code className="perf-url">{maskSensitiveUrl(plan.environmentBaseUrl)}</code></span> : null}
           <span>场景类型：{scenarioLabel(scenarioType)}</span>
           <span>优先级：<span className={`status-pill ${priorityTone(plan.priority)}`}>{plan.priority}</span></span>
           <span>状态：<span className={`status-pill ${planStatusTone(plan.status)}`}>{planStatusLabel(plan.status)}</span></span>
@@ -102,7 +104,7 @@ export function PerfPlanDetailPage({ planId }) {
       <section className="resource-panel">
         <div className="panel-header"><strong>请求配置</strong></div>
         <div className="detail-grid">
-          <span>目标接口：<code className="perf-url">{maskSensitiveUrl(plan.targetUrl)}</code></span>
+          <span>目标接口：<code className="perf-url">{maskSensitiveUrl(environmentTargetPreview({ baseUrl: plan.environmentBaseUrl }, plan.targetUrl))}</code></span>
           <span>请求方法：{plan.method || "-"}</span>
         </div>
         <div className="detail-block">
