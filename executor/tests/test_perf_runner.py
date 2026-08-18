@@ -19,6 +19,9 @@ from app.runners.perf_runner import (
     total_duration_seconds,
     NdjsonSampler,
     _downsample_series_points,
+    _normalize_smoke_response,
+    _read_smoke_response_marker,
+    _SMOKE_BODY_LIMIT,
 )
 from app.services.callback_client import notify_callback
 from app.services.task_manager import TaskManager
@@ -42,6 +45,211 @@ def test_render_options_smoke_is_single_iteration():
     assert '"iterations": 1' in script
     assert '"executor": "shared-iterations"' in script
     assert '"duration": "1m"' not in script
+
+
+def test_smoke_script_captures_response_to_dedicated_file_without_using_summary_or_ndjson():
+    script, _ = generate_script({"mode": "smoke", "target": "http://127.0.0.1:8080/api/health"})
+    assert "const response = http.request(method, target, body, { headers: headers });" in script
+    assert "captureSmokeResponse(response);" in script
+    assert "__SYNAPSE_SMOKE_RESPONSE__" in script
+    assert "const maxSmokeBodyBytes = 262144;" in script
+    assert "function truncateUtf8(value, maxBytes)" in script
+    assert "const isBinary = binaryContentType(contentType) || responseBody.indexOf('\\u0000') >= 0;" in script
+    assert "const safeBody = isBinary ? '' : (truncated ? truncateUtf8(responseBody, maxSmokeBodyBytes) : responseBody);" in script
+    assert "body: safeBody" in script
+    assert "truncated: truncated" in script
+    assert "'smoke-response.json': JSON.stringify(smokeResponse || {})" in script
+    assert "'report.json': JSON.stringify(data)" in script
+    assert "--out" not in script
+
+
+def test_non_smoke_script_does_not_capture_response_or_add_response_file():
+    script, _ = generate_script({"scenario_type": "baseline", "load_config": {"vus": 1, "duration": "1s"}, "target": "http://example.com"})
+    assert "smoke-response.json" not in script
+    assert "const response = http.request" not in script
+    assert "http.request(method, target, body, { headers: headers });" in script
+
+
+def test_normalize_smoke_response_preserves_text_and_masks_sensitive_headers():
+    response = _normalize_smoke_response({
+        "statusCode": 404,
+        "headers": {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Set-Cookie": "session=secret",
+            "authorization": "Bearer secret",
+            "Proxy-Authorization": "Basic secret",
+            "X-Api-Key": "secret",
+            "X-Request-Token": "secret",
+            "X-Trace": "trace-1",
+        },
+        "body": "not found",
+        "durationMs": 12.5,
+    })
+    assert response is not None
+    assert response["statusCode"] == 404
+    assert response["body"] == "not found"
+    assert response["bodySize"] == len("not found".encode("utf-8"))
+    assert response["truncated"] is False
+    assert response["isBinary"] is False
+    assert response["contentType"] == "text/plain; charset=utf-8"
+    assert response["headers"]["Set-Cookie"] == "******"
+    assert response["headers"]["authorization"] == "******"
+    assert response["headers"]["Proxy-Authorization"] == "******"
+    assert response["headers"]["X-Api-Key"] == "******"
+    assert response["headers"]["X-Request-Token"] == "******"
+    assert response["headers"]["X-Trace"] == "trace-1"
+
+
+def test_normalize_smoke_response_truncates_utf8_body_and_keeps_original_size():
+    body = "a" * _SMOKE_BODY_LIMIT + "汉"
+    response = _normalize_smoke_response({"statusCode": 200, "headers": {"Content-Type": "text/plain"}, "body": body})
+    assert response is not None
+    assert response["truncated"] is True
+    assert response["bodySize"] == len(body.encode("utf-8"))
+    assert len(response["body"].encode("utf-8")) <= _SMOKE_BODY_LIMIT
+    assert response["body"].startswith("a" * 100)
+
+
+def test_normalize_smoke_response_does_not_return_binary_body():
+    response = _normalize_smoke_response({
+        "statusCode": 200,
+        "headers": {"Content-Type": "image/png"},
+        "body": "\x00\x89PNG",
+        "bodySize": 123,
+    })
+    assert response is not None
+    assert response["body"] == ""
+    assert response["isBinary"] is True
+    assert response["bodySize"] == 123
+    assert response["contentType"] == "image/png"
+
+
+def test_attach_smoke_response_adds_top_level_fields_without_overwriting_metrics(tmp_path):
+    result = TaskResult(exitCode=0, output=json.dumps({"metrics": {"total_requests": 1}, "summary": {"metrics": {}}}))
+    response_path = tmp_path / "smoke-response.json"
+    response_path.write_text(json.dumps({"statusCode": 500, "headers": {"Content-Type": "text/plain"}, "body": "error"}), encoding="utf-8")
+    attached = PerfRunner._attach_smoke_response(result, response_path)
+    output = json.loads(attached.output)
+    assert output["metrics"] == {"total_requests": 1}
+    assert output["statusCode"] == 500
+    assert output["body"] == "error"
+    assert output["truncated"] is False
+
+
+def test_smoke_response_marker_is_parseable_when_summary_file_is_unavailable(tmp_path):
+    log_path = tmp_path / "k6.log"
+    log_path.write_text('INFO regular line\ntime="2026" level=info msg="__SYNAPSE_SMOKE_RESPONSE__{"statusCode":418,"body":"teapot"}" source=console\n', encoding="utf-8")
+    assert _read_smoke_response_marker(log_path) == {"statusCode": 418, "body": "teapot"}
+    result = TaskResult(exitCode=0, output=json.dumps({"metrics": {}}))
+    PerfRunner._attach_smoke_response(result, tmp_path / "missing.json", log_path)
+    assert json.loads(result.output)["statusCode"] == 418
+
+
+def test_smoke_response_marker_parses_k6_escaped_message_wrapper(tmp_path):
+    log_path = tmp_path / "k6-escaped.log"
+    message = "__SYNAPSE_SMOKE_RESPONSE__" + json.dumps({"statusCode": 418, "body": "teapot"}, separators=(",", ":"))
+    log_path.write_text('time="2026" level=info msg=' + json.dumps(message) + ' source=console\n', encoding="utf-8")
+    assert _read_smoke_response_marker(log_path) == {"statusCode": 418, "body": "teapot"}
+
+
+def test_perf_runner_smoke_attaches_response_and_cleans_temporary_workdir(monkeypatch, tmp_path):
+    workdirs = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return None
+
+        def poll(self):
+            return self.returncode
+
+    class FakeSampler:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def series(self, partial):
+            return {"version": 1, "points": [], "statusCodes": {}, "errorTopN": [], "thresholds": [], "partial": partial}
+
+    def fake_popen(_command, cwd, **_kwargs):
+        workdir = Path(cwd)
+        workdirs.append(workdir)
+        (workdir / "report.json").write_text(json.dumps({
+            "metrics": {
+                "http_reqs": {"values": {"count": 1, "rate": 1}},
+                "http_req_duration": {"values": {"avg": 4, "p(95)": 5, "p(99)": 6}},
+                "http_req_failed": {"values": {"rate": 0}},
+            },
+        }), encoding="utf-8")
+        (workdir / "smoke-response.json").write_text(json.dumps({
+            "statusCode": 503,
+            "headers": {"Content-Type": "text/plain", "Set-Cookie": "secret"},
+            "body": "temporarily unavailable",
+            "durationMs": 9,
+        }), encoding="utf-8")
+        return FakeProcess()
+
+    monkeypatch.setattr("app.runners.perf_runner.shutil.which", lambda name: "k6.exe")
+    monkeypatch.setattr("app.runners.perf_runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.runners.perf_runner.NdjsonSampler", FakeSampler)
+    monkeypatch.setattr(PerfRunner, "_k6_version", staticmethod(lambda _path: "k6-test"))
+    result = PerfRunner().run(TaskCreate(taskId="smoke-1", type=TaskType.perf, payload={"mode": "smoke", "target": "http://example.test"}))
+    output = json.loads(result.output)
+    assert result.exit_code == 0
+    assert output["statusCode"] == 503
+    assert output["body"] == "temporarily unavailable"
+    assert output["headers"]["Set-Cookie"] == "******"
+    assert not workdirs[0].exists()
+
+
+def test_perf_runner_smoke_cancel_cleans_temporary_workdir(monkeypatch):
+    workdirs = []
+
+    class FakeProcess:
+        returncode = None
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _signal):
+            pass
+
+    class FakeSampler:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def snapshot(self):
+            return {}
+
+        def series(self, partial):
+            return {"version": 1, "points": [], "statusCodes": {}, "errorTopN": [], "thresholds": [], "partial": partial}
+
+    def fake_popen(_command, cwd, **_kwargs):
+        workdirs.append(Path(cwd))
+        return FakeProcess()
+
+    monkeypatch.setattr("app.runners.perf_runner.shutil.which", lambda name: "k6.exe")
+    monkeypatch.setattr("app.runners.perf_runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.runners.perf_runner.NdjsonSampler", FakeSampler)
+    monkeypatch.setattr(PerfRunner, "_k6_version", staticmethod(lambda _path: "k6-test"))
+    result = PerfRunner().run(TaskCreate(taskId="smoke-cancel", type=TaskType.perf, payload={"mode": "smoke", "target": "http://example.test"}), canceled=lambda: True)
+    assert json.loads(result.output)["terminal_status"] == "canceled"
+    assert not workdirs[0].exists()
 
 
 def test_render_options_ramp_uses_ramping_vus():

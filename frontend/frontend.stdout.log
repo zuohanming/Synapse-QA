@@ -1,0 +1,21 @@
+
+> synapse-qa-frontend@1.0.0 dev
+> vite --host 127.0.0.1 --port 4173 --host 127.0.0.1 --port 4173
+
+
+  VITE v6.4.3  ready in 487 ms
+
+  ➜  Local:   http://127.0.0.1:4173/
+  ➜  press h + enter to show help
+17:21:03 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:21:03 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:21:27 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:23:16 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:23:45 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:25:00 [vite] (client) hmr update /src/styles/theme-blue.css
+17:31:07 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+17:31:07 [vite] (client) page reload src/components/PerfInterfacePicker.js
+17:32:11 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+18:02:13 [vite] (client) page reload src/pages/PerfPlanEditPage.js
+18:02:27 [vite] (client) hmr update /src/styles/theme-blue.css
+18:02:53 [vite] (client) page reload src/pages/PerfPlanEditPage.js

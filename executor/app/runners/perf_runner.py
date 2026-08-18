@@ -40,6 +40,12 @@ _SECRET_PATTERN = re.compile(r"\{\{\s*secret\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SENSITIVE_KEY_PATTERN = re.compile(r"(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key)")
 _SENSITIVE_TEXT_PATTERN = re.compile(r"(?i)([\"']?(?:authorization|cookie|password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)[^\"'\s,;}]+")
 _SENSITIVE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:authorization|cookie|password|passwd|token|secret|api[_-]?key)=)[^&#\s]+")
+_SMOKE_RESPONSE_FILE = "smoke-response.json"
+_SMOKE_RESPONSE_MARKER = "__SYNAPSE_SMOKE_RESPONSE__"
+_SMOKE_BODY_LIMIT = 256 * 1024
+_BINARY_CONTENT_TYPE_PATTERN = re.compile(
+    r"(?i)(?:application/(?:octet-stream|pdf|zip|gzip|x-7z-compressed|x-rar-compressed)|image/|audio/|video/|font/)"
+)
 
 
 def parse_duration(value: str) -> float:
@@ -385,11 +391,63 @@ def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
             "}\n"
         )
         imports = "import http from 'k6/http';\nimport { sleep } from 'k6';\n"
+    elif scenario_type == "smoke":
+        if not target:
+            raise ValueError("perf 任务必须提供 payload.target")
+        flow = (
+            "let smokeResponse = null;\n"
+            "function responseHeader(headers, name) {\n"
+            "  for (const key in (headers || {})) { if (String(key).toLowerCase() === name) return headers[key]; }\n"
+            "  return '';\n"
+            "}\n"
+            "function sensitiveResponseHeader(name) {\n"
+            "  const normalized = String(name || '').toLowerCase().replace(/_/g, '-');\n"
+            "  return ['set-cookie', 'cookie', 'authorization', 'proxy-authorization', 'x-api-key'].indexOf(normalized) >= 0 || /token|secret|password|api-key/.test(normalized);\n"
+            "}\n"
+            "function utf8ByteLength(value) {\n"
+            "  try { return encodeURIComponent(value).replace(/%[0-9a-f]{2}/gi, 'x').length; } catch (_) { return String(value).length * 3; }\n"
+            "}\n"
+            f"const maxSmokeBodyBytes = {_SMOKE_BODY_LIMIT};\n"
+            "function truncateUtf8(value, maxBytes) {\n"
+            "  let result = '';\n"
+            "  let size = 0;\n"
+            "  for (const character of Array.from(value)) {\n"
+            "    const characterSize = utf8ByteLength(character);\n"
+            "    if (size + characterSize > maxBytes) break;\n"
+            "    result += character;\n"
+            "    size += characterSize;\n"
+            "  }\n"
+            "  return result;\n"
+            "}\n"
+            "function binaryContentType(value) {\n"
+            "  return /(?:application\\/(?:octet-stream|pdf|zip|gzip|x-7z-compressed|x-rar-compressed)|image\\/|audio\\/|video\\/|font\\/)/i.test(String(value || ''));\n"
+            "}\n"
+            "function captureSmokeResponse(response) {\n"
+            "  const responseBody = response.body == null ? '' : String(response.body);\n"
+            "  const contentType = String(responseHeader(response.headers, 'content-type') || '');\n"
+            "  const rawBodySize = utf8ByteLength(responseBody);\n"
+            "  const isBinary = binaryContentType(contentType) || responseBody.indexOf('\\u0000') >= 0;\n"
+            "  const truncated = !isBinary && rawBodySize > maxSmokeBodyBytes;\n"
+            "  const safeBody = isBinary ? '' : (truncated ? truncateUtf8(responseBody, maxSmokeBodyBytes) : responseBody);\n"
+            "  const responseHeaders = {};\n"
+            "  for (const key in (response.headers || {})) responseHeaders[key] = sensitiveResponseHeader(key) ? '******' : response.headers[key];\n"
+            "  smokeResponse = { statusCode: Number(response.status), headers: responseHeaders, body: safeBody, durationMs: Number((response.timings || {}).duration || 0), truncated: truncated, bodySize: rawBodySize, isBinary: isBinary, contentType: contentType };\n"
+            f"  console.log({json.dumps(_SMOKE_RESPONSE_MARKER)} + JSON.stringify(smokeResponse));\n"
+            "}\n"
+            "export default function () {\n"
+            "  const response = http.request(method, target, body, { headers: headers });\n"
+            "  captureSmokeResponse(response);\n"
+            "}\n"
+        )
+        imports = "import http from 'k6/http';\n"
     else:
         if not target:
             raise ValueError("perf 任务必须提供 payload.target")
         flow = "export default function () {\n  http.request(method, target, body, { headers: headers });\n}\n"
         imports = "import http from 'k6/http';\n"
+    summary_files = "    'report.json': JSON.stringify(data),\n"
+    if scenario_type == "smoke":
+        summary_files += f"    '{_SMOKE_RESPONSE_FILE}': JSON.stringify(smokeResponse || {{}}),\n"
     script = (
         "// 由 Synapse QA 执行器生成，generator_version=" + GENERATOR_VERSION + "\n"
         + imports
@@ -405,7 +463,7 @@ def generate_script(payload: dict) -> tuple[str, dict[str, str]]:
         + "\n"
         + "export function handleSummary(data) {\n"
         + "  return {\n"
-        + "    'report.json': JSON.stringify(data),\n"
+        + summary_files
         + "  };\n"
         + "}\n"
     )
@@ -879,6 +937,8 @@ class PerfRunner(Runner):
                 payload.get("thresholds") or [],
                 task.sample_interval_ms,
             )
+            if scenario_type == "smoke":
+                self._attach_smoke_response(result, workdir_path / _SMOKE_RESPONSE_FILE, workdir_path / "k6.log")
         return self._attach_runtime_metadata(result, script_hash, k6_version)
 
     def _run_k6(
@@ -1148,11 +1208,33 @@ class PerfRunner(Runner):
             return None
 
     @staticmethod
+    def _attach_smoke_response(result: TaskResult, response_path: Path, log_path: Path | None = None) -> TaskResult:
+        try:
+            response = json.loads(response_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            response = None
+        if _normalize_smoke_response(response) is None and log_path is not None:
+            response = _read_smoke_response_marker(log_path)
+        normalized = _normalize_smoke_response(response)
+        if normalized is None:
+            return result
+        try:
+            output = json.loads(result.output or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return result
+        if not isinstance(output, dict):
+            return result
+        output.update(normalized)
+        result.output = json.dumps(output, ensure_ascii=False)
+        return result
+
+    @staticmethod
     def _read_diagnostic(log_path: Path) -> str:
         try:
             raw = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
+        raw = "\n".join(line for line in raw.splitlines() if _SMOKE_RESPONSE_MARKER not in line)
         # 脱敏后仅保留最后 32 KB（SPEC §3.2）。
         return raw[-32 * 1024:]
 
@@ -1235,6 +1317,120 @@ class PerfRunner(Runner):
             return output.splitlines()[0].strip() if output else ""
         except (OSError, subprocess.SubprocessError):
             return ""
+
+
+def _coerce_int(value) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_number(value) -> float | int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _response_header(headers: dict, name: str):
+    for key, value in headers.items():
+        if str(key).lower() == name.lower():
+            return value
+    return ""
+
+
+def _is_sensitive_response_header(name: str) -> bool:
+    normalized = str(name or "").lower().replace("_", "-")
+    return normalized in {"set-cookie", "cookie", "authorization", "proxy-authorization", "x-api-key"} or bool(_SENSITIVE_KEY_PATTERN.search(normalized))
+
+
+def _sanitize_smoke_headers(headers) -> dict:
+    if not isinstance(headers, dict):
+        return {}
+    result = {}
+    for key, value in headers.items():
+        key_text = str(key)
+        if _is_sensitive_response_header(key_text):
+            result[key_text] = "******"
+        elif value is None or isinstance(value, (str, int, float, bool)):
+            result[key_text] = value
+        else:
+            result[key_text] = str(value)
+    return result
+
+
+def _is_binary_content_type(content_type: str) -> bool:
+    return bool(_BINARY_CONTENT_TYPE_PATTERN.search(str(content_type or "")))
+
+
+def _read_smoke_response_marker(log_path: Path) -> dict | None:
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        marker_index = line.find(_SMOKE_RESPONSE_MARKER)
+        if marker_index < 0:
+            continue
+        candidates = [line[marker_index + len(_SMOKE_RESPONSE_MARKER):]]
+        message_start = line.rfind('msg="', 0, marker_index + 1)
+        message_end = line.find('" source=', message_start + 5) if message_start >= 0 else -1
+        if message_start >= 0 and message_end > message_start:
+            try:
+                message = json.loads(line[message_start + 4:message_end + 1])
+                if isinstance(message, str) and message.startswith(_SMOKE_RESPONSE_MARKER):
+                    candidates.insert(0, message[len(_SMOKE_RESPONSE_MARKER):])
+            except json.JSONDecodeError:
+                pass
+        for candidate in candidates:
+            try:
+                value, _ = json.JSONDecoder().raw_decode(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+    return None
+
+
+def _normalize_smoke_response(response) -> dict | None:
+    if not isinstance(response, dict):
+        return None
+    status_code = _coerce_int(response.get("statusCode"))
+    if status_code is None:
+        return None
+    headers = _sanitize_smoke_headers(response.get("headers"))
+    content_type = str(response.get("contentType") or _response_header(headers, "content-type") or "")
+    body = response.get("body")
+    if body is None:
+        body = ""
+    elif not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=False) if isinstance(body, (dict, list)) else str(body)
+    encoded_body = body.encode("utf-8", errors="replace")
+    reported_size = _coerce_int(response.get("bodySize"))
+    body_size = max(len(encoded_body), reported_size or 0)
+    is_binary = bool(response.get("isBinary")) or _is_binary_content_type(content_type) or b"\x00" in encoded_body
+    if is_binary:
+        output_body = ""
+        truncated = bool(response.get("truncated"))
+    else:
+        truncated = bool(response.get("truncated")) or len(encoded_body) > _SMOKE_BODY_LIMIT
+        output_body = encoded_body[:_SMOKE_BODY_LIMIT].decode("utf-8", errors="ignore") if truncated else body
+    return {
+        "statusCode": status_code,
+        "headers": headers,
+        "body": output_body,
+        "durationMs": _coerce_number(response.get("durationMs")) or 0,
+        "truncated": truncated,
+        "bodySize": body_size,
+        "isBinary": is_binary,
+        "contentType": content_type,
+    }
 
 
 def _round_ms(value) -> float | None:

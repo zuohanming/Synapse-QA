@@ -853,6 +853,7 @@ button:disabled {
 .perf-schedule-empty { align-items: center; display: flex; flex-direction: column; gap: 10px; justify-content: center; min-height: 300px; padding: 40px 20px; text-align: center; }
 .perf-schedule-empty > svg { color: var(--primary); opacity: .7; }.perf-schedule-empty p { color: var(--muted); margin: 0 0 6px; }
 .perf-schedule-editor .modal-header > div { display: grid; gap: 4px; }.perf-schedule-editor .modal-header small { color: var(--muted); }.perf-schedule-form { display: grid; gap: 14px; padding: 20px; }.perf-schedule-form .form-field small { color: var(--muted); line-height: 1.45; }.perf-schedule-cron-input { font-family: ui-monospace, Consolas, monospace; }.perf-schedule-enabled { align-items: center; display: flex; gap: 8px; }
+.perf-interface-picker .modal-header > div { display: grid; gap: 4px; }.perf-interface-picker .modal-header small { color: var(--muted); }.perf-picker-toolbar { align-items: end; display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 20px 10px; }.perf-picker-toolbar .form-field { min-width: 180px; }.perf-picker-count { color: var(--muted); font-size: 12px; padding: 4px 20px 10px; }.perf-picker-table { min-width: 680px; }.perf-picker-table .is-disabled { opacity: .55; }.perf-picker-unsupported { color: var(--danger); display: block; font-size: 11px; }.perf-picker-pagination { align-items: center; color: var(--muted); display: flex; font-size: 12px; justify-content: space-between; padding: 10px 20px; }.perf-picker-pagination button { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 6px 10px; }.perf-picker-pagination button:disabled { opacity: .5; }
 
 .flow-panel:has(.layout-preview-banner) {
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -2246,6 +2247,65 @@ button:disabled {
   gap: 6px;
   font-weight: 700;
   font-size: 13px;
+}
+
+.perf-smoke-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.perf-smoke-headers {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.perf-smoke-headers summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.perf-smoke-headers pre,
+.perf-smoke-body {
+  max-width: 100%;
+  margin: 8px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.perf-smoke-headers pre {
+  max-height: 180px;
+}
+
+.perf-smoke-body {
+  max-height: 360px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.perf-smoke-error,
+.perf-smoke-warning {
+  padding: 7px 9px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.perf-smoke-error {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.perf-smoke-warning {
+  color: #92400e;
+  background: #fef3c7;
 }
 
 /* 负载配置 */

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronLeft, Play, Plus, Trash2 } from "lucide-react";
 import { StateBlock } from "../components/StateBlock.js";
+import { PerfInterfacePicker, isSupportedPerfMethod } from "../components/PerfInterfacePicker.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import { useAuth } from "../hooks/useAuth.js";
 import { configService } from "../services/configService.js";
@@ -190,7 +191,7 @@ export function PerfPlanEditPage({ planId }) {
 
       <RequestConfigSection form={current} update={update} />
 
-      <LoadConfigSection scenarioType={current.scenarioType} loadConfig={current.loadConfig} onChange={updateLoadConfig} />
+      <LoadConfigSection scenarioType={current.scenarioType} loadConfig={current.loadConfig} productId={current.productId} onChange={updateLoadConfig} />
 
       <ThresholdSection thresholds={current.thresholds} onChange={(next) => update({ thresholds: next })} />
 
@@ -405,6 +406,45 @@ function buildFinalUrl(targetUrl, params) {
   }
 }
 
+function parseConfigurationObject(value) {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try { const parsed = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; }
+  }
+  return {};
+}
+
+function configurationBody(value) {
+  if (value == null || value === "") return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+export function mapApiInterfaceToRequest(item) {
+  const configuration = item?.configuration || {};
+  return { method: String(item?.method || "GET").toUpperCase(), targetUrl: item?.path || item?.url || "", params: objectToKv(parseConfigurationObject(configuration.params)), headers: objectToKv(parseConfigurationObject(configuration.headers)), body: configurationBody(configuration.body) };
+}
+
+export function shouldShowSingleInterfacePicker(scenarioType) { return scenarioType !== "mixed"; }
+
+export function mapApiInterfaceToScenario(item) {
+  const request = mapApiInterfaceToRequest(item);
+  return { name: item?.name || request.targetUrl || "接口", weight: 0.1, method: request.method, url: request.targetUrl, headers: Object.fromEntries(request.headers.map((row) => [row.key, row.value])), body: request.body };
+}
+
+export function appendMixedScenarios(existing, interfaces, limit = 50) {
+  const next = Array.isArray(existing) ? [...existing] : [];
+  const names = new Set(next.map((item) => item?.name));
+  for (const item of interfaces || []) {
+    if (next.length >= limit || !isSupportedPerfMethod(item?.method)) continue;
+    const scenario = mapApiInterfaceToScenario(item);
+    const baseName = scenario.name; let name = baseName; let suffix = 2;
+    while (names.has(name)) name = `${baseName} (${suffix++})`;
+    scenario.name = name; names.add(name); next.push(scenario);
+  }
+  return next;
+}
+
 // 场景卡片（SPEC §8.2：卡片展示适用场景、预计时长、风险等级）。
 function ScenarioCards({ value, onChange }) {
   return (
@@ -431,6 +471,7 @@ function RequestConfigSection({ form, update }) {
   const [smoking, setSmoking] = useState(false);
   const [smokeResult, setSmokeResult] = useState(null);
   const [smokeExecutor, setSmokeExecutor] = useState("");
+  const [showInterfacePicker, setShowInterfacePicker] = useState(false);
 
   const { data: executorsData, loading: loadingExecutors } = useAsyncData(() => performanceService.executors(), []);
   const executors = Array.isArray(executorsData) ? executorsData.filter((item) => item.status === "online") : [];
@@ -484,6 +525,14 @@ function RequestConfigSection({ form, update }) {
     }
   }
 
+  async function importInterface(items) {
+    const mapped = mapApiInterfaceToRequest(items[0]);
+    const hasExisting = Boolean(form.targetUrl.trim() || form.body.trim() || form.params.length || form.headers.length);
+    if (hasExisting && !window.confirm("当前请求已有内容，导入接口会覆盖这些字段。是否继续？")) return;
+    update({ ...mapped });
+    setShowInterfacePicker(false);
+  }
+
   return (
     <section className="resource-panel">
       <div className="panel-header">
@@ -493,6 +542,7 @@ function RequestConfigSection({ form, update }) {
             <option value="">{loadingExecutors ? "加载执行器中" : "选择冒烟执行器"}</option>
             {executors.map((item) => <option key={item.executorId || item.id} value={String(item.executorId || item.id)}>{item.name || item.executorId || item.id}</option>)}
           </select>
+          {shouldShowSingleInterfacePicker(form.scenarioType) ? <button className="icon-text-button compact-button" disabled={!form.productId} onClick={() => setShowInterfacePicker(true)} title={form.productId ? "导入后为独立快照" : "请先选择产品"} type="button">从接口管理添加</button> : null}
           <button className="icon-text-button compact-button" disabled={smoking || !finalUrl} onClick={runSmoke} type="button">
             <Play size={14} />{smoking ? "发送中" : "发送一次测试请求"}
           </button>
@@ -547,6 +597,7 @@ function RequestConfigSection({ form, update }) {
       </details>
 
       {smokeResult ? <SmokeResult result={smokeResult} /> : null}
+      {showInterfacePicker ? <PerfInterfacePicker productId={form.productId} onClose={() => setShowInterfacePicker(false)} onConfirm={importInterface} /> : null}
     </section>
   );
 }
@@ -576,22 +627,69 @@ function KvEditor({ rows, onChange, keyLabel, valueLabel, valuePlaceholder }) {
   );
 }
 
-function SmokeResult({ result }) {
-  const ok = result?.status === "success";
-  const timeout = result?.status === "timeout";
-  const body = result?.result?.body ?? result?.result?.responseBody ?? result?.result?.error ?? "";
+export function normalizeSmokeResult(payload) {
+  const nested = payload?.result && typeof payload.result === "object" ? payload.result : {};
+  const output = nested.output;
+  let outputValue;
+  let outputIsJson = false;
+  if (typeof output === "string" && output.trim()) {
+    try { outputValue = JSON.parse(output); outputIsJson = true; } catch { outputValue = output; }
+  } else if (output !== undefined) {
+    outputValue = output;
+    outputIsJson = typeof output === "object" && output !== null;
+  }
+  const outputObject = outputIsJson && outputValue && typeof outputValue === "object" && !Array.isArray(outputValue) ? outputValue : {};
+  const source = { ...payload, ...nested, ...outputObject };
+  const has = (key) => Object.prototype.hasOwnProperty.call(source, key);
+  let body;
+  if (has("body")) body = source.body;
+  else if (has("responseBody")) body = source.responseBody;
+  else if (output !== undefined && !outputIsJson) body = outputValue;
+  else body = "";
+  const error = source.error ?? source.errorMessage ?? payload?.errorMessage ?? "";
+  return {
+    status: payload?.status || source.status || "unknown",
+    statusCode: source.statusCode,
+    headers: source.headers,
+    body,
+    hasBody: body !== null && body !== undefined && body !== "",
+    durationMs: source.durationMs,
+    contentType: source.contentType,
+    bodySize: source.bodySize,
+    truncated: Boolean(source.truncated),
+    isBinary: Boolean(source.isBinary),
+    error: error ? String(error) : ""
+  };
+}
+
+function formatSmokeBody(body) {
+  if (body === null || body === undefined || body === "") return "";
+  if (typeof body === "object") return JSON.stringify(body, null, 2);
+  const text = String(body);
+  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+}
+
+export function SmokeResult({ result }) {
+  const normalized = normalizeSmokeResult(result);
+  const ok = normalized.status === "success";
+  const timeout = normalized.status === "timeout";
+  const body = formatSmokeBody(normalized.body);
+  const statusLabel = ok ? "冒烟成功" : timeout ? "冒烟超时" : "冒烟失败";
+  const headers = normalized.headers && typeof normalized.headers === "object" ? normalized.headers : normalized.headers ? String(normalized.headers) : "";
   return (
     <div className={`perf-smoke-result ${ok ? "ok" : "fail"}`}>
-      <span className="perf-smoke-status">{ok ? <Check size={14} /> : timeout ? "⚠" : "✕"}{ok ? "冒烟成功" : timeout ? "冒烟超时" : "冒烟失败"}</span>
-      {result?.result?.statusCode != null ? <span>状态码 {result.result.statusCode}</span> : null}
-      {result?.result?.durationMs != null ? <span>耗时 {result.result.durationMs} ms</span> : null}
-      <pre className="perf-json">{body ? String(body).slice(0, 2000) : "无响应体"}</pre>
+      <div className="perf-smoke-summary"><span className="perf-smoke-status">{ok ? <Check size={14} /> : timeout ? "⚠" : "✕"}{statusLabel}</span>{normalized.statusCode !== undefined && normalized.statusCode !== null ? <span>HTTP {normalized.statusCode}</span> : null}{normalized.durationMs !== undefined && normalized.durationMs !== null ? <span>耗时 {normalized.durationMs} ms</span> : null}{normalized.contentType ? <span>Content-Type {normalized.contentType}</span> : null}{normalized.bodySize !== undefined && normalized.bodySize !== null ? <span>Body {normalized.bodySize} B</span> : null}</div>
+      {headers ? <details className="perf-smoke-headers"><summary>响应 Headers</summary><pre>{typeof headers === "string" ? headers : JSON.stringify(headers, null, 2)}</pre></details> : null}
+      {normalized.error ? <div className="perf-smoke-error" role="alert">错误：{normalized.error}</div> : null}
+      {normalized.truncated ? <div className="perf-smoke-warning">响应体已截断，仅展示已接收内容。</div> : null}
+      {normalized.isBinary ? <div className="perf-smoke-warning">响应体为二进制内容，不进行文本格式化。</div> : null}
+      <pre className="perf-json perf-smoke-body">{normalized.hasBody ? body : "无响应体"}</pre>
     </div>
   );
 }
 
 // 负载配置区块：按场景渲染控件 + 右侧实时预览（SPEC §8.2）。
-function LoadConfigSection({ scenarioType, loadConfig, onChange }) {
+function LoadConfigSection({ scenarioType, loadConfig, productId, onChange }) {
   const preview = computeLoadPreview(scenarioType, loadConfig);
   const cfg = loadConfig || {};
 
@@ -632,7 +730,7 @@ function LoadConfigSection({ scenarioType, loadConfig, onChange }) {
           ) : null}
 
           {scenarioType === "mixed" ? (
-            <MixedEditor config={cfg} onChange={patch} />
+            <MixedEditor config={cfg} productId={productId} onChange={patch} />
           ) : null}
         </div>
 
@@ -703,8 +801,9 @@ function LoadPreview({ preview }) {
   );
 }
 
-function MixedEditor({ config, onChange }) {
+function MixedEditor({ config, productId, onChange }) {
   const scenarios = Array.isArray(config.scenarios) ? config.scenarios : [];
+  const [showPicker, setShowPicker] = useState(false);
   const update = (index, partial) => onChange({ scenarios: scenarios.map((item, i) => i === index ? { ...item, ...partial } : item) });
   const totalWeight = scenarios.reduce((sum, item) => sum + Number(item.weight || 0), 0);
   return <div className="perf-mixed-editor">
@@ -722,7 +821,8 @@ function MixedEditor({ config, onChange }) {
       <button className="icon-text-button compact-button" type="button" onClick={() => onChange({ scenarios: scenarios.filter((_, i) => i !== index) })} aria-label="删除接口"><Trash2 size={14} /></button>
       <details className="perf-mixed-advanced"><summary>Headers / Body</summary><div className="perf-mixed-advanced-grid"><label className="form-field"><span>Headers JSON</span><textarea className="text-area" rows="2" value={typeof item.headers === "string" ? item.headers : JSON.stringify(item.headers || {}, null, 2)} onChange={(e) => { try { update(index, { headers: normalizeHeadersObject(JSON.parse(e.target.value)) }); } catch { update(index, { headers: e.target.value }); } }} /></label><label className="form-field"><span>Body JSON</span><textarea className="text-area" rows="2" value={item.body || ""} onChange={(e) => update(index, { body: e.target.value })} /></label></div></details>
     </div>)}
-    <button className="icon-text-button compact-button" type="button" disabled={scenarios.length >= 50} onClick={() => onChange({ scenarios: [...scenarios, { name: "新接口", weight: 0.1, method: "GET", url: "", headers: {}, body: "" }] })}><Plus size={14} />添加接口</button>
+    <div className="action-row"><button className="icon-text-button compact-button" type="button" disabled={scenarios.length >= 50 || !productId} title={!productId ? "请先选择产品" : "导入后为独立快照"} onClick={() => setShowPicker(true)}>从接口管理添加</button><button className="icon-text-button compact-button" type="button" disabled={scenarios.length >= 50} onClick={() => onChange({ scenarios: [...scenarios, { name: "新接口", weight: 0.1, method: "GET", url: "", headers: {}, body: "" }] })}><Plus size={14} />添加接口</button></div>
+    {showPicker ? <PerfInterfacePicker maxSelection={50 - scenarios.length} productId={productId} multiple onClose={() => setShowPicker(false)} onConfirm={async (items) => { const next = appendMixedScenarios(scenarios, items, 50); onChange({ scenarios: next }); setShowPicker(false); }} /> : null}
   </div>;
 }
 
