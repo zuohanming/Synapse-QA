@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Bell, Braces, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3, Sparkles } from "lucide-react";
+import { Bell, Braces, CalendarClock, ChevronDown, ChevronRight, Gauge, LogOut, Home, KeyRound, Monitor, Settings, Users, Layers, FileCode, Play, Zap, Shield, Database, Menu, CircleHelp, ClipboardCheck, BarChart3, Sparkles } from "lucide-react";
 import { menuData } from "../config/appConfig.js";
 import { useAuth } from "../hooks/useAuth.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { TableOverflowTooltip } from "./TableOverflowTooltip.js";
 
-const menuIcons = {
+export const menuIcons = {
   "首页": <Home size={18} />,
   "界面自动化": <Monitor size={18} />,
   "接口自动化": <Braces size={18} />,
@@ -14,6 +14,7 @@ const menuIcons = {
   "接口管理": <Gauge size={16} />,
   "请求头管理": <KeyRound size={16} />,
   "压测方案": <FileCode size={16} />,
+  "定时规则": <CalendarClock size={16} />,
   "测试配置": <Settings size={18} />,
   "系统管理": <Users size={18} />,
   "项目概览": <Layers size={16} />,
