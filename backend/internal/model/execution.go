@@ -8,6 +8,7 @@ import (
 // ExecutionRun 表示一次执行批次。
 type ExecutionRun struct {
 	ID          int64           `json:"id"`
+	ProjectID   *int64          `json:"projectId"`
 	RunType     string          `json:"runType"`
 	Headless    bool            `json:"headless"`
 	Status      string          `json:"status"`

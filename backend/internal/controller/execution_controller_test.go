@@ -15,25 +15,34 @@ import (
 )
 
 type fakeExecutionService struct {
-	listErr     bool
-	getErr      bool
-	getNotFound bool
-	createErr   bool
-	cancelErr   bool
-	callbackErr bool
-	logsErr     bool
-	detail      model.ExecutionRunDetail
-	listResult  model.PageResult
+	listErr        bool
+	getErr         bool
+	getNotFound    bool
+	createErr      bool
+	cancelErr      bool
+	cancelNotFound bool
+	callbackErr    bool
+	logsErr        bool
+	logsNotFound   bool
+	detail         model.ExecutionRunDetail
+	listResult     model.PageResult
 }
 
-func (f *fakeExecutionService) ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error) {
+func (f *fakeExecutionService) ListRunsScoped(ctx context.Context, claims model.Claims, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error) {
 	if f.listErr {
 		return model.PageResult{}, errControllerFake
 	}
 	return f.listResult, nil
 }
 
-func (f *fakeExecutionService) GetRun(ctx context.Context, id int64) (model.ExecutionRunDetail, error) {
+func (f *fakeExecutionService) StatisticsScoped(ctx context.Context, claims model.Claims) (model.ExecutionStatistics, error) {
+	if f.listErr {
+		return model.ExecutionStatistics{}, errControllerFake
+	}
+	return model.ExecutionStatistics{Trend: []model.ExecutionTrendPoint{}}, nil
+}
+
+func (f *fakeExecutionService) GetRunScoped(ctx context.Context, claims model.Claims, id int64) (model.ExecutionRunDetail, error) {
 	if f.getNotFound {
 		return model.ExecutionRunDetail{}, errors.New("执行批次不存在")
 	}
@@ -43,7 +52,7 @@ func (f *fakeExecutionService) GetRun(ctx context.Context, id int64) (model.Exec
 	return f.detail, nil
 }
 
-func (f *fakeExecutionService) CreateRun(ctx context.Context, actor string, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error) {
+func (f *fakeExecutionService) CreateRunScoped(ctx context.Context, claims model.Claims, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error) {
 	if f.createErr {
 		return model.ExecutionRunDetail{}, errControllerFake
 	}
@@ -58,7 +67,10 @@ func (f *fakeExecutionService) GetDebugTask(ctx context.Context, executorID, tas
 	return map[string]any{"taskId": taskID, "status": "success"}, nil
 }
 
-func (f *fakeExecutionService) CancelRun(ctx context.Context, actor string, id int64) error {
+func (f *fakeExecutionService) CancelRunScoped(ctx context.Context, claims model.Claims, id int64) error {
+	if f.cancelNotFound {
+		return errors.New("执行批次不存在")
+	}
 	if f.cancelErr {
 		return errControllerFake
 	}
@@ -72,7 +84,10 @@ func (f *fakeExecutionService) HandleCallback(ctx context.Context, req model.Exe
 	return nil
 }
 
-func (f *fakeExecutionService) ListLogs(ctx context.Context, taskID int64) ([]model.ExecutionLog, error) {
+func (f *fakeExecutionService) ListLogsScoped(ctx context.Context, claims model.Claims, taskID int64) ([]model.ExecutionLog, error) {
+	if f.logsNotFound {
+		return nil, errors.New("执行批次不存在")
+	}
 	if f.logsErr {
 		return nil, errControllerFake
 	}
@@ -184,6 +199,25 @@ func TestExecutionControllerNotFound(t *testing.T) {
 	executionRouter(true, &fakeExecutionService{getNotFound: true}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestExecutionControllerScopedNotFoundForCancelAndLogs(t *testing.T) {
+	cases := []struct {
+		method string
+		path   string
+		svc    *fakeExecutionService
+	}{
+		{method: http.MethodPost, path: "/executions/99/cancel", svc: &fakeExecutionService{cancelNotFound: true}},
+		{method: http.MethodGet, path: "/executions/tasks/99/logs", svc: &fakeExecutionService{logsNotFound: true}},
+	}
+	for _, item := range cases {
+		req := httptest.NewRequest(item.method, item.path, nil)
+		rec := httptest.NewRecorder()
+		executionRouter(true, item.svc).ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound || !bytes.Contains(rec.Body.Bytes(), []byte("执行批次不存在")) {
+			t.Fatalf("%s %s returned %d: %s", item.method, item.path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

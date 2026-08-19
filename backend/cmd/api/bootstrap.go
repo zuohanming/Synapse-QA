@@ -259,6 +259,7 @@ func (a *app) migrate(ctx context.Context) error {
 			headless boolean not null default true,
 			triggered_by text not null default '',
 			case_ids bigint[] not null default '{}',
+			project_id bigint references projects(id),
 			summary jsonb not null default '{}'::jsonb,
 			started_at timestamptz,
 			finished_at timestamptz,
@@ -338,6 +339,9 @@ func (a *app) migrate(ctx context.Context) error {
 		`create index if not exists idx_execution_tasks_task_id on execution_tasks(task_id)`,
 		`create index if not exists idx_execution_logs_task_id on execution_logs(task_id)`,
 		`create index if not exists idx_execution_runs_status on execution_runs(status)`,
+		`create index if not exists idx_dashboard_execution_runs_created on execution_runs(created_at desc, id desc)`,
+		`alter table execution_runs add column if not exists project_id bigint references projects(id)`,
+		`create index if not exists idx_execution_runs_project_created on execution_runs(project_id, created_at desc, id desc)`,
 		`create index if not exists idx_notifications_user_created on notifications(user_id, created_at desc)`,
 		`alter table execution_runs add column if not exists headless boolean not null default true`,
 		`alter table executors add column if not exists executor_token text not null default ''`,
@@ -556,6 +560,8 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			updated_at timestamptz not null default now()
 		)`,
+		`create index if not exists idx_dashboard_api_batches_project_created on api_test_run_batches(project_id, created_at desc, id desc)`,
+		`create index if not exists idx_dashboard_api_batches_created on api_test_run_batches(created_at desc, id desc)`,
 		`create table if not exists api_test_run_instances (
 			id bigserial primary key,
 			batch_id text not null references api_test_run_batches(batch_id) on delete cascade,
@@ -682,6 +688,7 @@ func (a *app) migrate(ctx context.Context) error {
 			created_at timestamptz not null default now(),
 			updated_at timestamptz not null default now()
 		)`,
+		`create index if not exists idx_dashboard_perf_runs_created on perf_test_runs(created_at desc, id desc)`,
 		// §3.1 方案：以 scenario_type 取代 load_mode，负载参数收敛到 load_config。
 		// 旧列 load_mode/vus/duration/stages 本版本保留（避免破坏旧数据），下一版本删除。
 		`alter table perf_test_plans add column if not exists scenario_type text not null default 'baseline'`,

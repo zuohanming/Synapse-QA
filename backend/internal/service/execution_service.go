@@ -20,9 +20,15 @@ import (
 
 type ExecutionRepository interface {
 	CreateRun(ctx context.Context, req model.ExecutionRunRequest, triggeredBy string) (model.ExecutionRun, error)
+	CreateRunWithProject(ctx context.Context, req model.ExecutionRunRequest, triggeredBy string, projectID *int64) (model.ExecutionRun, error)
+	ResolveRunProject(ctx context.Context, caseIDs []int64, userID int64, admin bool) (int64, error)
 	GetRun(ctx context.Context, id int64) (model.ExecutionRun, error)
+	GetRunScoped(ctx context.Context, userID int64, admin bool, id int64) (model.ExecutionRun, error)
 	ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) ([]model.ExecutionRun, int64, error)
+	ListRunsScoped(ctx context.Context, userID int64, admin bool, filter model.ExecutionRunFilter, page, pageSize int) ([]model.ExecutionRun, int64, error)
+	StatisticsScoped(ctx context.Context, userID int64, admin bool, now time.Time) (model.ExecutionStatistics, error)
 	UpdateRunStatus(ctx context.Context, id int64, status string, summary json.RawMessage) error
+	UpdateRunStatusScoped(ctx context.Context, userID int64, admin bool, id int64, status string, summary json.RawMessage) error
 	StartRun(ctx context.Context, id int64) error
 	CreateTask(ctx context.Context, runID int64, taskID string, caseID int64, executorID, taskType, callbackURL string, payload json.RawMessage) (model.ExecutionTask, error)
 	GetTaskByTaskID(ctx context.Context, taskID string) (model.ExecutionTask, error)
@@ -33,6 +39,8 @@ type ExecutionRepository interface {
 	UpdateTaskResult(ctx context.Context, id int64, result json.RawMessage) error
 	CreateLog(ctx context.Context, taskID int64, level, message string) error
 	ListLogs(ctx context.Context, taskID int64) ([]model.ExecutionLog, error)
+	GetTaskRunIDScoped(ctx context.Context, userID int64, admin bool, taskID int64) (int64, error)
+	ListLogsScoped(ctx context.Context, userID int64, admin bool, taskID int64) ([]model.ExecutionLog, error)
 }
 
 type ExecutorRepository interface {
@@ -87,8 +95,31 @@ func (s *ExecutionService) CreateRun(ctx context.Context, actor string, req mode
 	if err != nil {
 		return model.ExecutionRunDetail{}, err
 	}
+	return s.createRun(ctx, actor, req, nil)
+}
 
-	run, err := s.executionRepo.CreateRun(ctx, req, actor)
+// CreateRunScoped 创建用户 HTTP 发起的执行批次，并在落库前固化项目归属。
+func (s *ExecutionService) CreateRunScoped(ctx context.Context, claims model.Claims, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error) {
+	req, err := normalizeExecutionRunRequest(req)
+	if err != nil {
+		return model.ExecutionRunDetail{}, err
+	}
+	projectID, err := s.executionRepo.ResolveRunProject(ctx, req.CaseIDs, claims.UserID, claims.RoleCode == "admin")
+	if err != nil {
+		return model.ExecutionRunDetail{}, err
+	}
+	return s.createRun(ctx, claims.Username, req, &projectID)
+}
+
+func (s *ExecutionService) createRun(ctx context.Context, actor string, req model.ExecutionRunRequest, projectID *int64) (model.ExecutionRunDetail, error) {
+	var run model.ExecutionRun
+	var err error
+	if projectID == nil {
+		run, err = s.executionRepo.CreateRun(ctx, req, actor)
+	} else {
+		run, err = s.executionRepo.CreateRunWithProject(ctx, req, actor, projectID)
+	}
+
 	if err != nil {
 		return model.ExecutionRunDetail{}, errors.New("创建执行批次失败")
 	}
@@ -306,11 +337,39 @@ func (s *ExecutionService) GetRun(ctx context.Context, id int64) (model.Executio
 	return model.ExecutionRunDetail{ExecutionRun: run, Tasks: tasks}, nil
 }
 
+// GetRunScoped 查询用户 HTTP 可见的执行批次详情。
+func (s *ExecutionService) GetRunScoped(ctx context.Context, claims model.Claims, id int64) (model.ExecutionRunDetail, error) {
+	run, err := s.executionRepo.GetRunScoped(ctx, claims.UserID, claims.RoleCode == "admin", id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.ExecutionRunDetail{}, errors.New("执行批次不存在")
+		}
+		return model.ExecutionRunDetail{}, errors.New("查询执行批次失败")
+	}
+	tasks, err := s.executionRepo.ListTasksByRun(ctx, id)
+	if err != nil {
+		return model.ExecutionRunDetail{}, errors.New("查询任务列表失败")
+	}
+	return model.ExecutionRunDetail{ExecutionRun: run, Tasks: tasks}, nil
+}
+
 // ListRuns 分页查询执行批次。
 func (s *ExecutionService) ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error) {
 	page, pageSize = normalizePage(page, pageSize)
 	items, total, err := s.executionRepo.ListRuns(ctx, filter, page, pageSize)
 	return model.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, err
+}
+
+// ListRunsScoped 分页查询用户 HTTP 可见的执行批次。
+func (s *ExecutionService) ListRunsScoped(ctx context.Context, claims model.Claims, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error) {
+	page, pageSize = normalizePage(page, pageSize)
+	items, total, err := s.executionRepo.ListRunsScoped(ctx, claims.UserID, claims.RoleCode == "admin", filter, page, pageSize)
+	return model.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, err
+}
+
+// StatisticsScoped 查询当前用户可见的执行统计聚合。
+func (s *ExecutionService) StatisticsScoped(ctx context.Context, claims model.Claims) (model.ExecutionStatistics, error) {
+	return s.executionRepo.StatisticsScoped(ctx, claims.UserID, claims.RoleCode == "admin", time.Now().UTC())
 }
 
 // CancelRun 取消执行批次。
@@ -322,6 +381,22 @@ func (s *ExecutionService) CancelRun(ctx context.Context, actor string, id int64
 		}
 		return errors.New("查询执行批次失败")
 	}
+	return s.cancelLoadedRun(ctx, actor, id, run, nil)
+}
+
+// CancelRunScoped 取消用户 HTTP 可见的执行批次。
+func (s *ExecutionService) CancelRunScoped(ctx context.Context, claims model.Claims, id int64) error {
+	run, err := s.executionRepo.GetRunScoped(ctx, claims.UserID, claims.RoleCode == "admin", id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("执行批次不存在")
+		}
+		return errors.New("查询执行批次失败")
+	}
+	return s.cancelLoadedRun(ctx, claims.Username, id, run, &claims)
+}
+
+func (s *ExecutionService) cancelLoadedRun(ctx context.Context, actor string, id int64, run model.ExecutionRun, claims *model.Claims) error {
 	if run.Status == "completed" || run.Status == "failed" || run.Status == "canceled" {
 		return errors.New("当前批次已结束")
 	}
@@ -337,7 +412,15 @@ func (s *ExecutionService) CancelRun(ctx context.Context, actor string, id int64
 			_ = s.cancelExecutorTask(ctx, task)
 		}
 	}
-	_ = s.executionRepo.UpdateRunStatus(ctx, id, "canceled", summaryJSON(model.ExecutionSummary{Total: int64(len(run.CaseIDs)), Skipped: int64(len(run.CaseIDs))}))
+	summary := summaryJSON(model.ExecutionSummary{Total: int64(len(run.CaseIDs)), Skipped: int64(len(run.CaseIDs))})
+	if claims == nil {
+		_ = s.executionRepo.UpdateRunStatus(ctx, id, "canceled", summary)
+	} else if updateErr := s.executionRepo.UpdateRunStatusScoped(ctx, claims.UserID, claims.RoleCode == "admin", id, "canceled", summary); updateErr != nil {
+		if errors.Is(updateErr, sql.ErrNoRows) {
+			return errors.New("执行批次不存在")
+		}
+		return errors.New("更新执行批次状态失败")
+	}
 	_ = s.systemRepo.LogOperation(ctx, actor, "取消执行批次", strconv.FormatInt(id, 10))
 	return nil
 }
@@ -391,6 +474,21 @@ func (s *ExecutionService) ListLogs(ctx context.Context, taskID int64) ([]model.
 		return nil, errors.New("查询任务失败")
 	}
 	return s.executionRepo.ListLogs(ctx, taskID)
+}
+
+// ListLogsScoped 查询用户 HTTP 可见执行批次下的任务日志。
+func (s *ExecutionService) ListLogsScoped(ctx context.Context, claims model.Claims, taskID int64) ([]model.ExecutionLog, error) {
+	if _, err := s.executionRepo.GetTaskRunIDScoped(ctx, claims.UserID, claims.RoleCode == "admin", taskID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("执行批次不存在")
+		}
+		return nil, errors.New("查询执行批次失败")
+	}
+	logs, err := s.executionRepo.ListLogsScoped(ctx, claims.UserID, claims.RoleCode == "admin", taskID)
+	if err != nil {
+		return nil, errors.New("查询任务日志失败")
+	}
+	return logs, nil
 }
 
 // pickExecutor 选择在线且支持指定类型的执行器。

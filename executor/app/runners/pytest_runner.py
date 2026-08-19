@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.subprocess_utils import hidden_subprocess_kwargs
 from app.models.task import TaskCreate, TaskResult
 from app.runners.base import Runner
 
@@ -32,6 +33,7 @@ class PytestRunner(Runner):
             text=True,
             timeout=timeout,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         error = completed.stderr if completed.returncode != 0 else ""
         return TaskResult(exit_code=completed.returncode, output=completed.stdout, error=error)

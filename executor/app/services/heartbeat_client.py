@@ -1,6 +1,5 @@
 import json
 import logging
-import shutil
 import subprocess
 import threading
 import time
@@ -11,6 +10,7 @@ from importlib.util import find_spec
 from typing import Callable
 
 from app.core.config import settings
+from app.core.subprocess_utils import find_k6_executable, hidden_subprocess_kwargs
 
 
 logger = logging.getLogger(__name__)
@@ -153,24 +153,24 @@ class HeartbeatClient:
             "pytest": find_spec("pytest") is not None,
             "playwright": find_spec("playwright") is not None,
             "browser": find_spec("playwright") is not None,
-            "k6": shutil.which("k6") is not None,
+            "k6": find_k6_executable() is not None,
         }
 
     def _supported_types(self) -> list[str]:
         """k6 可用时才上报 perf，避免调度器把压测投到未装 k6 的执行器（SPEC §4.4）。"""
 
         types = list(settings.supported_types)
-        if "perf" in types and shutil.which("k6") is None:
+        if "perf" in types and find_k6_executable() is None:
             types.remove("perf")
         return types
 
     @staticmethod
     def _k6_version() -> str:
-        path = shutil.which("k6")
+        path = find_k6_executable()
         if not path:
             return ""
         try:
-            completed = subprocess.run([path, "version"], capture_output=True, text=True, timeout=5)
+            completed = subprocess.run([path, "version"], capture_output=True, text=True, timeout=5, **hidden_subprocess_kwargs())
             return completed.stdout.splitlines()[0].strip() if completed.stdout else ""
         except (OSError, subprocess.SubprocessError):
             return ""

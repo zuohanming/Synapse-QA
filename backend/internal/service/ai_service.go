@@ -221,10 +221,10 @@ type toolFunction struct {
 
 // ChatWithTools handles the full tool-calling chat loop and emits events to the channel.
 // The caller should close the channel after this function returns.
-func (s *AIService) ChatWithTools(ctx context.Context, userID int64, req model.AIChatRequest, ch chan<- SSEEvent) {
+func (s *AIService) ChatWithTools(ctx context.Context, claims model.Claims, req model.AIChatRequest, ch chan<- SSEEvent) {
 	defer close(ch)
 
-	cfg, modelCfg, err := s.prepareChat(ctx, userID)
+	cfg, modelCfg, err := s.prepareChat(ctx, claims.UserID)
 	if err != nil {
 		ch <- SSEEvent{Type: "error", Error: err.Error()}
 		return
@@ -234,7 +234,7 @@ func (s *AIService) ChatWithTools(ctx context.Context, userID int64, req model.A
 	ch <- SSEEvent{Type: "model", Model: modelCfg.Label}
 
 	messages := s.buildMessages(req.Messages)
-	tools := s.tools.ToolDefinitions()
+	tools := s.tools.ToolDefinitions(claims)
 	baseURL := s.resolveBaseURL(modelCfg)
 
 	// Tool calling loop
@@ -267,7 +267,7 @@ func (s *AIService) ChatWithTools(ctx context.Context, userID int64, req model.A
 				}
 
 				// Execute the tool
-				result, execErr := s.tools.Execute(ctx, userID, toolName, json.RawMessage(toolArgs))
+				result, execErr := s.tools.Execute(ctx, claims, toolName, json.RawMessage(toolArgs))
 				success := execErr == nil
 				resultText := result
 				if execErr != nil {

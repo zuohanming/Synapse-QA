@@ -22,6 +22,7 @@ type Dependencies struct {
 	DataFactoryController    *controller.DataFactoryController
 	AIController             *controller.AIController
 	PerformanceController    *controller.PerformanceController
+	DashboardController      *controller.DashboardController
 	AuthMiddleware           gin.HandlerFunc
 }
 
@@ -70,6 +71,14 @@ func RegisterRoutes(engine *gin.Engine, deps Dependencies) {
 	registerDataFactoryRoutes(authed, deps)
 	registerAIRoutes(authed, deps)
 	registerPerformanceRoutes(authed, deps)
+	if deps.DashboardController != nil {
+		registerDashboardRoutes(authed, deps)
+	}
+}
+
+func registerDashboardRoutes(authed *gin.RouterGroup, deps Dependencies) {
+	// 首页已有明确权限，复用 menu.home.read，不新增 dashboard 专属权限。
+	authed.GET("/dashboard/overview", controller.RequirePermission("menu.home.read"), deps.DashboardController.Overview)
 }
 
 func registerDataFactoryRoutes(authed *gin.RouterGroup, deps Dependencies) {
@@ -178,14 +187,15 @@ func registerNotificationRoutes(authed *gin.RouterGroup, deps Dependencies) {
 }
 
 func registerExecutionRoutes(authed *gin.RouterGroup, deps Dependencies) {
-	authed.GET("/executions", deps.ExecutionController.List)
-	authed.GET("/executions/statistics", deps.ExecutionController.Statistics)
-	authed.POST("/executions", deps.ExecutionController.Create)
-	authed.POST("/executions/debug", deps.ExecutionController.StartDebug)
-	authed.GET("/executions/debug/:taskId", deps.ExecutionController.GetDebug)
-	authed.GET("/executions/:id", deps.ExecutionController.Get)
-	authed.POST("/executions/:id/cancel", deps.ExecutionController.Cancel)
-	authed.GET("/executions/tasks/:taskId/logs", deps.ExecutionController.ListTaskLogs)
+	group := authed.Group("/executions", controller.RequirePermission("menu.execution.read"))
+	group.GET("", deps.ExecutionController.List)
+	group.GET("/statistics", deps.ExecutionController.Statistics)
+	group.POST("", deps.ExecutionController.Create)
+	group.POST("/debug", deps.ExecutionController.StartDebug)
+	group.GET("/debug/:taskId", deps.ExecutionController.GetDebug)
+	group.GET("/:id", deps.ExecutionController.Get)
+	group.POST("/:id/cancel", deps.ExecutionController.Cancel)
+	group.GET("/tasks/:taskId/logs", deps.ExecutionController.ListTaskLogs)
 }
 
 func registerSystemRoutes(authed *gin.RouterGroup, deps Dependencies) {

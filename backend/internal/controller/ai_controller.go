@@ -122,7 +122,7 @@ func (ctl *AIController) Chat(c *gin.Context) {
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 
 	ch := make(chan service.SSEEvent, 32)
-	go ctl.service.ChatWithTools(c.Request.Context(), claims.UserID, chatReq, ch)
+	go ctl.service.ChatWithTools(c.Request.Context(), claims, chatReq, ch)
 
 	flusher, _ := c.Writer.(http.Flusher)
 	for evt := range ch {

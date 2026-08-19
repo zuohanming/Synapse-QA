@@ -2,30 +2,42 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"synapseqa/backend/internal/model"
 )
 
 type fakeExecutionRepo struct {
-	createRunErr     error
-	getRunErr        error
-	listRunsErr      error
-	createTaskErr    error
-	getTaskErr       error
-	listTasksErr     error
-	updateStatusErr  error
-	updateResultErr  error
-	logErr           error
-	createTaskReturn model.ExecutionTask
-	listTasksReturn  []model.ExecutionTask
-	run              model.ExecutionRun
-	task             model.ExecutionTask
-	tasks            []model.ExecutionTask
+	createRunErr        error
+	getRunErr           error
+	listRunsErr         error
+	listRunsScopedErr   error
+	statisticsErr       error
+	statisticsResult    model.ExecutionStatistics
+	getRunScopedErr     error
+	resolveProjectErr   error
+	resolveProjectID    int64
+	createTaskErr       error
+	getTaskErr          error
+	listTasksErr        error
+	updateStatusErr     error
+	updateResultErr     error
+	logErr              error
+	createTaskReturn    model.ExecutionTask
+	listTasksReturn     []model.ExecutionTask
+	run                 model.ExecutionRun
+	task                model.ExecutionTask
+	tasks               []model.ExecutionTask
+	createdProjectID    *int64
+	listRunsScopedCalls int
+	getRunScopedCalls   int
+	updateScopedCalls   int
 }
 
 func (f *fakeExecutionRepo) CreateRun(ctx context.Context, req model.ExecutionRunRequest, triggeredBy string) (model.ExecutionRun, error) {
@@ -39,6 +51,26 @@ func (f *fakeExecutionRepo) CreateRun(ctx context.Context, req model.ExecutionRu
 	return f.run, nil
 }
 
+func (f *fakeExecutionRepo) CreateRunWithProject(ctx context.Context, req model.ExecutionRunRequest, triggeredBy string, projectID *int64) (model.ExecutionRun, error) {
+	f.createdProjectID = projectID
+	run, err := f.CreateRun(ctx, req, triggeredBy)
+	if err == nil {
+		f.run.ProjectID = projectID
+		run.ProjectID = projectID
+	}
+	return run, err
+}
+
+func (f *fakeExecutionRepo) ResolveRunProject(ctx context.Context, caseIDs []int64, userID int64, admin bool) (int64, error) {
+	if f.resolveProjectErr != nil {
+		return 0, f.resolveProjectErr
+	}
+	if f.resolveProjectID == 0 {
+		return 1, nil
+	}
+	return f.resolveProjectID, nil
+}
+
 func (f *fakeExecutionRepo) GetRun(ctx context.Context, id int64) (model.ExecutionRun, error) {
 	if f.getRunErr != nil {
 		return model.ExecutionRun{}, f.getRunErr
@@ -49,6 +81,14 @@ func (f *fakeExecutionRepo) GetRun(ctx context.Context, id int64) (model.Executi
 	return f.run, nil
 }
 
+func (f *fakeExecutionRepo) GetRunScoped(ctx context.Context, userID int64, admin bool, id int64) (model.ExecutionRun, error) {
+	f.getRunScopedCalls++
+	if f.getRunScopedErr != nil {
+		return model.ExecutionRun{}, f.getRunScopedErr
+	}
+	return f.GetRun(ctx, id)
+}
+
 func (f *fakeExecutionRepo) ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) ([]model.ExecutionRun, int64, error) {
 	if f.listRunsErr != nil {
 		return nil, 0, f.listRunsErr
@@ -56,10 +96,45 @@ func (f *fakeExecutionRepo) ListRuns(ctx context.Context, filter model.Execution
 	return []model.ExecutionRun{f.run}, 1, nil
 }
 
+func (f *fakeExecutionRepo) ListRunsScoped(ctx context.Context, userID int64, admin bool, filter model.ExecutionRunFilter, page, pageSize int) ([]model.ExecutionRun, int64, error) {
+	f.listRunsScopedCalls++
+	if f.listRunsScopedErr != nil {
+		return nil, 0, f.listRunsScopedErr
+	}
+	return f.ListRuns(ctx, filter, page, pageSize)
+}
+
+func (f *fakeExecutionRepo) StatisticsScoped(ctx context.Context, userID int64, admin bool, now time.Time) (model.ExecutionStatistics, error) {
+	if f.statisticsErr != nil {
+		return model.ExecutionStatistics{}, f.statisticsErr
+	}
+	return f.statisticsResult, nil
+}
+
+func TestExecutionServiceStatisticsScopedUsesAggregateRepository(t *testing.T) {
+	repo := &fakeExecutionRepo{statisticsResult: model.ExecutionStatistics{TotalRuns: 4}}
+	svc := NewExecutionService(repo, nil, nil, nil, "")
+	result, err := svc.StatisticsScoped(context.Background(), model.Claims{UserID: 7, RoleCode: "viewer"})
+	if err != nil {
+		t.Fatalf("StatisticsScoped returned error: %v", err)
+	}
+	if result.TotalRuns != 4 {
+		t.Fatalf("unexpected statistics: %+v", result)
+	}
+	if repo.listRunsScopedCalls != 0 {
+		t.Fatalf("statistics unexpectedly paged through ListRunsScoped %d times", repo.listRunsScopedCalls)
+	}
+}
+
 func (f *fakeExecutionRepo) UpdateRunStatus(ctx context.Context, id int64, status string, summary json.RawMessage) error {
 	f.run.Status = status
 	f.run.Summary = summary
 	return f.updateStatusErr
+}
+
+func (f *fakeExecutionRepo) UpdateRunStatusScoped(ctx context.Context, userID int64, admin bool, id int64, status string, summary json.RawMessage) error {
+	f.updateScopedCalls++
+	return f.UpdateRunStatus(ctx, id, status, summary)
 }
 
 func (f *fakeExecutionRepo) StartRun(ctx context.Context, id int64) error {
@@ -139,6 +214,17 @@ func (f *fakeExecutionRepo) CreateLog(ctx context.Context, taskID int64, level, 
 
 func (f *fakeExecutionRepo) ListLogs(ctx context.Context, taskID int64) ([]model.ExecutionLog, error) {
 	return []model.ExecutionLog{{ID: 1, TaskID: taskID, Level: "info", Message: "log"}}, nil
+}
+
+func (f *fakeExecutionRepo) GetTaskRunIDScoped(ctx context.Context, userID int64, admin bool, taskID int64) (int64, error) {
+	if f.getTaskErr != nil {
+		return 0, f.getTaskErr
+	}
+	return 1, nil
+}
+
+func (f *fakeExecutionRepo) ListLogsScoped(ctx context.Context, userID int64, admin bool, taskID int64) ([]model.ExecutionLog, error) {
+	return f.ListLogs(ctx, taskID)
 }
 
 type fakeExecutorRepo struct {
@@ -242,6 +328,46 @@ func TestExecutionServiceCreateRunValidation(t *testing.T) {
 	}
 	if _, err := svc.CreateRun(context.Background(), "admin", model.ExecutionRunRequest{RunType: "bad", CaseIDs: []int64{1}}); err == nil {
 		t.Fatal("expected invalid run type error")
+	}
+}
+
+func TestExecutionServiceCreateRunScoped固化同项目归属(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	repo := &fakeExecutionRepo{resolveProjectID: 9}
+	execRepo := &fakeExecutorRepo{executors: []model.ExecutorView{{ExecutorID: "exec-1", Endpoint: server.URL, Status: "online", SupportedTypes: []string{"ui"}}}}
+	svc := NewExecutionService(repo, execRepo, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, server.URL)
+	_, err := svc.CreateRunScoped(context.Background(), model.Claims{UserID: 7, Username: "member", RoleCode: "viewer"}, model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1, 2}})
+	if err != nil {
+		t.Fatalf("CreateRunScoped returned error: %v", err)
+	}
+	if repo.createdProjectID == nil || *repo.createdProjectID != 9 {
+		t.Fatalf("expected project 9 to be persisted, got %v", repo.createdProjectID)
+	}
+}
+
+func TestExecutionServiceCreateRunScopedRejectsCrossProjectAndNonMember(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "cross project", err: errors.New("执行批次中的用例必须属于同一项目")},
+		{name: "not member", err: errors.New("无权访问该项目")},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			repo := &fakeExecutionRepo{resolveProjectErr: item.err}
+			svc := NewExecutionService(repo, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
+			_, err := svc.CreateRunScoped(context.Background(), model.Claims{UserID: 7, Username: "member", RoleCode: "viewer"}, model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1, 2}})
+			if err == nil || err.Error() != item.err.Error() {
+				t.Fatalf("expected %q, got %v", item.err, err)
+			}
+			if repo.createdProjectID != nil {
+				t.Fatal("invalid project resolution must not create a batch")
+			}
+		})
 	}
 }
 
@@ -418,6 +544,25 @@ func TestExecutionServiceGetRunNotFound(t *testing.T) {
 	svc := NewExecutionService(&fakeExecutionRepo{getRunErr: errors.New("missing")}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
 	if _, err := svc.GetRun(context.Background(), 99); err == nil {
 		t.Fatal("expected not found error")
+	}
+}
+
+func TestExecutionServiceScopedHistoricalAndUnauthorizedRuns(t *testing.T) {
+	admin := model.Claims{UserID: 1, Username: "admin", RoleCode: "admin"}
+	member := model.Claims{UserID: 7, Username: "member", RoleCode: "viewer"}
+	adminSvc := NewExecutionService(&fakeExecutionRepo{run: model.ExecutionRun{ID: 8, Status: "completed"}}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
+	if _, err := adminSvc.GetRunScoped(context.Background(), admin, 8); err != nil {
+		t.Fatalf("admin should see historical runs: %v", err)
+	}
+	memberSvc := NewExecutionService(&fakeExecutionRepo{getRunScopedErr: sql.ErrNoRows, getTaskErr: sql.ErrNoRows}, &fakeExecutorRepo{}, &fakeTestCaseReader{}, &fakeExecutionOperationLogger{}, "http://localhost")
+	if _, err := memberSvc.GetRunScoped(context.Background(), member, 8); err == nil || err.Error() != "执行批次不存在" {
+		t.Fatalf("member unauthorized get should be hidden, got %v", err)
+	}
+	if err := memberSvc.CancelRunScoped(context.Background(), member, 8); err == nil || err.Error() != "执行批次不存在" {
+		t.Fatalf("member unauthorized cancel should be hidden, got %v", err)
+	}
+	if _, err := memberSvc.ListLogsScoped(context.Background(), member, 3); err == nil || err.Error() != "执行批次不存在" {
+		t.Fatalf("member unauthorized logs should be hidden, got %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,8 +27,8 @@ func TestExecutionRepositoryCreateRun(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery("insert into execution_runs").
 		WithArgs("ui", "pending", true, "admin", "{1}").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at"}).
-			AddRow(1, "ui", "pending", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(1, "ui", "pending", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, nil))
 	run, err := repo.CreateRun(context.Background(), model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1}}, "admin")
 	if err != nil {
 		t.Fatalf("CreateRun returned error: %v", err)
@@ -40,13 +41,142 @@ func TestExecutionRepositoryCreateRun(t *testing.T) {
 	}
 }
 
+func TestExecutionRepositoryStatisticsScopedAggregatesInDatabase(t *testing.T) {
+	repo, mock, closeFn := newExecutionRepoMock(t)
+	defer closeFn()
+	now := time.Date(2026, 8, 19, 15, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	trendStart := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	currentStart := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	previousStart := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	trendEnd := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	columns := []string{
+		"total_runs", "total_cases", "passed_cases", "failed_cases", "failed_runs", "running_runs",
+		"current_runs", "current_cases", "current_passed", "previous_runs", "previous_cases", "previous_passed",
+		"bucket", "trend_runs", "trend_cases", "trend_passed",
+	}
+	rows := sqlmock.NewRows(columns)
+	for index := 0; index < 14; index++ {
+		rows.AddRow(int64(3), int64(30), int64(24), int64(6), int64(1), int64(1),
+			int64(2), int64(20), int64(16), int64(1), int64(10), int64(8),
+			trendStart.AddDate(0, 0, index), int64(1), int64(2), int64(1))
+	}
+	mock.ExpectQuery("(?s)with scoped_runs.*project_members").
+		WithArgs(int64(7), false, trendStart, currentStart, previousStart, trendEnd).
+		WillReturnRows(rows)
+
+	result, err := repo.StatisticsScoped(context.Background(), 7, false, now)
+	if err != nil {
+		t.Fatalf("StatisticsScoped returned error: %v", err)
+	}
+	if result.TotalRuns != 3 || result.TotalCases != 30 || result.PassedCases != 24 || result.FailedRuns != 1 {
+		t.Fatalf("unexpected totals: %+v", result)
+	}
+	if result.PassRate != 80 || result.RunChange != 100 || result.CaseChange != 100 || result.PassRateChange != 0 {
+		t.Fatalf("unexpected rates: %+v", result)
+	}
+	if len(result.Trend) != 14 || result.Trend[0].Date != "08-06" || result.Trend[0].PassRate != 50 {
+		t.Fatalf("unexpected trend: %+v", result.Trend)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionRepositoryCreateRunWithProject(t *testing.T) {
+	repo, mock, closeFn := newExecutionRepoMock(t)
+	defer closeFn()
+	now := time.Now()
+	projectID := int64(9)
+	mock.ExpectQuery("insert into execution_runs").
+		WithArgs("ui", "pending", true, "member", "{1}", projectID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(1, "ui", "pending", true, "member", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, projectID))
+	run, err := repo.CreateRunWithProject(context.Background(), model.ExecutionRunRequest{RunType: "ui", CaseIDs: []int64{1}}, "member", &projectID)
+	if err != nil {
+		t.Fatalf("CreateRunWithProject returned error: %v", err)
+	}
+	if run.ProjectID == nil || *run.ProjectID != projectID {
+		t.Fatalf("unexpected project id: %+v", run.ProjectID)
+	}
+}
+
+func TestExecutionRepositoryResolveRunProject(t *testing.T) {
+	cases := []struct {
+		name       string
+		projectID  any
+		caseCount  int64
+		validCount int64
+		projects   int64
+		authorized bool
+		want       int64
+		wantErr    string
+	}{
+		{name: "same project member", projectID: int64(9), caseCount: 2, validCount: 2, projects: 1, authorized: true, want: 9},
+		{name: "cross project", projectID: int64(9), caseCount: 2, validCount: 2, projects: 2, authorized: true, wantErr: "同一项目"},
+		{name: "not member", projectID: int64(9), caseCount: 2, validCount: 2, projects: 1, authorized: false, wantErr: "无权访问"},
+		{name: "missing case", projectID: nil, caseCount: 2, validCount: 1, projects: 1, authorized: true, wantErr: "用例不存在"},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			repo, mock, closeFn := newExecutionRepoMock(t)
+			defer closeFn()
+			mock.ExpectQuery("select min\\(p.id\\)").WithArgs("{1,2}", false, int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"project_id", "case_count", "valid_case_count", "project_count", "authorized"}).
+					AddRow(item.projectID, item.caseCount, item.validCount, item.projects, item.authorized))
+			got, err := repo.ResolveRunProject(context.Background(), []int64{1, 2}, 7, false)
+			if item.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), item.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", item.wantErr, err)
+				}
+			} else if err != nil || got != item.want {
+				t.Fatalf("resolved project=%d err=%v, want project=%d", got, err, item.want)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestExecutionRepositoryScopedRunsIncludeProjectFilter(t *testing.T) {
+	repo, mock, closeFn := newExecutionRepoMock(t)
+	defer closeFn()
+	now := time.Now()
+	mock.ExpectQuery("select count").WithArgs(int64(7), false).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("select er.id, er.run_type, er.status").WithArgs(int64(7), false, 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(1, "ui", "running", true, "member", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, int64(9)))
+	items, total, err := repo.ListRunsScoped(context.Background(), 7, false, model.ExecutionRunFilter{}, 1, 20)
+	if err != nil || total != 1 || len(items) != 1 || items[0].ProjectID == nil || *items[0].ProjectID != 9 {
+		t.Fatalf("unexpected scoped list: total=%d items=%+v err=%v", total, items, err)
+	}
+	mock.ExpectQuery("select count").WithArgs(int64(8), false).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("select er.id, er.run_type, er.status").WithArgs(int64(8), false, 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}))
+	hidden, total, err := repo.ListRunsScoped(context.Background(), 8, false, model.ExecutionRunFilter{}, 1, 20)
+	if err != nil || total != 0 || len(hidden) != 0 {
+		t.Fatalf("non-member should not see runs: total=%d items=%d err=%v", total, len(hidden), err)
+	}
+
+	mock.ExpectQuery("select er.id, er.run_type, er.status").WithArgs(int64(99), int64(1), true).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(99, "ui", "completed", true, "old", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, nil))
+	historical, err := repo.GetRunScoped(context.Background(), 1, true, 99)
+	if err != nil || historical.ProjectID != nil {
+		t.Fatalf("admin should see historical NULL project run: %+v err=%v", historical, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecutionRepositoryGetAndListRuns(t *testing.T) {
 	repo, mock, closeFn := newExecutionRepoMock(t)
 	defer closeFn()
 	now := time.Now()
 	mock.ExpectQuery("select id, run_type, status").WithArgs(int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at"}).
-			AddRow(1, "ui", "pending", true, "admin", []byte(`{91,50,53,44,50,52,93}`), []byte(`{}`), nil, nil, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(1, "ui", "pending", true, "admin", []byte(`{91,50,53,44,50,52,93}`), []byte(`{}`), nil, nil, now, now, nil))
 	run, err := repo.GetRun(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("GetRun returned error: %v", err)
@@ -56,8 +186,8 @@ func TestExecutionRepositoryGetAndListRuns(t *testing.T) {
 	}
 
 	mock.ExpectQuery("select count").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery("select id, run_type, status").WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at"}).
-		AddRow(1, "ui", "pending", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now))
+	mock.ExpectQuery("select id, run_type, status").WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+		AddRow(1, "ui", "pending", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, nil))
 	items, total, err := repo.ListRuns(context.Background(), model.ExecutionRunFilter{}, 1, 20)
 	if err != nil {
 		t.Fatalf("ListRuns returned error: %v", err)
@@ -190,8 +320,8 @@ func TestExecutionRepositoryListRunsFilters(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery("select count").WithArgs("ui", "running").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("select id, run_type, status").WithArgs("ui", "running", 20, 0).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at"}).
-			AddRow(1, "ui", "running", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_type", "status", "headless", "triggered_by", "case_ids", "summary", "started_at", "finished_at", "created_at", "updated_at", "project_id"}).
+			AddRow(1, "ui", "running", true, "admin", []byte(`[1]`), []byte(`{}`), nil, nil, now, now, nil))
 	_, _, err := repo.ListRuns(context.Background(), model.ExecutionRunFilter{RunType: "ui", Status: "running"}, 1, 20)
 	if err != nil {
 		t.Fatalf("ListRuns returned error: %v", err)

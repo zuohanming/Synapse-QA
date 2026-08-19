@@ -14,14 +14,15 @@ import (
 
 // ExecutionService 是 ExecutionController 依赖的最小接口。
 type ExecutionService interface {
-	ListRuns(ctx context.Context, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error)
-	GetRun(ctx context.Context, id int64) (model.ExecutionRunDetail, error)
-	CreateRun(ctx context.Context, actor string, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error)
+	ListRunsScoped(ctx context.Context, claims model.Claims, filter model.ExecutionRunFilter, page, pageSize int) (model.PageResult, error)
+	StatisticsScoped(ctx context.Context, claims model.Claims) (model.ExecutionStatistics, error)
+	GetRunScoped(ctx context.Context, claims model.Claims, id int64) (model.ExecutionRunDetail, error)
+	CreateRunScoped(ctx context.Context, claims model.Claims, req model.ExecutionRunRequest) (model.ExecutionRunDetail, error)
 	StartDebug(ctx context.Context, actor string, req model.ExecutionDebugRequest) (model.ExecutionDebugStart, error)
 	GetDebugTask(ctx context.Context, executorID, taskID string) (map[string]any, error)
-	CancelRun(ctx context.Context, actor string, id int64) error
+	CancelRunScoped(ctx context.Context, claims model.Claims, id int64) error
 	HandleCallback(ctx context.Context, req model.ExecutionCallbackRequest) error
-	ListLogs(ctx context.Context, taskID int64) ([]model.ExecutionLog, error)
+	ListLogsScoped(ctx context.Context, claims model.Claims, taskID int64) ([]model.ExecutionLog, error)
 }
 
 // StartDebug 创建页面步骤即时调试任务。
@@ -67,7 +68,8 @@ func NewExecutionController(executionService ExecutionService) *ExecutionControl
 
 // List 查询执行批次列表。
 func (ctl *ExecutionController) List(c *gin.Context) {
-	if _, exists := claimsFromContext(c); !exists {
+	claims, exists := claimsFromContext(c)
+	if !exists {
 		return
 	}
 	page, pageSize := pageParams(c)
@@ -76,7 +78,7 @@ func (ctl *ExecutionController) List(c *gin.Context) {
 		RunType: c.Query("runType"),
 		Status:  c.Query("status"),
 	}
-	result, err := ctl.executionService.ListRuns(c.Request.Context(), filter, page, pageSize)
+	result, err := ctl.executionService.ListRunsScoped(c.Request.Context(), claims, filter, page, pageSize)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
@@ -85,27 +87,16 @@ func (ctl *ExecutionController) List(c *gin.Context) {
 }
 
 func (ctl *ExecutionController) Statistics(c *gin.Context) {
-	if _, exists := claimsFromContext(c); !exists {
+	claims, exists := claimsFromContext(c)
+	if !exists {
 		return
 	}
-	runs := make([]model.ExecutionRun, 0)
-	for page := 1; ; page++ {
-		result, err := ctl.executionService.ListRuns(c.Request.Context(), model.ExecutionRunFilter{}, page, 100)
-		if err != nil {
-			fail(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		items, valid := result.Items.([]model.ExecutionRun)
-		if !valid {
-			fail(c, http.StatusInternalServerError, "执行统计数据格式错误")
-			return
-		}
-		runs = append(runs, items...)
-		if int64(len(runs)) >= result.Total || len(items) == 0 {
-			break
-		}
+	statistics, err := ctl.executionService.StatisticsScoped(c.Request.Context(), claims)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
 	}
-	ok(c, buildExecutionStatistics(runs, time.Now()))
+	ok(c, statistics)
 }
 
 func buildExecutionStatistics(runs []model.ExecutionRun, now time.Time) model.ExecutionStatistics {
@@ -182,14 +173,15 @@ func changeRate(current, previous int64) float64 {
 
 // Get 查询执行批次详情。
 func (ctl *ExecutionController) Get(c *gin.Context) {
-	if _, exists := claimsFromContext(c); !exists {
+	claims, exists := claimsFromContext(c)
+	if !exists {
 		return
 	}
 	id, valid := idParam(c)
 	if !valid {
 		return
 	}
-	detail, err := ctl.executionService.GetRun(c.Request.Context(), id)
+	detail, err := ctl.executionService.GetRunScoped(c.Request.Context(), claims, id)
 	if err != nil {
 		if err.Error() == "执行批次不存在" {
 			fail(c, http.StatusNotFound, err.Error())
@@ -212,7 +204,7 @@ func (ctl *ExecutionController) Create(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
-	detail, err := ctl.executionService.CreateRun(c.Request.Context(), claims.Username, req)
+	detail, err := ctl.executionService.CreateRunScoped(c.Request.Context(), claims, req)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
@@ -230,7 +222,7 @@ func (ctl *ExecutionController) Cancel(c *gin.Context) {
 	if !valid {
 		return
 	}
-	if err := ctl.executionService.CancelRun(c.Request.Context(), claims.Username, id); err != nil {
+	if err := ctl.executionService.CancelRunScoped(c.Request.Context(), claims, id); err != nil {
 		if err.Error() == "执行批次不存在" {
 			fail(c, http.StatusNotFound, err.Error())
 			return
@@ -261,7 +253,8 @@ func (ctl *ExecutionController) Callback(c *gin.Context) {
 
 // ListTaskLogs 查询任务日志。
 func (ctl *ExecutionController) ListTaskLogs(c *gin.Context) {
-	if _, exists := claimsFromContext(c); !exists {
+	claims, exists := claimsFromContext(c)
+	if !exists {
 		return
 	}
 	taskID, err := strconv.ParseInt(c.Param("taskId"), 10, 64)
@@ -269,9 +262,9 @@ func (ctl *ExecutionController) ListTaskLogs(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "任务 ID 无效")
 		return
 	}
-	logs, err := ctl.executionService.ListLogs(c.Request.Context(), taskID)
+	logs, err := ctl.executionService.ListLogsScoped(c.Request.Context(), claims, taskID)
 	if err != nil {
-		if err.Error() == "任务不存在" {
+		if err.Error() == "执行批次不存在" {
 			fail(c, http.StatusNotFound, err.Error())
 			return
 		}

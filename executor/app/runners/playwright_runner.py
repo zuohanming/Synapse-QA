@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.subprocess_utils import hidden_subprocess_kwargs
 from app.models.task import TaskCreate, TaskResult
 from app.runners.base import Runner
 
@@ -365,6 +366,7 @@ class PlaywrightRunner(Runner):
                 text=True,
                 timeout=10,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
         except subprocess.TimeoutExpired as error:
             raise RuntimeError("Python 节点执行超过 10 秒") from error

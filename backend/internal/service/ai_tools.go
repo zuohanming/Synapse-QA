@@ -24,8 +24,25 @@ func NewAIToolExecutor(apiSvc *APIAutomationService, catSvc *CatalogService, tcS
 	return &AIToolExecutor{apiSvc: apiSvc, catSvc: catSvc, tcSvc: tcSvc, execSvc: execSvc, autoSvc: autoSvc}
 }
 
-// ToolDefinitions returns OpenAI-compatible tool definitions for function calling.
-func (e *AIToolExecutor) ToolDefinitions() []map[string]any {
+// ToolDefinitions returns only the tools allowed by the current claims.
+func (e *AIToolExecutor) ToolDefinitions(claims model.Claims) []map[string]any {
+	definitions := e.allToolDefinitions()
+	if claims.RoleCode == "admin" || hasPermission(claims, "menu.execution.read") {
+		return definitions
+	}
+	filtered := make([]map[string]any, 0, len(definitions))
+	for _, definition := range definitions {
+		function, _ := definition["function"].(map[string]any)
+		name, _ := function["name"].(string)
+		if !isExecutionTool(name) {
+			filtered = append(filtered, definition)
+		}
+	}
+	return filtered
+}
+
+// allToolDefinitions 是工具清单的内部实现，生产聊天必须经 ToolDefinitions(claims) 过滤。
+func (e *AIToolExecutor) allToolDefinitions() []map[string]any {
 	return []map[string]any{
 		// ========== 接口管理 ==========
 		{
@@ -423,19 +440,22 @@ func (e *AIToolExecutor) ToolDefinitions() []map[string]any {
 }
 
 // Execute runs the named tool with the given JSON arguments and returns a human-readable result.
-func (e *AIToolExecutor) Execute(ctx context.Context, userID int64, toolName string, args json.RawMessage) (string, error) {
+func (e *AIToolExecutor) Execute(ctx context.Context, claims model.Claims, toolName string, args json.RawMessage) (string, error) {
+	if isExecutionTool(toolName) && claims.RoleCode != "admin" && !hasPermission(claims, "menu.execution.read") {
+		return "", fmt.Errorf("无权使用执行工具")
+	}
 	switch toolName {
 	// 接口管理
 	case "search_interfaces":
-		return e.searchInterfaces(ctx, userID, args)
+		return e.searchInterfaces(ctx, claims.UserID, args)
 	case "create_interface":
-		return e.createInterface(ctx, userID, args)
+		return e.createInterface(ctx, claims.UserID, args)
 	case "get_interface":
-		return e.getInterface(ctx, userID, args)
+		return e.getInterface(ctx, claims.UserID, args)
 	case "delete_interface":
-		return e.deleteInterface(ctx, userID, args)
+		return e.deleteInterface(ctx, claims.UserID, args)
 	case "update_interface":
-		return e.updateInterface(ctx, userID, args)
+		return e.updateInterface(ctx, claims.UserID, args)
 	// 产品/模块
 	case "list_products":
 		return e.listProducts(ctx, args)
@@ -473,11 +493,11 @@ func (e *AIToolExecutor) Execute(ctx context.Context, userID int64, toolName str
 		return e.deleteTestCase(ctx, args)
 	// 执行任务
 	case "list_execution_runs":
-		return e.listExecutionRuns(ctx, args)
+		return e.listExecutionRuns(ctx, claims, args)
 	case "get_execution_run":
-		return e.getExecutionRun(ctx, args)
+		return e.getExecutionRun(ctx, claims, args)
 	case "cancel_execution_run":
-		return e.cancelExecutionRun(ctx, args)
+		return e.cancelExecutionRun(ctx, claims, args)
 	// 测试环境
 	case "list_test_objects":
 		return e.listTestObjects(ctx, args)
@@ -489,6 +509,15 @@ func (e *AIToolExecutor) Execute(ctx context.Context, userID int64, toolName str
 		return e.deleteTestObject(ctx, args)
 	default:
 		return "", fmt.Errorf("未知工具: %s", toolName)
+	}
+}
+
+func isExecutionTool(name string) bool {
+	switch name {
+	case "list_execution_runs", "get_execution_run", "cancel_execution_run":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -713,7 +742,7 @@ func (e *AIToolExecutor) createTestCase(ctx context.Context, args json.RawMessag
 
 // ==================== 执行任务 ====================
 
-func (e *AIToolExecutor) listExecutionRuns(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *AIToolExecutor) listExecutionRuns(ctx context.Context, claims model.Claims, args json.RawMessage) (string, error) {
 	var params struct {
 		Status string  `json:"status"`
 		Limit  float64 `json:"limit"`
@@ -724,7 +753,7 @@ func (e *AIToolExecutor) listExecutionRuns(ctx context.Context, args json.RawMes
 		limit = 10
 	}
 
-	page, err := e.execSvc.ListRuns(ctx, model.ExecutionRunFilter{Status: params.Status}, 1, limit)
+	page, err := e.execSvc.ListRunsScoped(ctx, claims, model.ExecutionRunFilter{Status: params.Status}, 1, limit)
 	if err != nil {
 		return "", fmt.Errorf("查询执行记录失败: %w", err)
 	}
@@ -740,7 +769,7 @@ func (e *AIToolExecutor) listExecutionRuns(ctx context.Context, args json.RawMes
 	return sb.String(), nil
 }
 
-func (e *AIToolExecutor) getExecutionRun(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *AIToolExecutor) getExecutionRun(ctx context.Context, claims model.Claims, args json.RawMessage) (string, error) {
 	var params struct {
 		ID json.RawMessage `json:"id"`
 	}
@@ -749,7 +778,7 @@ func (e *AIToolExecutor) getExecutionRun(ctx context.Context, args json.RawMessa
 	if err != nil {
 		return "", fmt.Errorf("无效的 ID: %w", err)
 	}
-	run, err := e.execSvc.GetRun(ctx, id)
+	run, err := e.execSvc.GetRunScoped(ctx, claims, id)
 	if err != nil {
 		return "", fmt.Errorf("获取执行详情失败: %w", err)
 	}
@@ -1039,13 +1068,13 @@ func (e *AIToolExecutor) deleteTestCase(ctx context.Context, args json.RawMessag
 
 // ==================== 执行任务（补充） ====================
 
-func (e *AIToolExecutor) cancelExecutionRun(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *AIToolExecutor) cancelExecutionRun(ctx context.Context, claims model.Claims, args json.RawMessage) (string, error) {
 	var params struct {
 		ID float64 `json:"id"`
 	}
 	json.Unmarshal(args, &params)
 	id := int64(params.ID)
-	if err := e.execSvc.CancelRun(ctx, "AI助手", id); err != nil {
+	if err := e.execSvc.CancelRunScoped(ctx, claims, id); err != nil {
 		return "", fmt.Errorf("取消执行失败: %w", err)
 	}
 	return fmt.Sprintf("执行 #%d 已取消。", id), nil

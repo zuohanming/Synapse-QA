@@ -5,7 +5,6 @@ import logging
 import math
 import os
 import re
-import shutil
 import signal
 import subprocess
 import tempfile
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core.config import settings
+from app.core.subprocess_utils import find_k6_executable, hidden_subprocess_kwargs
 from app.models.task import TaskCreate, TaskResult
 from app.runners.base import Runner
 
@@ -894,7 +894,7 @@ class PerfRunner(Runner):
 
         if progress:
             progress("[检查] 正在检测 k6 运行环境")
-        k6_path = shutil.which("k6")
+        k6_path = find_k6_executable()
         if not k6_path:
             error = "未安装 k6，无法执行性能测试"
             return self._result(scenario_type, exit_code=1, failure_stage="startup", error=error, partial=False, terminal_status="execution_failed")
@@ -970,7 +970,7 @@ class PerfRunner(Runner):
             env[name] = os.environ.get(name, "")
 
         command = [k6_path, "run", "--out", f"json={ndjson_path}", "script.js"]
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         log_handle = open(log_path, "w", encoding="utf-8")
         try:
             process = subprocess.Popen(
@@ -979,7 +979,7 @@ class PerfRunner(Runner):
                 env=env,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                creationflags=creationflags,
+                **hidden_subprocess_kwargs(creationflags=creationflags),
             )
         except OSError as error:
             log_handle.close()
@@ -1312,7 +1312,7 @@ class PerfRunner(Runner):
     @staticmethod
     def _k6_version(k6_path: str) -> str:
         try:
-            version = subprocess.run([k6_path, "version"], capture_output=True, text=True, timeout=5)
+            version = subprocess.run([k6_path, "version"], capture_output=True, text=True, timeout=5, **hidden_subprocess_kwargs())
             output = version.stdout or version.stderr
             return output.splitlines()[0].strip() if output else ""
         except (OSError, subprocess.SubprocessError):

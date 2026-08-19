@@ -195,7 +195,7 @@ def test_perf_runner_smoke_attaches_response_and_cleans_temporary_workdir(monkey
         }), encoding="utf-8")
         return FakeProcess()
 
-    monkeypatch.setattr("app.runners.perf_runner.shutil.which", lambda name: "k6.exe")
+    monkeypatch.setattr("app.runners.perf_runner.find_k6_executable", lambda: "k6.exe")
     monkeypatch.setattr("app.runners.perf_runner.subprocess.Popen", fake_popen)
     monkeypatch.setattr("app.runners.perf_runner.NdjsonSampler", FakeSampler)
     monkeypatch.setattr(PerfRunner, "_k6_version", staticmethod(lambda _path: "k6-test"))
@@ -243,7 +243,7 @@ def test_perf_runner_smoke_cancel_cleans_temporary_workdir(monkeypatch):
         workdirs.append(Path(cwd))
         return FakeProcess()
 
-    monkeypatch.setattr("app.runners.perf_runner.shutil.which", lambda name: "k6.exe")
+    monkeypatch.setattr("app.runners.perf_runner.find_k6_executable", lambda: "k6.exe")
     monkeypatch.setattr("app.runners.perf_runner.subprocess.Popen", fake_popen)
     monkeypatch.setattr("app.runners.perf_runner.NdjsonSampler", FakeSampler)
     monkeypatch.setattr(PerfRunner, "_k6_version", staticmethod(lambda _path: "k6-test"))
@@ -462,7 +462,7 @@ def test_compute_timeout_is_dynamic_not_fixed(monkeypatch):
 
 
 def test_perf_runner_reports_missing_k6(monkeypatch):
-    monkeypatch.setattr("app.runners.perf_runner.shutil.which", lambda name: None)
+    monkeypatch.setattr("app.runners.perf_runner.find_k6_executable", lambda: None)
     runner = PerfRunner()
     task = TaskCreate(taskId="perf-1", type=TaskType.perf, payload={"scenario_type": "baseline", "target": "http://example.com"})
     result = runner.run(task)

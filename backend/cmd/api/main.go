@@ -56,6 +56,7 @@ func main() {
 	apiAutomationRepo := repository.NewAPIAutomationRepository(db)
 	aiRepo := repository.NewAIRepository(db)
 	performanceRepo := repository.NewPerformanceRepository(db)
+	dashboardRepo := repository.NewDashboardRepository(db)
 
 	systemService := service.NewSystemService(systemRepo, bootstrapApp.jwtSecret)
 	catalogService := service.NewCatalogService(catalogRepo, systemRepo)
@@ -71,6 +72,7 @@ func main() {
 	aiToolExecutor := service.NewAIToolExecutor(apiAutomationService, catalogService, testCaseService, executionService, automationService)
 	aiService := service.NewAIService(aiRepo, aiToolExecutor)
 	performanceService := service.NewPerformanceService(performanceRepo, executorRepo, systemRepo, env("EXECUTION_CALLBACK_BASE", "http://127.0.0.1:8080"))
+	dashboardService := service.NewDashboardService(dashboardRepo)
 	executionService.SetNotifier(notificationService)
 	executorService.SetNotifier(notificationService)
 	executionService.StartScheduler(appCtx)
@@ -94,6 +96,7 @@ func main() {
 		DataFactoryController:    controller.NewDataFactoryController(dataFactoryService),
 		AIController:             controller.NewAIController(aiService),
 		PerformanceController:    controller.NewPerformanceController(performanceService),
+		DashboardController:      controller.NewDashboardController(dashboardService),
 		AuthMiddleware:           controller.AuthMiddleware(systemService),
 	})
 
